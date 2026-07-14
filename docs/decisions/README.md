@@ -33,3 +33,4 @@ history.
 - [0001 — Begin with a tree-walking interpreter](0001-tree-walking-interpreter.md)
 - [0002 — Canonicalize identifiers for case-insensitive lookup](0002-case-insensitive-identifiers.md)
 - [0003 — Isolate platform behavior behind host interfaces](0003-platform-host-boundary.md)
+- [0004 — Store collections by interpreter-owned identity](0004-arena-backed-collection-identity.md)

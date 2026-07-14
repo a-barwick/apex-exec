@@ -8,15 +8,22 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first two milestones support primitive expressions, assignment, lexical
-scopes, and common control flow over `String`, `Boolean`, `Integer`, and `null`.
-Apex identifiers are case-insensitive.
+The first three milestones support primitive expressions, assignment, lexical
+scopes, common control flow, and typed `List`, `Set`, `Map`, and one-dimensional
+array syntax over `String`, `Boolean`, `Integer`, `null`, and nested collection
+types. Apex identifiers and built-in method names are case-insensitive.
 
 ```console
 $ cargo run -- run examples/hello.apex
 Hello, world!
 $ cargo run -- run examples/control-flow.apex
 45
+```
+
+The unchanged M3 collection acceptance program is also executable:
+
+```bash
+cargo run -- run examples/collections.apex
 ```
 
 Compiler stages can be inspected independently:
@@ -28,8 +35,9 @@ $ cargo run -- check examples/hello.apex
 $ cargo run -- run examples/hello.apex
 ```
 
-This is an early implementation. Collections, methods, classes, SOQL, SOSL,
-and DML are not implemented yet.
+This is an early implementation. The available method calls are a fixed core
+standard-library subset; user-defined methods, exceptions, classes, SOQL,
+SOSL, and DML are not implemented yet.
 
 ## Project documentation
 

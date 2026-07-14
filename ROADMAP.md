@@ -67,7 +67,7 @@ operand types.
 
 ## M3 — Collections and core standard library
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -94,7 +94,7 @@ System.debug(String.join(strs, ''));
 
 ## M4 — Methods, exceptions, and runtime correctness
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

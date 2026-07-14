@@ -2,8 +2,10 @@
 
 ## Status
 
-Primitive expressions, lexical scopes, and control flow are implemented. Calls,
-exceptions, transactions, and platform effects are planned.
+Primitive expressions, lexical scopes, control flow, mutable collections, and
+the fixed M3 built-in call surface are implemented. User-defined calls and
+exceptions are active M4 work; transactions and platform effects remain later
+work.
 
 ## Program execution
 
@@ -15,34 +17,119 @@ after parsing and semantic validation succeed.
 **Implemented.** A declaration evaluates its initializer and stores the value
 under the identifier's canonical case-insensitive key. Assignment replaces the
 stored value. Reads of unknown variables are compile-time errors and are also
-guarded defensively by the runtime.
+guarded defensively by the runtime. Primitive values copy by value. Collection
+values carry interpreter-owned identity, so ordinary assignment aliases the
+same mutable collection.
 
 ## Debug output
 
-**Implemented, simplified.** `System.debug(variable)` converts the primitive
-value to plain text and appends one output line. The CLI prints each line to
-stdout without Salesforce log metadata.
+**Implemented, simplified.** `System.debug(expression)` converts every
+supported value to deterministic text and appends one output line. Lists,
+Sets, and Maps render recursively in their deterministic local order. The CLI
+prints each line to stdout without Salesforce log metadata.
 
 ## Expressions
 
 **Implemented.** Arithmetic uses checked `i64` operations and reports division,
 remainder, and overflow failures. `&&` and `||` short-circuit. Assignment is
 right-associative. Prefix and postfix increment/decrement mutate `Integer`
-variables while returning the Apex-shaped new or prior value respectively.
+variables or Integer-valued List indexes while returning the new or prior value
+respectively.
+
+Method-call receivers are evaluated once, followed by arguments from left to
+right, each exactly once. Static built-ins do not evaluate a runtime receiver.
+Unsupported dispatch does not fall back to runtime approximation because calls
+are validated before execution.
+
+## Collections
+
+**Implemented for M3.** Runtime collections are mutable reference values stored
+in an interpreter-owned arena.
+
+- Assignment copies collection identity and therefore aliases mutations.
+- Copy constructors and `clone()` allocate an independent shallow copy.
+- List and Set copy constructors accept either a List or Set with the same
+  element type. Map copy construction requires the identical Map type.
+- List and Set literals evaluate elements from left to right. Set literals
+  remove duplicates.
+- Map literals evaluate keys and values from left to right. A later duplicate
+  key replaces the value without moving the key's deterministic local position.
+- Sized arrays are Lists initialized with the requested number of typed-null
+  slots. They remain elastic through List methods; indexed assignment cannot
+  grow them.
+- A missing Map `get`, `put`, or `remove` result is a null carrying the Map value
+  type.
+- Self-copying operations such as `values.addAll(values)` and
+  `mapping.putAll(mapping)` snapshot their source before mutating.
+
+Lists preserve element order. Sets and Maps use deterministic insertion order
+locally so repeated runs remain stable. That order is intentionally documented
+as simplified and is not a claim about Salesforce hash iteration. Map
+`keySet()` returns a deterministic snapshot, not a backed view.
+
+The supported collection methods are:
+
+- List: `add`, `addAll`, `clear`, `clone`, `contains`, `get`, `indexOf`,
+  `isEmpty`, `remove`, `set`, `size`, and scalar `sort`. `add` accepts either a
+  value or an index and value. Sorting accepts String and Integer elements and
+  orders null before non-null values.
+- Set: `add`, `addAll`, `clear`, `clone`, `contains`, `containsAll`, `isEmpty`,
+  `remove`, `removeAll`, `retainAll`, and `size`. Mutating Set methods report
+  whether membership changed, except `clear`, which returns Void.
+- Map: `clear`, `clone`, `containsKey`, `get`, `isEmpty`, `keySet`, `put`,
+  `putAll`, `remove`, `size`, and `values`. `put` and `remove` return the prior
+  typed value or typed null.
+
+List indexes are zero-based. Indexed reads, writes, and mutation require an
+in-range concrete Integer. Indexed `add` also accepts the position immediately
+after the final element. Set and Map indexing is rejected during checking.
+
+## Core String, Math, and System calls
+
+**Implemented for the fixed M3 subset.** Method names are case-insensitive.
+
+- Static String: `valueOf`, `join`, `isBlank`, `isNotBlank`, `isEmpty`, and
+  `isNotEmpty`.
+- Instance String: `length`, `contains`, `startsWith`, `endsWith`, `equals`,
+  `equalsIgnoreCase`, `indexOf`, one- and two-argument `substring`, `trim`,
+  `toLowerCase`, `toUpperCase`, and literal `replace`.
+- Integer-backed Math: `abs`, `max`, `min`, and `mod`.
+- System: `debug`.
+
+String `length`, `indexOf`, and `substring` use UTF-16 code-unit positions for
+ordinary Unicode scalar strings. Rust strings cannot contain an unpaired
+surrogate, so a substring boundary that would split a surrogate pair produces
+an explicit runtime diagnostic. Unicode case conversion and whitespace
+classification otherwise follow the Rust standard library and remain
+simplified compatibility behavior.
+
+The String `==` and `!=` operators compare case-insensitively, while
+`String.equals` and the equality used by collection membership remain
+case-sensitive. `String.equalsIgnoreCase` provides explicit case-insensitive
+method comparison. Both equality methods return `false` for a null argument.
 
 ## Scope and control flow
 
 **Implemented.** Blocks introduce lexical scopes. Loop-local variables do not
 escape their declaring scope. `if`/`else`, traditional `for`, `while`, and
-`do`/`while` execute directly over checked Boolean conditions. `break` and
-`continue` target the nearest enclosing loop. A value-less `return` terminates
-anonymous execution; method return values are planned for M4.
+`do`/`while` execute directly over checked Boolean conditions. Enhanced `for`
+evaluates a List or Set expression once, snapshots its elements for traversal,
+and gives the iteration variable its own non-escaping scope. Direct Map
+iteration is rejected; callers iterate `keySet()` or `values()`.
+
+Structural mutation of a List or Set during enhanced iteration is rejected
+through every alias, including diagnostic unwinding. `break` and `continue`
+target the nearest enclosing loop. A value-less `return` terminates anonymous
+execution; method return values are active M4 work.
 
 ## Exceptions
 
-**Planned for M4.** Runtime failures will carry an Apex exception value and a
-source-mapped call stack. `finally` must execute during normal and exceptional
-unwinding.
+**Active M4 work.** Null receivers, invalid indexes and sizes, collection
+mutation during iteration, arithmetic failures, and impossible checked-state
+violations currently produce source-spanned runtime diagnostics. They are not
+yet catchable Apex exception values and do not carry call stacks. M4 will add
+exception values and source-mapped stack unwinding; `finally` must execute
+during normal and exceptional unwinding.
 
 ## Platform effects
 
