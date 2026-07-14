@@ -94,7 +94,7 @@ System.debug(String.join(strs, ''));
 
 ## M4 — Methods, exceptions, and runtime correctness
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -113,7 +113,7 @@ failures with useful Apex source stacks.
 
 ## M5 — Classes and project compilation
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

@@ -24,6 +24,7 @@ conformance harness is a later milestone.
 | `String` | Yes | Yes | Yes | Simplified | Single-quoted literals, common escapes, and the documented M3 method subset |
 | `Boolean` | Yes | Yes | Yes | Compatible | `true` and `false` are case-insensitive |
 | `Integer` | Yes | Yes | Yes | Simplified | Stored as Rust `i64`; Apex range/overflow pending |
+| `Object` | Yes | Yes | Yes | Simplified | Minimal assignment, overload-widening, and explicit-cast carrier; general Object API pending |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
@@ -38,7 +39,7 @@ conformance harness is a later milestone.
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
 | Loops and loop control | Yes | Yes | Yes | Compatible | Traditional and enhanced `for`, `while`, `do`/`while`, `break`, and `continue` |
-| Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution |
+| Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution; declared methods have checked values |
 | `null` | Yes | Yes | Yes | Simplified | Assignable to every supported value type; selected runtime null behavior implemented |
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
@@ -47,8 +48,11 @@ conformance harness is a later milestone.
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive M3 collection, String, Math, and System surface |
-| User-defined methods | No | No | No | Planned | M4 |
-| Exceptions | No | No | No | Planned | M4 |
+| User-defined methods | Yes | Yes | Yes | Simplified | Interim top-level single-file declarations, typed parameters/returns, forward calls, overloads, and recursion |
+| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, minimal Object up/downcasts, and concrete-exception/root casts; invalid runtime casts throw `TypeException` |
+| Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
+| Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
+| Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames when caught or unhandled |
 | Classes/interfaces | No | No | No | Planned | M5 |
 | Inheritance/access modifiers | No | No | No | Planned | M5 |
 | Properties/annotations | No | No | No | Planned | M5–M6 |
@@ -90,6 +94,43 @@ internal ordering. `Map.keySet()` returns a snapshot rather than a backed view.
 Direct enhanced iteration over a Map is rejected; callers iterate `keySet()` or
 `values()` instead.
 
+## M4 methods, casts, and exceptions
+
+Methods are collected before any body is checked, so forward calls and
+recursion are supported. Names are case-insensitive. A method overload is
+identified by its name and exact parameter-type sequence; return type alone
+cannot distinguish overloads. Applicable candidates are compared
+parameter-by-parameter: one wins only when every parameter is identical to or
+more specific than the corresponding parameter on the others, with at least
+one strict improvement. The supported subtype relationships are concrete core
+exceptions to `Exception` and every value type to `Object`. Crossing or
+unrelated candidates remain ambiguous, including for `null`. The selected
+method ID is recorded during checking rather than rediscovered from runtime
+values.
+
+Until M5 class compilation lands, declarations use an interim top-level
+single-file form. Each invocation has an isolated local scope and cannot read
+the caller's locals. Non-`void` methods must return or throw on every statically
+reachable path. `finally` executes during normal completion, return, loop
+control, and exception unwinding; an abrupt completion in `finally` replaces
+the pending result.
+
+The implemented exception types are `Exception`, `NullPointerException`,
+`ListException`, `MathException`, `TypeException`, `StringException`,
+`IllegalArgumentException`, and `FinalException`. They support zero- or
+one-String-argument construction and `getMessage()`, `getTypeName()`, and
+`getStackTraceString()`. Catch matching recognizes each concrete type and the
+`Exception` root. Custom exception classes, causes, a broader built-in
+hierarchy, and Salesforce-exact message and stack formatting are not yet
+claimed.
+
+`Object` exists only to make useful checked widening, overload selection, and
+runtime downcasts possible in M4. It does not claim the broader platform type
+surface planned for M10. Casts are limited to identical types, `Object`
+up/downcasts, and casts between a concrete core exception and the `Exception`
+root. Unsupported unrelated casts are compile errors, while a permitted
+downcast with the wrong runtime value throws `TypeException`.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
@@ -114,7 +155,11 @@ Direct enhanced iteration over a Map is rejected; callers iterate `keySet()` or
 - Unknown characters and invalid strings fail lexing.
 - Invalid or unsupported syntax fails parsing.
 - Unknown variables, generic mismatches, invalid iteration/indexing, and
-  invalid built-in calls fail semantic checking.
+  invalid built-in or user-defined calls fail semantic checking.
+- Duplicate method signatures, ambiguous/no-match overloads, invalid return
+  paths, invalid catches, and unsupported casts fail semantic checking.
+- Supported runtime language faults are typed, catchable exceptions. Internal
+  checked-state violations remain distinct diagnostics.
 - Unsupported built-in methods are rejected explicitly rather than silently
   approximated.
 - Diagnostics are generated by Apex Exec and are not required to reproduce
@@ -122,6 +167,11 @@ Direct enhanced iteration over a Map is rejected; callers iterate `keySet()` or
 - `tests/north_star/` contains pinned real-world complexity indicators. Their
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
+
+At M4 completion those indicators pass 1 of 14 goals (7.14%): 1 of 7 lexer
+goals and 0 of 7 parser goals. The remaining first blockers are annotations,
+ternary and compound-bitwise syntax, and M5 class declarations rather than the
+M4 executable surface.
 
 ## Updating this document
 

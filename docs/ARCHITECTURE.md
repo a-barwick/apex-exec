@@ -25,6 +25,12 @@ The public library entry points in `src/lib.rs` deliberately expose each phase:
 - `check`
 - `execute`
 
+M4 keeps the tree-walking pipeline but adds one checked annotation: semantic
+analysis collects every single-file method signature before checking bodies and
+writes the selected method ID into each bare call node. The runtime executes
+that ID directly. This prevents dynamic values from repeating or changing
+overload resolution while a typed HIR is still pending.
+
 The CLI is a thin adapter over those functions.
 
 ## Current modules
@@ -67,6 +73,27 @@ Invalid syntax, unsupported syntax, semantic errors, unsupported platform APIs,
 and runtime exceptions are distinct concepts. They may share the diagnostic
 renderer, but must remain distinguishable as the error model grows.
 
+Runtime language faults now carry a core Apex exception type, message, origin
+span, and method-call frames. Compile diagnostics leave the runtime fields
+empty. `try`/`catch` handles only typed runtime exceptions; internal
+checked-state diagnostics are never silently converted into catchable Apex
+behavior.
+
+### Calls and scopes
+
+The parsed `Program` stores interim top-level method declarations separately
+from executable statements. Signature collection is a first semantic pass, so
+forward calls and recursion work without source-order dependence. Runtime
+invocations replace the caller's lexical-scope stack with a new parameter scope
+and restore it on every completion path. Collections and output remain
+interpreter-owned shared runtime state.
+
+Returns, loop control, and exceptions use the same statement-flow boundary.
+This lets `finally` observe and, when it completes abruptly, replace every kind
+of pending completion. The interpreter tracks active calls; when an exception
+first reaches a handler or escapes a method, it snapshots frames that pair the
+leaf method with the origin and each caller method with its nested call site.
+
 ## Target compiler pipeline
 
 Direct AST walking is appropriate for the current language slice. Before class
@@ -86,6 +113,11 @@ Source
 The typed representation should make conversions, selected overloads, member
 resolution, loop targets, and runtime operations explicit. Execution should not
 repeat compiler reasoning.
+
+The M4 call-ID cell is intentionally transitional. M5 should introduce the
+typed representation before class/member resolution expands and move selected
+calls and conversions there rather than adding more semantic annotations to the
+parsed AST.
 
 ## Target runtime boundaries
 

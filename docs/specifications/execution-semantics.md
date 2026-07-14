@@ -3,9 +3,9 @@
 ## Status
 
 Primitive expressions, lexical scopes, control flow, mutable collections, and
-the fixed M3 built-in call surface are implemented. User-defined calls and
-exceptions are active M4 work; transactions and platform effects remain later
-work.
+the fixed M3 built-in call surface are implemented. M4 adds single-file
+user-defined calls, recursion, exception unwinding, runtime casts, and source
+call stacks. Transactions and platform effects remain later work.
 
 ## Program execution
 
@@ -40,6 +40,13 @@ Method-call receivers are evaluated once, followed by arguments from left to
 right, each exactly once. Static built-ins do not evaluate a runtime receiver.
 Unsupported dispatch does not fall back to runtime approximation because calls
 are validated before execution.
+
+User-defined call arguments are also evaluated left to right exactly once.
+Each invocation replaces the caller's lexical scopes with an isolated parameter
+scope while sharing runtime collections and debug output. The statically
+selected method ID is executed directly, so runtime values do not repeat
+overload selection. Return values unwind blocks and loops to the caller;
+recursive calls use the same isolation rules.
 
 ## Collections
 
@@ -120,16 +127,36 @@ iteration is rejected; callers iterate `keySet()` or `values()`.
 Structural mutation of a List or Set during enhanced iteration is rejected
 through every alias, including diagnostic unwinding. `break` and `continue`
 target the nearest enclosing loop. A value-less `return` terminates anonymous
-execution; method return values are active M4 work.
+execution. Declared methods support typed values and `void` completion.
 
 ## Exceptions
 
-**Active M4 work.** Null receivers, invalid indexes and sizes, collection
-mutation during iteration, arithmetic failures, and impossible checked-state
-violations currently produce source-spanned runtime diagnostics. They are not
-yet catchable Apex exception values and do not carry call stacks. M4 will add
-exception values and source-mapped stack unwinding; `finally` must execute
-during normal and exceptional unwinding.
+**Implemented for M4, simplified.** `try` may have typed `catch` clauses, a
+`finally` block, or both. `throw` accepts a core exception value or `null`;
+throwing null raises `NullPointerException`. A concrete catch matches its own
+type, while `Exception` catches every implemented concrete exception. Catch
+variables preserve the original type, message, and accumulated frames so they
+can be inspected or rethrown.
+
+`finally` executes after normal completion, caught or uncaught exceptions,
+method returns, and loop `break`/`continue`. If `finally` itself returns, throws,
+breaks, or continues, that abrupt completion replaces the pending outcome.
+
+Null dereferences raise `NullPointerException`; invalid List positions and
+sizes raise `ListException`; division, remainder, and integer overflow raise
+`MathException`; invalid permitted downcasts raise `TypeException`; and String
+range/representation failures raise `StringException`. Structural mutation of
+an actively iterated List or Set raises `FinalException`. Runtime exceptions
+carry their origin span, and the active call chain is snapshotted when the
+exception first reaches a handler or escapes a method. The leaf frame uses the
+origin span; each caller frame uses the nested call site, producing an
+innermost-to-outermost source stack. The public diagnostic renderer maps those
+byte spans to file, line, and column.
+
+Core exception values support zero- or one-String-argument construction plus
+`getMessage()`, `getTypeName()`, and deterministic `getStackTraceString()`.
+Exact Salesforce wording, stack formatting, causes, and custom exception
+classes are not yet claimed.
 
 ## Platform effects
 

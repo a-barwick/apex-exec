@@ -2,9 +2,9 @@
 
 ## Status
 
-Single-span lexer, parser, semantic, and primitive runtime diagnostics are
-implemented. Structured categories, notes, multiple labels, recovery, and
-runtime stacks are planned.
+Single-span lexer, parser, and semantic diagnostics are implemented. M4 runtime
+failures additionally carry an exception type and ordered source call frames.
+Stable diagnostic codes, notes, multiple labels, and recovery remain planned.
 
 ## Requirements
 
@@ -26,6 +26,26 @@ error: unknown variable `mesage`
 2 | System.debug(mesage);
   |              ^^^^^^^
 ```
+
+Unhandled M4 exceptions retain the same primary source highlight and append
+the exception type plus an innermost-to-outermost Apex call stack:
+
+```text
+error: MathException: division by zero
+ --> script.apex:2:15
+  |
+2 |     return 10 / divisor;
+  |               ^
+Apex stack trace:
+  at divide (script.apex:2:15)
+  at outer (script.apex:6:12)
+```
+
+The public `Diagnostic` exposes `exception_type` and `stack_trace` separately
+from the human renderer. Compile diagnostics leave both empty. Stack frames
+currently identify method call sites in one source file; cross-file names and
+Salesforce-exact formatting depend on M5 project compilation and later
+differential validation.
 
 ## Future diagnostic categories
 
