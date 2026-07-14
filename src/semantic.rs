@@ -5,11 +5,12 @@ use crate::{
         UnaryOperator,
     },
     diagnostic::Diagnostic,
+    hir::{self, CallTarget, ExpressionType},
     span::Span,
 };
 use std::collections::HashMap;
 
-pub fn check(program: &Program) -> Result<(), Diagnostic> {
+pub fn check(program: &Program) -> Result<hir::Program, Diagnostic> {
     Checker::new().check_program(program)
 }
 
@@ -25,6 +26,8 @@ struct Checker {
     loop_depth: usize,
     return_type: Option<ReturnType>,
     methods: HashMap<String, Vec<MethodSignature>>,
+    expression_types: HashMap<Span, ExpressionType>,
+    calls: HashMap<Span, CallTarget>,
 }
 
 impl Checker {
@@ -34,10 +37,12 @@ impl Checker {
             loop_depth: 0,
             return_type: None,
             methods: HashMap::new(),
+            expression_types: HashMap::new(),
+            calls: HashMap::new(),
         }
     }
 
-    fn check_program(&mut self, program: &Program) -> Result<(), Diagnostic> {
+    fn check_program(mut self, program: &Program) -> Result<hir::Program, Diagnostic> {
         self.collect_method_signatures(program)?;
         for method in &program.methods {
             self.check_method(method)?;
@@ -45,7 +50,11 @@ impl Checker {
         for statement in &program.statements {
             self.check_statement(statement)?;
         }
-        Ok(())
+        Ok(hir::Program::new(
+            program.clone(),
+            self.expression_types,
+            self.calls,
+        ))
     }
 
     fn collect_method_signatures(&mut self, program: &Program) -> Result<(), Diagnostic> {
@@ -370,6 +379,15 @@ impl Checker {
     }
 
     fn expression_type(&mut self, expression: &Expression) -> Result<ExpressionType, Diagnostic> {
+        let ty = self.expression_type_inner(expression)?;
+        self.expression_types.insert(expression.span(), ty.clone());
+        Ok(ty)
+    }
+
+    fn expression_type_inner(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
         match expression {
             Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
             Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
@@ -402,9 +420,8 @@ impl Checker {
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
-                ..
-            } => self.function_call_type(name, arguments, resolved_method),
+                span,
+            } => self.function_call_type(name, arguments, *span),
             Expression::MethodCall {
                 receiver,
                 method,
@@ -462,7 +479,7 @@ impl Checker {
         &mut self,
         name: &Identifier,
         arguments: &[Expression],
-        resolved_method: &std::cell::Cell<Option<usize>>,
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let argument_types = arguments
             .iter()
@@ -519,7 +536,7 @@ impl Checker {
             ));
         };
 
-        resolved_method.set(Some(best.id));
+        self.calls.insert(span, CallTarget::TopLevelMethod(best.id));
         Ok(match &best.return_type {
             ReturnType::Void => ExpressionType::Void,
             ReturnType::Value(ty) => ExpressionType::Value(ty.clone()),
@@ -1657,23 +1674,6 @@ impl Checker {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ExpressionType {
-    Value(TypeName),
-    Null,
-    Void,
-}
-
-impl ExpressionType {
-    fn name(&self) -> String {
-        match self {
-            Self::Value(ty) => ty.apex_name(),
-            Self::Null => "null".to_owned(),
-            Self::Void => "void".to_owned(),
-        }
-    }
-}
-
 fn is_assignable(expected: &TypeName, actual: &ExpressionType) -> bool {
     match actual {
         ExpressionType::Value(actual) => {
@@ -2031,7 +2031,7 @@ mod tests {
 
     fn check_source(source: &str) -> Result<(), Diagnostic> {
         let program = crate::parse(source)?;
-        check(&program)
+        check(&program).map(|_| ())
     }
 
     #[test]

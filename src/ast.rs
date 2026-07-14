@@ -1,5 +1,4 @@
 use crate::span::Span;
-use std::cell::Cell;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -144,7 +143,6 @@ pub enum Expression {
     FunctionCall {
         name: Identifier,
         arguments: Vec<Expression>,
-        resolved_method: Cell<Option<usize>>,
         span: Span,
     },
     MethodCall {

@@ -1,10 +1,11 @@
 use crate::{
     ast::{
         AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
-        Identifier, MethodDeclaration, PostfixOperator, Program, ReturnType, Statement, TypeName,
+        Identifier, MethodDeclaration, PostfixOperator, ReturnType, Statement, TypeName,
         UnaryOperator,
     },
     diagnostic::Diagnostic,
+    hir::{CallTarget, Program},
     span::Span,
 };
 use std::{cmp::Ordering, collections::HashMap};
@@ -93,6 +94,7 @@ pub struct Interpreter {
     output: Vec<String>,
     methods: Vec<MethodDeclaration>,
     call_stack: Vec<ActiveCall>,
+    program: Option<Program>,
 }
 
 impl Interpreter {
@@ -103,11 +105,13 @@ impl Interpreter {
             output: Vec::new(),
             methods: Vec::new(),
             call_stack: Vec::new(),
+            program: None,
         }
     }
 
     pub fn execute(mut self, program: &Program) -> Result<Vec<String>, Diagnostic> {
         self.methods = program.methods.clone();
+        self.program = Some(program.clone());
         for statement in &program.statements {
             match self.execute_statement(statement)? {
                 Flow::Normal => {}
@@ -448,15 +452,19 @@ impl Interpreter {
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
                 span,
             } => {
-                let method_id = resolved_method.get().ok_or_else(|| {
-                    Diagnostic::new(
-                        "unresolved method call escaped semantic validation",
-                        name.span,
-                    )
-                })?;
+                let CallTarget::TopLevelMethod(method_id) = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .call_target(*span)
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "unresolved method call escaped semantic validation",
+                            name.span,
+                        )
+                    })?;
                 self.evaluate_function_call(method_id, name, arguments, *span)
             }
             Expression::Cast {

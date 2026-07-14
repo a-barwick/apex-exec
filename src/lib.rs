@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod diagnostic;
+pub mod hir;
 pub mod lexer;
 pub mod parser;
 pub mod runtime;
@@ -20,10 +21,9 @@ pub fn parse(source: &str) -> Result<Program, Diagnostic> {
     parser::Parser::new(tokens).parse_program()
 }
 
-pub fn check(source: &str) -> Result<Program, Diagnostic> {
+pub fn check(source: &str) -> Result<hir::Program, Diagnostic> {
     let program = parse(source)?;
-    semantic::check(&program)?;
-    Ok(program)
+    semantic::check(&program)
 }
 
 pub fn execute(source: &str) -> Result<Vec<String>, Diagnostic> {

@@ -7,7 +7,6 @@ use crate::{
     diagnostic::Diagnostic,
     token::{Token, TokenKind},
 };
-use std::cell::Cell;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -551,7 +550,6 @@ impl Parser {
                     return Ok(Expression::FunctionCall {
                         name,
                         arguments,
-                        resolved_method: Cell::new(None),
                         span: token.span.merge(end),
                     });
                 }
@@ -1263,11 +1261,9 @@ mod tests {
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
                 ..
             } if name.canonical == "add"
                 && arguments.len() == 2
-                && resolved_method.get().is_none()
         ));
     }
 
