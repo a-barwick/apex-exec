@@ -13,13 +13,49 @@ pub enum Statement {
         initializer: Expression,
         span: Span,
     },
-    Assignment {
-        name: Identifier,
-        value: Expression,
+    Expression {
+        expression: Expression,
         span: Span,
     },
     Debug {
-        variable: Identifier,
+        expression: Expression,
+        span: Span,
+    },
+    Block {
+        statements: Vec<Statement>,
+        span: Span,
+    },
+    If {
+        condition: Expression,
+        then_branch: Box<Statement>,
+        else_branch: Option<Box<Statement>>,
+        span: Span,
+    },
+    While {
+        condition: Expression,
+        body: Box<Statement>,
+        span: Span,
+    },
+    DoWhile {
+        body: Box<Statement>,
+        condition: Expression,
+        span: Span,
+    },
+    For {
+        initializer: Option<Box<Statement>>,
+        condition: Option<Expression>,
+        update: Option<Box<Statement>>,
+        body: Box<Statement>,
+        span: Span,
+    },
+    Break {
+        span: Span,
+    },
+    Continue {
+        span: Span,
+    },
+    Return {
+        value: Option<Expression>,
         span: Span,
     },
 }
@@ -29,7 +65,32 @@ pub enum Expression {
     StringLiteral(String, Span),
     BooleanLiteral(bool, Span),
     IntegerLiteral(i64, Span),
+    NullLiteral(Span),
     Variable(Identifier),
+    Assignment {
+        target: Identifier,
+        value: Box<Expression>,
+        span: Span,
+    },
+    Unary {
+        operator: UnaryOperator,
+        operand: Box<Expression>,
+        operator_span: Span,
+        span: Span,
+    },
+    Postfix {
+        operand: Box<Expression>,
+        operator: PostfixOperator,
+        operator_span: Span,
+        span: Span,
+    },
+    Binary {
+        left: Box<Expression>,
+        operator: BinaryOperator,
+        right: Box<Expression>,
+        operator_span: Span,
+        span: Span,
+    },
 }
 
 impl Expression {
@@ -37,10 +98,47 @@ impl Expression {
         match self {
             Self::StringLiteral(_, span)
             | Self::BooleanLiteral(_, span)
-            | Self::IntegerLiteral(_, span) => *span,
+            | Self::IntegerLiteral(_, span)
+            | Self::NullLiteral(span)
+            | Self::Assignment { span, .. }
+            | Self::Unary { span, .. }
+            | Self::Postfix { span, .. }
+            | Self::Binary { span, .. } => *span,
             Self::Variable(identifier) => identifier.span,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnaryOperator {
+    Positive,
+    Negate,
+    Not,
+    PrefixIncrement,
+    PrefixDecrement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostfixOperator {
+    Increment,
+    Decrement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Equal,
+    NotEqual,
+    And,
+    Or,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,8 +189,16 @@ impl Statement {
     pub fn span(&self) -> Span {
         match self {
             Self::VariableDeclaration { span, .. }
-            | Self::Assignment { span, .. }
-            | Self::Debug { span, .. } => *span,
+            | Self::Expression { span, .. }
+            | Self::Debug { span, .. }
+            | Self::Block { span, .. }
+            | Self::If { span, .. }
+            | Self::While { span, .. }
+            | Self::DoWhile { span, .. }
+            | Self::For { span, .. }
+            | Self::Break { span }
+            | Self::Continue { span }
+            | Self::Return { span, .. } => *span,
         }
     }
 }

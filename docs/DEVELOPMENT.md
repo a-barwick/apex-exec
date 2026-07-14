@@ -12,6 +12,7 @@ The current crate has no third-party dependencies.
 ```bash
 cargo build
 cargo run -- run examples/hello.apex
+cargo run -- run examples/control-flow.apex
 ```
 
 Inspect individual compiler phases:
@@ -33,16 +34,31 @@ cargo clippy --all-targets -- -D warnings
 
 Run the relevant CLI example after changing command behavior or execution.
 
+## Git workflow
+
+- Create an appropriately scoped branch before changing files. Agent-created
+  branches use the `codex/` prefix, such as `codex/m3-collections`.
+- Do not implement directly on `main`.
+- Commit at coherent checkpoints after the relevant tests pass. Each checkpoint
+  should build independently and describe one reviewable unit of work.
+- Before completing a roadmap milestone, satisfy its exit criterion, run the
+  full required verification suite, update the project documentation, and
+  merge the milestone branch into `main`.
+- Keep unrelated or user-owned working-tree changes out of commits.
+
 ## Change workflow
 
-1. Read `docs/STATUS.md` and the active milestone in `ROADMAP.md`.
-2. Identify the affected compiler phase and compatibility rows.
-3. Add tests that demonstrate the desired behavior and important failures.
-4. Implement the smallest complete language slice across all required phases.
-5. Run the required verification commands.
-6. Update `docs/STATUS.md` and `docs/COMPATIBILITY.md`.
-7. Add an ADR when the change makes a consequential or expensive-to-reverse
+1. Create an appropriately named branch from `main`.
+2. Read `docs/STATUS.md` and the active milestone in `ROADMAP.md`.
+3. Identify the affected compiler phase and compatibility rows.
+4. Add tests that demonstrate the desired behavior and important failures.
+5. Implement the smallest complete language slice across all required phases.
+6. Commit coherent checkpoints as they become independently verified.
+7. Run the required verification commands.
+8. Update `docs/STATUS.md` and `docs/COMPATIBILITY.md`.
+9. Add an ADR when the change makes a consequential or expensive-to-reverse
    design decision.
+10. Merge the branch into `main` after the milestone exit criterion passes.
 
 ## Testing strategy
 
@@ -58,6 +74,13 @@ Behavior should be exercised at the narrowest useful layer:
 As coverage grows, place feature-focused integration tests under a
 `tests/conformance/` module tree while retaining top-level Cargo test entry
 points.
+
+Full-program scenarios live as ordinary `.apex` files under `tests/scenarios/`.
+Each scenario should combine multiple supported language features, assert its
+observable output through the public compiler pipeline, and execute the same
+file through the built `apex-exec` CLI. Keep narrow grammar, type, scope, and
+runtime edge cases as unit tests in the owning module so failures remain easy to
+localize.
 
 ## Documentation maintenance
 

@@ -1,57 +1,65 @@
 # Current Status
 
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-13
 
 ## Active milestone
 
-M2 — Expressions and control flow
+M3 — Collections and core standard library
 
 ## Completed
 
 - Rust binary and library crate
 - Separate lexer, parser, AST, semantic-analysis, diagnostic, and runtime modules
-- `String`, `Boolean`, and simplified `Integer` values
-- Explicit initialization, assignment, and variable references
+- `String`, `Boolean`, simplified `Integer`, and `null` values
+- Explicit initialization, right-associative assignment, and variable references
 - Case-insensitive identifiers with original spelling retained in the AST
 - Single-quoted strings, comments, and common string escapes
-- `System.debug(variable)` to plain stdout
+- Precedence-based arithmetic, comparison, equality, and Boolean expressions
+- String concatenation and prefix/postfix increment and decrement
+- Blocks with nested lexical scopes
+- `if`/`else`, `while`, `do`/`while`, and traditional `for` execution
+- `break`, `continue`, and value-less anonymous `return`
+- `System.debug(expression)` to plain stdout
 - `tokens`, `ast`, `check`, and `run` CLI commands
-- Source-span diagnostics
-- Eight compiler/runtime integration tests
+- Source-span compile and runtime diagnostics
+- Sixteen focused compiler/runtime unit tests
+- Thirty integration and full-scenario tests, including disk-backed Apex run
+  through every compiler stage and the CLI
 
 ## Immediate target
 
-Execute this program and print `45`:
+Execute the M3 acceptance program unchanged:
 
 ```apex
-Integer total = 0;
-for (Integer i = 0; i < 10; i++) {
-    total = total + i;
+List<String> strs = new List<String>();
+
+for (Integer i = 0; i < 100; i++) {
+    String s = String.valueOf(i);
+    strs.add(s);
 }
-System.debug(total);
+
+System.debug(String.join(strs, ''));
 ```
 
 Recommended implementation order:
 
-1. Expand tokens for operators, braces, and control-flow keywords.
-2. Add precedence-based expression parsing.
-3. Add typed expression validation.
-4. Add blocks and lexical scope stacks.
-5. Add `if` and `while` execution.
-6. Add `for`, increment/decrement, `break`, and `continue`.
-7. Add CLI acceptance examples and conformance tests.
+1. Add generic type and array syntax to the lexer, parser, and AST.
+2. Add typed `List`, `Set`, and `Map` construction and literals.
+3. Add indexing and method-call expressions.
+4. Implement collection mutation, access, size, and iteration.
+5. Add the essential `String`, `Math`, and `System` methods needed by common code.
+6. Add CLI acceptance examples and collection conformance tests.
 
 ## Known limitations
 
-- Only primitive literals or variables can initialize and assign values.
-- `System.debug` accepts a variable, not a general expression.
-- There are no binary or unary operators.
-- There are no nested scopes or control-flow statements.
 - `Integer` uses simplified internal `i64` semantics rather than complete Apex
-  numeric behavior.
-- Collections, methods, classes, exceptions, SOQL, SOSL, DML, and SObjects are
+  range and overflow behavior.
+- Anonymous `return` is value-less; method return values arrive in M4.
+- Enhanced `for` loops depend on iterable collection types and arrive in M3.
+- Collections, generic and array types, method calls, and the broader standard
+  library are not implemented.
+- User-defined methods, classes, exceptions, SOQL, SOSL, DML, and SObjects are
   not implemented.
-- The project directory is not currently a Git repository.
 
 ## Handoff checklist
 

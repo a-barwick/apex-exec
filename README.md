@@ -8,13 +8,15 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first milestone supports explicitly initialized `String`, `Boolean`, and
-`Integer` variables, assignment, variable references, and
-`System.debug(variable)`. Apex identifiers are case-insensitive.
+The first two milestones support primitive expressions, assignment, lexical
+scopes, and common control flow over `String`, `Boolean`, `Integer`, and `null`.
+Apex identifiers are case-insensitive.
 
 ```console
 $ cargo run -- run examples/hello.apex
 Hello, world!
+$ cargo run -- run examples/control-flow.apex
+45
 ```
 
 Compiler stages can be inspected independently:
@@ -26,8 +28,8 @@ $ cargo run -- check examples/hello.apex
 $ cargo run -- run examples/hello.apex
 ```
 
-This is an early implementation. Control flow, collections, classes, SOQL,
-SOSL, and DML are not implemented yet.
+This is an early implementation. Collections, methods, classes, SOQL, SOSL,
+and DML are not implemented yet.
 
 ## Project documentation
 

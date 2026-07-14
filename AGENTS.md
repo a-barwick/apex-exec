@@ -16,6 +16,12 @@ Before changing behavior, read:
 
 ## Working rules
 
+- Create an appropriately named `codex/` branch before making changes; never
+  implement directly on `main`.
+- Commit coherent, verified checkpoints while work is in progress. Keep each
+  checkpoint buildable and give it a descriptive message.
+- When a roadmap milestone is complete, run all required verification, update
+  its documentation, and merge the milestone branch into `main`.
 - Work within the active roadmap milestone unless the user explicitly changes
   scope.
 - Keep lexing, parsing, semantic analysis, and execution separate.

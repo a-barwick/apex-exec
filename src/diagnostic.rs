@@ -54,3 +54,29 @@ impl fmt::Display for Diagnostic {
 }
 
 impl std::error::Error for Diagnostic {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_the_correct_line_column_and_highlight() {
+        let source = "String message = 'ok';\nSystem.debug(mesage);";
+        let start = source.find("mesage").unwrap();
+        let diagnostic = Diagnostic::new("unknown variable `mesage`", Span::new(start, start + 6));
+        let rendered = diagnostic.render("script.apex", source);
+
+        assert!(rendered.contains(" --> script.apex:2:14"));
+        assert!(rendered.contains("2 | System.debug(mesage);"));
+        assert!(rendered.ends_with("^^^^^^"));
+    }
+
+    #[test]
+    fn reports_character_columns_when_prior_text_is_multibyte() {
+        let source = "String é = value;";
+        let start = source.find("value").unwrap();
+        let diagnostic = Diagnostic::new("example", Span::new(start, start + 5));
+
+        assert!(diagnostic.render("unicode.apex", source).contains(":1:12"));
+    }
+}
