@@ -1,10 +1,11 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
-        Identifier, MethodDeclaration, PostfixOperator, Program, ReturnType, Statement, TypeName,
-        UnaryOperator,
+        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassMember,
+        CollectionInitializer, Expression, Identifier, MethodDeclaration, Modifier,
+        PostfixOperator, ReturnType, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
+    hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
     span::Span,
 };
 use std::{cmp::Ordering, collections::HashMap};
@@ -12,12 +13,16 @@ use std::{cmp::Ordering, collections::HashMap};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CollectionId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ObjectId(usize);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Value {
     String(String),
     Boolean(bool),
     Integer(i64),
     Collection(CollectionId),
+    Object(ObjectId),
     Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
@@ -52,6 +57,12 @@ enum Collection {
 struct Slot {
     ty: TypeName,
     value: Value,
+}
+
+#[derive(Clone, Debug)]
+struct ObjectInstance {
+    class_id: usize,
+    fields: HashMap<ClassMemberId, Slot>,
 }
 
 #[derive(Clone, Debug)]
@@ -90,9 +101,15 @@ enum Flow {
 pub struct Interpreter {
     scopes: Vec<HashMap<String, Slot>>,
     collections: Vec<Collection>,
+    objects: Vec<ObjectInstance>,
+    static_fields: HashMap<ClassMemberId, Slot>,
     output: Vec<String>,
     methods: Vec<MethodDeclaration>,
     call_stack: Vec<ActiveCall>,
+    program: Option<Program>,
+    classes: Vec<ClassDeclaration>,
+    current_receiver: Option<ObjectId>,
+    current_declaring_class: Option<usize>,
 }
 
 impl Interpreter {
@@ -100,14 +117,20 @@ impl Interpreter {
         Self {
             scopes: vec![HashMap::new()],
             collections: Vec::new(),
+            objects: Vec::new(),
+            static_fields: HashMap::new(),
             output: Vec::new(),
             methods: Vec::new(),
             call_stack: Vec::new(),
+            program: None,
+            classes: Vec::new(),
+            current_receiver: None,
+            current_declaring_class: None,
         }
     }
 
     pub fn execute(mut self, program: &Program) -> Result<Vec<String>, Diagnostic> {
-        self.methods = program.methods.clone();
+        self.prepare(program)?;
         for statement in &program.statements {
             match self.execute_statement(statement)? {
                 Flow::Normal => {}
@@ -133,6 +156,127 @@ impl Interpreter {
             }
         }
         Ok(self.output)
+    }
+
+    pub fn invoke_static(
+        mut self,
+        program: &Program,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Vec<String>, Diagnostic> {
+        self.prepare(program)?;
+        let class_id = self
+            .classes
+            .iter()
+            .position(|class| class.name.spelling.eq_ignore_ascii_case(class_name))
+            .ok_or_else(|| {
+                Diagnostic::new(format!("unknown class `{class_name}`"), Span::new(0, 0))
+            })?;
+        let candidates = self.classes[class_id]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(member_id, member)| {
+                let ClassMember::Method(method) = member else {
+                    return None;
+                };
+                (method.name.spelling.eq_ignore_ascii_case(method_name)
+                    && method.parameters.is_empty()
+                    && method.modifiers.contains(&Modifier::Static)
+                    && (method.modifiers.contains(&Modifier::Public)
+                        || method.modifiers.contains(&Modifier::Global)))
+                .then_some((member_id, method.name.span))
+            })
+            .collect::<Vec<_>>();
+        let [(member_id, span)] = candidates.as_slice() else {
+            return Err(Diagnostic::new(
+                format!(
+                    "invocation requires one public static zero-argument method `{class_name}.{method_name}`"
+                ),
+                self.classes[class_id].name.span,
+            ));
+        };
+        let value = self.evaluate_class_method(
+            ClassMemberId {
+                class_id,
+                member_id: *member_id,
+            },
+            None,
+            &[],
+            *span,
+            false,
+        )?;
+        if !matches!(value, Value::Void) {
+            self.output.push(self.display_value(&value));
+        }
+        Ok(self.output)
+    }
+
+    fn prepare(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        self.methods = program.methods.clone();
+        self.program = Some(program.clone());
+        self.classes = program.classes.clone();
+        self.initialize_static_fields()
+    }
+
+    fn initialize_static_fields(&mut self) -> Result<(), Diagnostic> {
+        for (class_id, class) in self.classes.iter().enumerate() {
+            for (member_id, member) in class.members.iter().enumerate() {
+                let target = ClassMemberId {
+                    class_id,
+                    member_id,
+                };
+                match member {
+                    ClassMember::Field(field) if field.modifiers.contains(&Modifier::Static) => {
+                        self.static_fields.insert(
+                            target,
+                            Slot {
+                                ty: field.ty.clone(),
+                                value: Value::Null(Some(field.ty.clone())),
+                            },
+                        );
+                    }
+                    ClassMember::Property(property)
+                        if property.modifiers.contains(&Modifier::Static) =>
+                    {
+                        self.static_fields.insert(
+                            target,
+                            Slot {
+                                ty: property.ty.clone(),
+                                value: Value::Null(Some(property.ty.clone())),
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let classes = self.classes.clone();
+        for (class_id, class) in classes.iter().enumerate() {
+            self.current_declaring_class = Some(class_id);
+            for (member_id, member) in class.members.iter().enumerate() {
+                let ClassMember::Field(field) = member else {
+                    continue;
+                };
+                if !field.modifiers.contains(&Modifier::Static) {
+                    continue;
+                }
+                if let Some(initializer) = &field.initializer {
+                    let target = ClassMemberId {
+                        class_id,
+                        member_id,
+                    };
+                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                    self.static_fields
+                        .get_mut(&target)
+                        .expect("static field was allocated")
+                        .value = value;
+                }
+            }
+        }
+        self.current_declaring_class = None;
+        Ok(())
     }
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
@@ -431,9 +575,7 @@ impl Interpreter {
             Expression::BooleanLiteral(value, _) => Ok(Value::Boolean(*value)),
             Expression::IntegerLiteral(value, _) => Ok(Value::Integer(*value)),
             Expression::NullLiteral(_) => Ok(Value::Null(None)),
-            Expression::Variable(identifier) => {
-                self.lookup(identifier).map(|slot| slot.value.clone())
-            }
+            Expression::Variable(identifier) => self.evaluate_variable(identifier),
             Expression::Assignment { target, value, .. } => self.evaluate_assignment(target, value),
             Expression::NewCollection {
                 ty,
@@ -445,19 +587,49 @@ impl Interpreter {
                 arguments,
                 span,
             } => self.evaluate_new_exception(exception_type, arguments, *span),
+            Expression::NewObject {
+                arguments, span, ..
+            } => self.evaluate_new_object(arguments, *span),
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
                 span,
             } => {
-                let method_id = resolved_method.get().ok_or_else(|| {
-                    Diagnostic::new(
-                        "unresolved method call escaped semantic validation",
-                        name.span,
-                    )
-                })?;
-                self.evaluate_function_call(method_id, name, arguments, *span)
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .call_target(*span)
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "unresolved method call escaped semantic validation",
+                            name.span,
+                        )
+                    })?;
+                match target {
+                    CallTarget::TopLevelMethod(method_id) => {
+                        self.evaluate_function_call(method_id, name, arguments, *span)
+                    }
+                    CallTarget::StaticMethod(target) => {
+                        self.evaluate_class_method(target, None, arguments, *span, false)
+                    }
+                    CallTarget::InstanceMethod(target) => {
+                        let receiver = self.current_receiver.ok_or_else(|| {
+                            Diagnostic::new("instance call has no current receiver", *span)
+                        })?;
+                        self.evaluate_class_method(target, Some(receiver), arguments, *span, true)
+                    }
+                    CallTarget::SuperMethod(target) => {
+                        let receiver = self.current_receiver.ok_or_else(|| {
+                            Diagnostic::new("super call has no current receiver", *span)
+                        })?;
+                        self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
+                    }
+                    CallTarget::Constructor { .. } => Err(Diagnostic::new(
+                        "constructor target attached to a method call",
+                        *span,
+                    )),
+                }
             }
             Expression::Cast {
                 ty,
@@ -474,7 +646,47 @@ impl Interpreter {
                 method,
                 arguments,
                 span,
-            } => self.evaluate_method_call(receiver, method, arguments, *span),
+            } => {
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .call_target(*span);
+                match target {
+                    Some(CallTarget::StaticMethod(target)) => {
+                        self.evaluate_class_method(target, None, arguments, *span, false)
+                    }
+                    Some(CallTarget::InstanceMethod(target)) => {
+                        let receiver = match self.evaluate(receiver)? {
+                            Value::Object(receiver) => receiver,
+                            Value::Null(_) => {
+                                return Err(runtime_exception(
+                                    "NullPointerException",
+                                    "class method receiver is null",
+                                    receiver.span(),
+                                ));
+                            }
+                            _ => return Err(invalid_runtime_operands(receiver.span())),
+                        };
+                        self.evaluate_class_method(target, Some(receiver), arguments, *span, true)
+                    }
+                    Some(CallTarget::SuperMethod(target)) => {
+                        let receiver = self.current_receiver.ok_or_else(|| {
+                            Diagnostic::new("super call has no current receiver", *span)
+                        })?;
+                        self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
+                    }
+                    Some(CallTarget::TopLevelMethod(_) | CallTarget::Constructor { .. }) => Err(
+                        Diagnostic::new("invalid checked target for member call", *span),
+                    ),
+                    None => self.evaluate_method_call(receiver, method, arguments, *span),
+                }
+            }
+            Expression::MemberAccess {
+                receiver,
+                member: _,
+                span,
+            } => self.evaluate_member_access(receiver, *span),
             Expression::Unary {
                 operator,
                 operand,
@@ -495,6 +707,327 @@ impl Interpreter {
                 ..
             } => self.evaluate_binary(left, *operator, right, *operator_span),
         }
+    }
+
+    fn evaluate_variable(&mut self, identifier: &Identifier) -> Result<Value, Diagnostic> {
+        let target = self
+            .program
+            .as_ref()
+            .expect("execution always has a checked program")
+            .reference_target(identifier.span)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "unresolved variable escaped semantic validation",
+                    identifier.span,
+                )
+            })?;
+        match target {
+            ReferenceTarget::Local => self.lookup(identifier).map(|slot| slot.value.clone()),
+            ReferenceTarget::This | ReferenceTarget::Super(_) => self
+                .current_receiver
+                .map(Value::Object)
+                .ok_or_else(|| Diagnostic::new("missing instance receiver", identifier.span)),
+            ReferenceTarget::InstanceMember(target) => {
+                let receiver = self
+                    .current_receiver
+                    .ok_or_else(|| Diagnostic::new("missing instance receiver", identifier.span))?;
+                self.read_class_member(target, Some(receiver), identifier.span)
+            }
+            ReferenceTarget::StaticMember(target) => {
+                self.read_class_member(target, None, identifier.span)
+            }
+        }
+    }
+
+    fn evaluate_member_access(
+        &mut self,
+        receiver: &Expression,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let target = self
+            .program
+            .as_ref()
+            .expect("execution always has a checked program")
+            .member_target(span)
+            .ok_or_else(|| {
+                Diagnostic::new("unresolved member escaped semantic validation", span)
+            })?;
+        match target {
+            MemberTarget::Static(target) => self.read_class_member(target, None, span),
+            MemberTarget::Instance(target) => {
+                let receiver = match self.evaluate(receiver)? {
+                    Value::Object(receiver) => receiver,
+                    Value::Null(_) => {
+                        return Err(runtime_exception(
+                            "NullPointerException",
+                            "member access receiver is null",
+                            receiver.span(),
+                        ));
+                    }
+                    _ => return Err(invalid_runtime_operands(receiver.span())),
+                };
+                self.read_class_member(target, Some(receiver), span)
+            }
+        }
+    }
+
+    fn read_class_member(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let member = self.classes[target.class_id].members[target.member_id].clone();
+        match member {
+            ClassMember::Field(field) => {
+                if field.modifiers.contains(&Modifier::Static) {
+                    self.static_fields
+                        .get(&target)
+                        .map(|slot| slot.value.clone())
+                        .ok_or_else(|| Diagnostic::new("missing static field storage", span))
+                } else {
+                    let receiver =
+                        receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
+                    self.objects[receiver.0]
+                        .fields
+                        .get(&target)
+                        .map(|slot| slot.value.clone())
+                        .ok_or_else(|| Diagnostic::new("missing instance field storage", span))
+                }
+            }
+            ClassMember::Property(property) => {
+                let accessor = property
+                    .accessors
+                    .iter()
+                    .find(|accessor| accessor.kind == AccessorKind::Get)
+                    .cloned()
+                    .ok_or_else(|| Diagnostic::new("property has no getter", span))?;
+                if let Some(body) = accessor.body {
+                    self.execute_property_getter(
+                        target,
+                        &property.name.spelling,
+                        &property.ty,
+                        receiver,
+                        &body,
+                        span,
+                    )
+                } else if property.modifiers.contains(&Modifier::Static) {
+                    Ok(self.static_fields[&target].value.clone())
+                } else {
+                    let receiver = receiver
+                        .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+                    Ok(self.objects[receiver.0].fields[&target].value.clone())
+                }
+            }
+            _ => Err(Diagnostic::new("target is not a value member", span)),
+        }
+    }
+
+    fn write_class_member(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let member = self.classes[target.class_id].members[target.member_id].clone();
+        match member {
+            ClassMember::Field(field) => {
+                let value = typed_value(value, &field.ty);
+                if field.modifiers.contains(&Modifier::Static) {
+                    self.static_fields
+                        .get_mut(&target)
+                        .ok_or_else(|| Diagnostic::new("missing static field storage", span))?
+                        .value = value.clone();
+                } else {
+                    let receiver =
+                        receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
+                    self.objects[receiver.0]
+                        .fields
+                        .get_mut(&target)
+                        .ok_or_else(|| Diagnostic::new("missing instance field storage", span))?
+                        .value = value.clone();
+                }
+                Ok(value)
+            }
+            ClassMember::Property(property) => {
+                let value = typed_value(value, &property.ty);
+                let accessor = property
+                    .accessors
+                    .iter()
+                    .find(|accessor| accessor.kind == AccessorKind::Set)
+                    .cloned()
+                    .ok_or_else(|| Diagnostic::new("property has no setter", span))?;
+                if let Some(body) = accessor.body {
+                    self.execute_property_setter(
+                        target,
+                        &property.name.spelling,
+                        &property.ty,
+                        receiver,
+                        &body,
+                        value.clone(),
+                        span,
+                    )?;
+                } else if property.modifiers.contains(&Modifier::Static) {
+                    self.static_fields
+                        .get_mut(&target)
+                        .expect("auto property storage exists")
+                        .value = value.clone();
+                } else {
+                    let receiver = receiver
+                        .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+                    self.objects[receiver.0]
+                        .fields
+                        .get_mut(&target)
+                        .expect("auto property storage exists")
+                        .value = value.clone();
+                }
+                Ok(value)
+            }
+            _ => Err(Diagnostic::new("target is not a value member", span)),
+        }
+    }
+
+    fn evaluate_new_object(
+        &mut self,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let CallTarget::Constructor {
+            class_id,
+            member_id,
+        } = self
+            .program
+            .as_ref()
+            .expect("execution always has a checked program")
+            .call_target(span)
+            .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?
+        else {
+            return Err(Diagnostic::new("invalid constructor target", span));
+        };
+        let arguments = self.evaluate_arguments(arguments)?;
+        let object_id = ObjectId(self.objects.len());
+        self.objects.push(ObjectInstance {
+            class_id,
+            fields: HashMap::new(),
+        });
+        self.allocate_instance_fields(object_id, class_id);
+        let lineage = self.class_lineage_base_first(class_id);
+        for current in lineage {
+            self.initialize_instance_fields(object_id, current)?;
+            let selected = if current == class_id {
+                member_id
+            } else {
+                self.zero_argument_constructor(current)
+            };
+            if let Some(member_id) = selected {
+                let constructor = match self.classes[current].members[member_id].clone() {
+                    ClassMember::Constructor(constructor) => constructor,
+                    _ => return Err(Diagnostic::new("invalid constructor member", span)),
+                };
+                let constructor_arguments = if current == class_id {
+                    arguments.clone()
+                } else {
+                    Vec::new()
+                };
+                self.execute_callable(
+                    &constructor.parameters,
+                    &constructor.body,
+                    &ReturnType::Void,
+                    &constructor.name.spelling,
+                    Some(object_id),
+                    current,
+                    constructor_arguments,
+                    span,
+                )?;
+            }
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn allocate_instance_fields(&mut self, object: ObjectId, class_id: usize) {
+        for current in self.class_lineage_base_first(class_id) {
+            for (member_id, member) in self.classes[current].members.iter().enumerate() {
+                let (ty, is_static) = match member {
+                    ClassMember::Field(field) => {
+                        (&field.ty, field.modifiers.contains(&Modifier::Static))
+                    }
+                    ClassMember::Property(property) => {
+                        (&property.ty, property.modifiers.contains(&Modifier::Static))
+                    }
+                    _ => continue,
+                };
+                if !is_static {
+                    self.objects[object.0].fields.insert(
+                        ClassMemberId {
+                            class_id: current,
+                            member_id,
+                        },
+                        Slot {
+                            ty: ty.clone(),
+                            value: Value::Null(Some(ty.clone())),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn initialize_instance_fields(
+        &mut self,
+        object: ObjectId,
+        class_id: usize,
+    ) -> Result<(), Diagnostic> {
+        let saved_receiver = self.current_receiver.replace(object);
+        let saved_declaring = self.current_declaring_class.replace(class_id);
+        let members = self.classes[class_id].members.clone();
+        let result = (|| {
+            for (member_id, member) in members.iter().enumerate() {
+                let ClassMember::Field(field) = member else {
+                    continue;
+                };
+                if field.modifiers.contains(&Modifier::Static) {
+                    continue;
+                }
+                if let Some(initializer) = &field.initializer {
+                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                    self.objects[object.0]
+                        .fields
+                        .get_mut(&ClassMemberId {
+                            class_id,
+                            member_id,
+                        })
+                        .expect("instance field was allocated")
+                        .value = value;
+                }
+            }
+            Ok(())
+        })();
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        result
+    }
+
+    fn class_lineage_base_first(&self, class_id: usize) -> Vec<usize> {
+        let mut lineage = Vec::new();
+        let mut cursor = Some(class_id);
+        while let Some(id) = cursor {
+            lineage.push(id);
+            cursor = self.classes[id].superclass.as_ref().and_then(|parent| {
+                self.classes
+                    .iter()
+                    .position(|class| class.name.canonical == parent.canonical)
+            });
+        }
+        lineage.reverse();
+        lineage
+    }
+
+    fn zero_argument_constructor(&self, class_id: usize) -> Option<usize> {
+        self.classes[class_id]
+            .members
+            .iter()
+            .position(|member| matches!(member, ClassMember::Constructor(constructor) if constructor.parameters.is_empty()))
     }
 
     fn evaluate_new_exception(
@@ -535,6 +1068,197 @@ impl Interpreter {
         ))))
     }
 
+    fn evaluate_class_method(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        arguments: &[Expression],
+        span: Span,
+        virtual_dispatch: bool,
+    ) -> Result<Value, Diagnostic> {
+        let arguments = self.evaluate_arguments(arguments)?;
+        let target = if virtual_dispatch {
+            receiver
+                .map(|receiver| self.virtual_method_target(receiver, target))
+                .unwrap_or(target)
+        } else {
+            target
+        };
+        let method = match self.classes[target.class_id].members[target.member_id].clone() {
+            ClassMember::Method(method) => method,
+            _ => return Err(Diagnostic::new("method target is invalid", span)),
+        };
+        let body = method
+            .body
+            .as_ref()
+            .ok_or_else(|| Diagnostic::new("abstract method cannot execute", span))?;
+        self.execute_callable(
+            &method.parameters,
+            body,
+            &method.return_type,
+            &method.name.spelling,
+            receiver,
+            target.class_id,
+            arguments,
+            span,
+        )
+    }
+
+    fn virtual_method_target(&self, receiver: ObjectId, declared: ClassMemberId) -> ClassMemberId {
+        let declared_method = match &self.classes[declared.class_id].members[declared.member_id] {
+            ClassMember::Method(method) => method,
+            _ => return declared,
+        };
+        let parameter_types = declared_method
+            .parameters
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .collect::<Vec<_>>();
+        let mut cursor = Some(self.objects[receiver.0].class_id);
+        while let Some(class_id) = cursor {
+            for (member_id, member) in self.classes[class_id].members.iter().enumerate() {
+                let ClassMember::Method(method) = member else {
+                    continue;
+                };
+                if method.name.canonical == declared_method.name.canonical
+                    && method
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect::<Vec<_>>()
+                        == parameter_types
+                    && method.body.is_some()
+                {
+                    return ClassMemberId {
+                        class_id,
+                        member_id,
+                    };
+                }
+            }
+            if class_id == declared.class_id {
+                break;
+            }
+            cursor = self.classes[class_id]
+                .superclass
+                .as_ref()
+                .and_then(|parent| {
+                    self.classes
+                        .iter()
+                        .position(|class| class.name.canonical == parent.canonical)
+                });
+        }
+        declared
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_callable(
+        &mut self,
+        parameters: &[crate::ast::Parameter],
+        body: &Statement,
+        return_type: &ReturnType,
+        name: &str,
+        receiver: Option<ObjectId>,
+        declaring_class: usize,
+        arguments: Vec<EvaluatedArgument>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let mut method_scope = HashMap::new();
+        for (parameter, argument) in parameters.iter().zip(arguments) {
+            method_scope.insert(
+                parameter.name.canonical.clone(),
+                Slot {
+                    ty: parameter.ty.clone(),
+                    value: typed_value(argument.value, &parameter.ty),
+                },
+            );
+        }
+        let caller_scopes = std::mem::replace(&mut self.scopes, vec![method_scope]);
+        let saved_receiver = std::mem::replace(&mut self.current_receiver, receiver);
+        let saved_declaring = self.current_declaring_class.replace(declaring_class);
+        self.call_stack.push(ActiveCall {
+            method: name.to_owned(),
+            call_span: span,
+        });
+        let mut outcome = self.execute_statement(body);
+        if let Err(exception) = &mut outcome {
+            self.attach_stack_if_missing(exception);
+        }
+        self.call_stack.pop();
+        self.scopes = caller_scopes;
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        match outcome {
+            Ok(Flow::Return(value)) => match (return_type, value) {
+                (ReturnType::Void, None) => Ok(Value::Void),
+                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                _ => Err(Diagnostic::new(
+                    "invalid callable return escaped semantic validation",
+                    span,
+                )),
+            },
+            Ok(Flow::Normal) if matches!(return_type, ReturnType::Void) => Ok(Value::Void),
+            Ok(Flow::Normal) => Err(Diagnostic::new(
+                "value-returning method completed without a return",
+                span,
+            )),
+            Ok(Flow::Break | Flow::Continue) => Err(Diagnostic::new(
+                "loop control escaped method semantic validation",
+                span,
+            )),
+            Err(exception) => Err(exception),
+        }
+    }
+
+    fn execute_property_getter(
+        &mut self,
+        target: ClassMemberId,
+        name: &str,
+        ty: &TypeName,
+        receiver: Option<ObjectId>,
+        body: &Statement,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.execute_callable(
+            &[],
+            body,
+            &ReturnType::Value(ty.clone()),
+            name,
+            receiver,
+            target.class_id,
+            Vec::new(),
+            span,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_property_setter(
+        &mut self,
+        target: ClassMemberId,
+        name: &str,
+        ty: &TypeName,
+        receiver: Option<ObjectId>,
+        body: &Statement,
+        value: Value,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let parameter = crate::ast::Parameter {
+            ty: ty.clone(),
+            name: Identifier::new("value".to_owned(), span),
+            span,
+        };
+        self.execute_callable(
+            &[parameter],
+            body,
+            &ReturnType::Void,
+            name,
+            receiver,
+            target.class_id,
+            vec![EvaluatedArgument { value, span }],
+            span,
+        )?;
+        Ok(())
+    }
+
     fn evaluate_function_call(
         &mut self,
         method_id: usize,
@@ -546,6 +1270,10 @@ impl Interpreter {
         let method = self.methods.get(method_id).cloned().ok_or_else(|| {
             Diagnostic::new("resolved method does not exist at runtime", name.span)
         })?;
+        let body = method
+            .body
+            .as_ref()
+            .ok_or_else(|| Diagnostic::new("abstract method cannot execute", method.name.span))?;
 
         let mut method_scope = HashMap::new();
         for (parameter, argument) in method.parameters.iter().zip(arguments) {
@@ -563,7 +1291,7 @@ impl Interpreter {
             method: method.name.spelling.clone(),
             call_span: span,
         });
-        let mut outcome = self.execute_statement(&method.body);
+        let mut outcome = self.execute_statement(body);
         if let Err(exception) = &mut outcome {
             self.attach_stack_if_missing(exception);
         }
@@ -625,7 +1353,30 @@ impl Interpreter {
         match target {
             AssignmentTarget::Variable(identifier) => {
                 let value = self.evaluate(value)?;
-                self.assign_variable(identifier, value)
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .reference_target(identifier.span)
+                    .ok_or_else(|| {
+                        Diagnostic::new("unresolved assignment target", identifier.span)
+                    })?;
+                match target {
+                    ReferenceTarget::Local => self.assign_variable(identifier, value),
+                    ReferenceTarget::InstanceMember(target) => {
+                        let receiver = self.current_receiver.ok_or_else(|| {
+                            Diagnostic::new("missing assignment receiver", identifier.span)
+                        })?;
+                        self.write_class_member(target, Some(receiver), value, identifier.span)
+                    }
+                    ReferenceTarget::StaticMember(target) => {
+                        self.write_class_member(target, None, value, identifier.span)
+                    }
+                    ReferenceTarget::This | ReferenceTarget::Super(_) => Err(Diagnostic::new(
+                        "cannot assign to this or super",
+                        identifier.span,
+                    )),
+                }
             }
             AssignmentTarget::Index {
                 collection,
@@ -636,6 +1387,38 @@ impl Interpreter {
                 let index_value = self.evaluate(index)?;
                 let value = self.evaluate(value)?;
                 self.assign_index(collection_value, index_value, value, index.span(), *span)
+            }
+            AssignmentTarget::Member {
+                receiver,
+                member: _,
+                span,
+            } => {
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .member_target(*span)
+                    .ok_or_else(|| Diagnostic::new("unresolved member assignment", *span))?;
+                let value = self.evaluate(value)?;
+                match target {
+                    MemberTarget::Static(target) => {
+                        self.write_class_member(target, None, value, *span)
+                    }
+                    MemberTarget::Instance(target) => {
+                        let receiver = match self.evaluate(receiver)? {
+                            Value::Object(receiver) => receiver,
+                            Value::Null(_) => {
+                                return Err(runtime_exception(
+                                    "NullPointerException",
+                                    "member assignment receiver is null",
+                                    receiver.span(),
+                                ));
+                            }
+                            _ => return Err(invalid_runtime_operands(receiver.span())),
+                        };
+                        self.write_class_member(target, Some(receiver), value, *span)
+                    }
+                }
             }
         }
     }
@@ -1126,6 +1909,7 @@ impl Interpreter {
         match receiver {
             Value::String(value) => self.call_string_instance(value, method, arguments, span),
             Value::Collection(id) => self.call_collection(id, method, arguments, span),
+            Value::Object(_) => Err(unsupported_method("class instance", method)),
             Value::Exception(exception) => {
                 self.call_exception_instance(&exception, method, arguments, span)
             }
@@ -2055,21 +2839,82 @@ impl Interpreter {
     ) -> Result<Value, Diagnostic> {
         match operand {
             Expression::Variable(identifier) => {
-                let old = match self.lookup(identifier)?.value {
-                    Value::Integer(value) => value,
-                    _ => {
-                        return Err(runtime_exception(
-                            "NullPointerException",
-                            "increment/decrement requires a non-null Integer value",
-                            operator_span,
-                        ));
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .reference_target(identifier.span)
+                    .ok_or_else(|| Diagnostic::new("unresolved increment target", operator_span))?;
+                match target {
+                    ReferenceTarget::Local => {
+                        let old = match self.lookup(identifier)?.value {
+                            Value::Integer(value) => value,
+                            _ => {
+                                return Err(runtime_exception(
+                                    "NullPointerException",
+                                    "increment/decrement requires a non-null Integer value",
+                                    operator_span,
+                                ));
+                            }
+                        };
+                        let new = old
+                            .checked_add(delta)
+                            .ok_or_else(|| integer_overflow(operator_span))?;
+                        self.lookup_mut(identifier)?.value = Value::Integer(new);
+                        Ok(Value::Integer(if return_old { old } else { new }))
                     }
-                };
-                let new = old
-                    .checked_add(delta)
-                    .ok_or_else(|| integer_overflow(operator_span))?;
-                self.lookup_mut(identifier)?.value = Value::Integer(new);
-                Ok(Value::Integer(if return_old { old } else { new }))
+                    ReferenceTarget::InstanceMember(target) => {
+                        let receiver = self.current_receiver.ok_or_else(|| {
+                            Diagnostic::new("missing increment receiver", operator_span)
+                        })?;
+                        self.mutate_class_member(
+                            target,
+                            Some(receiver),
+                            delta,
+                            return_old,
+                            operator_span,
+                        )
+                    }
+                    ReferenceTarget::StaticMember(target) => {
+                        self.mutate_class_member(target, None, delta, return_old, operator_span)
+                    }
+                    ReferenceTarget::This | ReferenceTarget::Super(_) => {
+                        Err(invalid_runtime_operands(operator_span))
+                    }
+                }
+            }
+            Expression::MemberAccess { receiver, span, .. } => {
+                let target = self
+                    .program
+                    .as_ref()
+                    .expect("execution always has a checked program")
+                    .member_target(*span)
+                    .ok_or_else(|| Diagnostic::new("unresolved increment target", *span))?;
+                match target {
+                    MemberTarget::Static(target) => {
+                        self.mutate_class_member(target, None, delta, return_old, operator_span)
+                    }
+                    MemberTarget::Instance(target) => {
+                        let receiver = match self.evaluate(receiver)? {
+                            Value::Object(receiver) => receiver,
+                            Value::Null(_) => {
+                                return Err(runtime_exception(
+                                    "NullPointerException",
+                                    "increment receiver is null",
+                                    receiver.span(),
+                                ));
+                            }
+                            _ => return Err(invalid_runtime_operands(receiver.span())),
+                        };
+                        self.mutate_class_member(
+                            target,
+                            Some(receiver),
+                            delta,
+                            return_old,
+                            operator_span,
+                        )
+                    }
+                }
             }
             Expression::Index {
                 collection,
@@ -2112,6 +2957,31 @@ impl Interpreter {
                 operator_span,
             )),
         }
+    }
+
+    fn mutate_class_member(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        delta: i64,
+        return_old: bool,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let old = match self.read_class_member(target, receiver, span)? {
+            Value::Integer(value) => value,
+            _ => {
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "increment/decrement requires a non-null Integer value",
+                    span,
+                ));
+            }
+        };
+        let new = old
+            .checked_add(delta)
+            .ok_or_else(|| integer_overflow(span))?;
+        self.write_class_member(target, receiver, Value::Integer(new), span)?;
+        Ok(Value::Integer(if return_old { old } else { new }))
     }
 
     fn assign_variable(
@@ -2201,6 +3071,7 @@ impl Interpreter {
             (Value::Collection(left), Value::Collection(right)) => {
                 self.collections_equal(*left, *right)
             }
+            (Value::Object(left), Value::Object(right)) => left == right,
             (Value::Exception(left), Value::Exception(right)) => left == right,
             (Value::Null(_), Value::Null(_)) => true,
             (Value::Void, Value::Void) => true,
@@ -2293,6 +3164,10 @@ impl Interpreter {
                         .join(", ")
                 ),
             },
+            Value::Object(id) => {
+                let instance = &self.objects[id.0];
+                format!("{}@{}", self.classes[instance.class_id].name.spelling, id.0)
+            }
             Value::Exception(exception) => {
                 let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
                 if exception.message.is_empty() {
@@ -2359,6 +3234,18 @@ impl Interpreter {
             Value::Boolean(_) => matches!(target, TypeName::Boolean),
             Value::Integer(_) => matches!(target, TypeName::Integer),
             Value::Collection(id) => self.collection_type(*id) == *target,
+            Value::Object(id) => {
+                let TypeName::Custom(target) = target else {
+                    return false;
+                };
+                let target_id = self
+                    .classes
+                    .iter()
+                    .position(|class| class.name.canonical == target.canonical);
+                target_id.is_some_and(|target_id| {
+                    self.runtime_class_is_or_inherits(self.objects[id.0].class_id, target_id)
+                })
+            }
             Value::Exception(exception) => {
                 matches!(target, TypeName::Exception)
                     || exception.exception_type.as_deref() == Some(target.apex_name().as_str())
@@ -2374,6 +3261,10 @@ impl Interpreter {
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
+            Value::Object(id) => self.classes[self.objects[id.0].class_id]
+                .name
+                .spelling
+                .clone(),
             Value::Exception(exception) => exception
                 .exception_type
                 .clone()
@@ -2383,6 +3274,29 @@ impl Interpreter {
                 .map_or_else(|| "null".to_owned(), TypeName::apex_name),
             Value::Void => "void".to_owned(),
         }
+    }
+
+    fn runtime_class_is_or_inherits(&self, actual: usize, expected: usize) -> bool {
+        if actual == expected {
+            return true;
+        }
+        if self.classes[actual].interfaces.iter().any(|interface| {
+            self.classes
+                .iter()
+                .position(|class| class.name.canonical == interface.canonical)
+                .is_some_and(|id| self.runtime_class_is_or_inherits(id, expected))
+        }) {
+            return true;
+        }
+        self.classes[actual]
+            .superclass
+            .as_ref()
+            .and_then(|parent| {
+                self.classes
+                    .iter()
+                    .position(|class| class.name.canonical == parent.canonical)
+            })
+            .is_some_and(|parent| self.runtime_class_is_or_inherits(parent, expected))
     }
 
     fn collection_type(&self, id: CollectionId) -> TypeName {

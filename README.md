@@ -8,11 +8,12 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first four milestones support primitive expressions, assignment, lexical
+The first five milestones support primitive expressions, assignment, lexical
 scopes, common control flow, typed collections, single-file user-defined
 methods, recursion, overloads, casts, catchable core exceptions, `finally`, and
-source-mapped runtime call stacks. Apex identifiers and method names are
-case-insensitive.
+source-mapped runtime call stacks. M5 adds classes, interfaces, inheritance,
+checked instance/static members, and incremental SFDX project compilation.
+Apex identifiers, types, and method names are case-insensitive.
 
 ```console
 $ cargo run -- run examples/hello.apex
@@ -34,6 +35,15 @@ and `finally`:
 cargo run -- run examples/methods-exceptions.apex
 ```
 
+The M5 sample is an ordinary three-file SFDX service layer:
+
+```console
+$ cargo run -- check examples/milestone5-project
+OK (3 classes, 3 source files)
+$ cargo run -- invoke examples/milestone5-project Entry.run
+Hello, Apex!
+```
+
 Compiler stages can be inspected independently:
 
 ```console
@@ -43,10 +53,10 @@ $ cargo run -- check examples/hello.apex
 $ cargo run -- run examples/hello.apex
 ```
 
-This is an early implementation. User-defined methods currently use an interim
-top-level single-file form, and the available standard-library and exception
-surfaces are deliberately curated. Classes, projects, SOQL, SOSL, and DML are
-not implemented yet.
+This is an early implementation. Backwards-compatible top-level methods remain
+available to anonymous scripts, while project code uses ordinary classes. The
+standard-library and exception surfaces are deliberately curated. Apex test
+annotations/running, SObjects, SOQL, SOSL, and DML are not implemented yet.
 
 ## Project documentation
 

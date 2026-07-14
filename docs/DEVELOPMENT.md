@@ -13,6 +13,8 @@ The current crate has no third-party dependencies.
 cargo build
 cargo run -- run examples/hello.apex
 cargo run -- run examples/control-flow.apex
+cargo run -- check examples/milestone5-project
+cargo run -- invoke examples/milestone5-project Entry.run
 ```
 
 Inspect individual compiler phases:
@@ -69,6 +71,8 @@ Behavior should be exercised at the narrowest useful layer:
 - Semantic tests for names, scopes, types, and conversions
 - Runtime tests for values, control flow, calls, and exceptions
 - CLI tests or examples for file handling, output, and rendered diagnostics
+- Project tests for SFDX discovery, cross-file resolution, dependency edges,
+  cache reuse, and invalidation
 - Conformance fixtures for observable Apex behavior
 
 As coverage grows, place feature-focused integration tests under a

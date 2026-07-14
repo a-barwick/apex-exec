@@ -1,15 +1,17 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
-        Identifier, MethodDeclaration, PostfixOperator, Program, ReturnType, Statement, TypeName,
+        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassKind,
+        ClassMember, CollectionInitializer, ConstructorDeclaration, Expression, Identifier,
+        MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement, TypeName,
         UnaryOperator,
     },
     diagnostic::Diagnostic,
+    hir::{self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget},
     span::Span,
 };
 use std::collections::HashMap;
 
-pub fn check(program: &Program) -> Result<(), Diagnostic> {
+pub fn check(program: &Program) -> Result<hir::Program, Diagnostic> {
     Checker::new().check_program(program)
 }
 
@@ -20,11 +22,46 @@ struct MethodSignature {
     return_type: ReturnType,
 }
 
+#[derive(Clone)]
+struct ClassMethodSignature {
+    target: ClassMemberId,
+    name: String,
+    parameter_types: Vec<TypeName>,
+    return_type: ReturnType,
+    modifiers: Vec<Modifier>,
+}
+
+#[derive(Clone)]
+struct ClassValueMember {
+    target: ClassMemberId,
+    ty: TypeName,
+    modifiers: Vec<Modifier>,
+    read_access: Vec<Modifier>,
+    write_access: Vec<Modifier>,
+    readable: bool,
+    writable: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClassCallKind {
+    Static,
+    Instance,
+    Super,
+}
+
 struct Checker {
     scopes: Vec<HashMap<String, TypeName>>,
     loop_depth: usize,
     return_type: Option<ReturnType>,
     methods: HashMap<String, Vec<MethodSignature>>,
+    expression_types: HashMap<Span, ExpressionType>,
+    calls: HashMap<Span, CallTarget>,
+    references: HashMap<Span, ReferenceTarget>,
+    members: HashMap<Span, MemberTarget>,
+    classes: Vec<ClassDeclaration>,
+    class_ids: HashMap<String, usize>,
+    current_class: Option<usize>,
+    current_static: bool,
 }
 
 impl Checker {
@@ -34,16 +71,799 @@ impl Checker {
             loop_depth: 0,
             return_type: None,
             methods: HashMap::new(),
+            expression_types: HashMap::new(),
+            calls: HashMap::new(),
+            references: HashMap::new(),
+            members: HashMap::new(),
+            classes: Vec::new(),
+            class_ids: HashMap::new(),
+            current_class: None,
+            current_static: false,
         }
     }
 
-    fn check_program(&mut self, program: &Program) -> Result<(), Diagnostic> {
+    fn check_program(mut self, program: &Program) -> Result<hir::Program, Diagnostic> {
+        self.collect_classes(program)?;
         self.collect_method_signatures(program)?;
+        self.validate_class_hierarchy()?;
+        for class_id in 0..self.classes.len() {
+            self.check_class(class_id)?;
+        }
         for method in &program.methods {
             self.check_method(method)?;
         }
         for statement in &program.statements {
             self.check_statement(statement)?;
+        }
+        Ok(hir::Program::new(
+            program.clone(),
+            self.expression_types,
+            self.calls,
+            self.references,
+            self.members,
+        ))
+    }
+
+    fn collect_classes(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        self.classes = program.classes.clone();
+        for (class_id, class) in self.classes.iter().enumerate() {
+            if let Some(previous) = self
+                .class_ids
+                .insert(class.name.canonical.clone(), class_id)
+            {
+                let original = &self.classes[previous];
+                return Err(Diagnostic::new(
+                    format!(
+                        "duplicate type `{}`; first declared as `{}`",
+                        class.name.spelling, original.name.spelling
+                    ),
+                    class.name.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_class_hierarchy(&self) -> Result<(), Diagnostic> {
+        for (class_id, class) in self.classes.iter().enumerate() {
+            validate_modifier_set(&class.modifiers, class.name.span, "type")?;
+            reject_modifiers(
+                &class.modifiers,
+                &[
+                    Modifier::Private,
+                    Modifier::Protected,
+                    Modifier::Static,
+                    Modifier::Override,
+                ],
+                class.name.span,
+                "top-level type",
+            )?;
+            if class.modifiers.iter().any(|modifier| {
+                matches!(
+                    modifier,
+                    Modifier::WithSharing | Modifier::WithoutSharing | Modifier::InheritedSharing
+                )
+            }) {
+                return Err(Diagnostic::new(
+                    "sharing modifiers are parsed but not supported by the active compatibility profile",
+                    class.name.span,
+                ));
+            }
+            if let Some(superclass) = &class.superclass {
+                let parent_id = self
+                    .class_ids
+                    .get(&superclass.canonical)
+                    .copied()
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("unknown superclass `{}`", superclass.spelling),
+                            superclass.span,
+                        )
+                    })?;
+                let parent = &self.classes[parent_id];
+                if class.kind == ClassKind::Class && parent.kind != ClassKind::Class {
+                    return Err(Diagnostic::new(
+                        format!("class cannot extend interface `{}`", superclass.spelling),
+                        superclass.span,
+                    ));
+                }
+                if class.kind == ClassKind::Interface && parent.kind != ClassKind::Interface {
+                    return Err(Diagnostic::new(
+                        format!("interface cannot extend class `{}`", superclass.spelling),
+                        superclass.span,
+                    ));
+                }
+                if parent.modifiers.contains(&Modifier::Final) {
+                    return Err(Diagnostic::new(
+                        format!("cannot extend final class `{}`", superclass.spelling),
+                        superclass.span,
+                    ));
+                }
+                if class.kind == ClassKind::Class
+                    && !(parent.modifiers.contains(&Modifier::Virtual)
+                        || parent.modifiers.contains(&Modifier::Abstract))
+                {
+                    return Err(Diagnostic::new(
+                        format!("cannot extend non-virtual class `{}`", superclass.spelling),
+                        superclass.span,
+                    ));
+                }
+            }
+            for interface in &class.interfaces {
+                let interface_id = self
+                    .class_ids
+                    .get(&interface.canonical)
+                    .copied()
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("unknown interface `{}`", interface.spelling),
+                            interface.span,
+                        )
+                    })?;
+                if self.classes[interface_id].kind != ClassKind::Interface {
+                    return Err(Diagnostic::new(
+                        format!("`{}` is not an interface", interface.spelling),
+                        interface.span,
+                    ));
+                }
+            }
+
+            let mut seen = vec![false; self.classes.len()];
+            let mut cursor = Some(class_id);
+            while let Some(id) = cursor {
+                if seen[id] {
+                    return Err(Diagnostic::new(
+                        format!("cyclic inheritance involving `{}`", class.name.spelling),
+                        class.name.span,
+                    ));
+                }
+                seen[id] = true;
+                cursor = self.classes[id]
+                    .superclass
+                    .as_ref()
+                    .and_then(|name| self.class_ids.get(&name.canonical).copied());
+            }
+        }
+        Ok(())
+    }
+
+    fn check_class(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        self.validate_class_member_declarations(class_id)?;
+        self.validate_class_contracts(class_id)?;
+
+        let saved_class = self.current_class.replace(class_id);
+        let saved_static = self.current_static;
+        let members = self.classes[class_id].members.clone();
+        let result = (|| {
+            for member in &members {
+                match member {
+                    ClassMember::Field(field) => {
+                        self.validate_type(&field.ty, field.name.span)?;
+                        self.current_static = field.modifiers.contains(&Modifier::Static);
+                        if let Some(initializer) = &field.initializer {
+                            let actual = self.expression_type(initializer)?;
+                            self.require_assignable(&field.ty, &actual, initializer.span())?;
+                        }
+                    }
+                    ClassMember::Constructor(constructor) => {
+                        self.current_static = false;
+                        self.check_constructor(constructor)?;
+                    }
+                    ClassMember::Method(method) => {
+                        self.current_static = method.modifiers.contains(&Modifier::Static);
+                        self.check_method(method)?;
+                    }
+                    ClassMember::Property(property) => {
+                        self.validate_type(&property.ty, property.name.span)?;
+                        self.current_static = property.modifiers.contains(&Modifier::Static);
+                        self.check_property_accessors(property)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.current_class = saved_class;
+        self.current_static = saved_static;
+        result
+    }
+
+    fn validate_class_member_declarations(&self, class_id: usize) -> Result<(), Diagnostic> {
+        let class = &self.classes[class_id];
+        let mut values = HashMap::<String, Span>::new();
+        let mut methods = HashMap::<(String, Vec<TypeName>), Span>::new();
+        let mut constructors = HashMap::<Vec<TypeName>, Span>::new();
+        for member in &class.members {
+            match member {
+                ClassMember::Field(field) => {
+                    validate_modifier_set(&field.modifiers, field.name.span, "field")?;
+                    reject_modifiers(
+                        &field.modifiers,
+                        &[Modifier::Virtual, Modifier::Abstract, Modifier::Override],
+                        field.name.span,
+                        "field",
+                    )?;
+                    if values
+                        .insert(field.name.canonical.clone(), field.name.span)
+                        .is_some()
+                    {
+                        return Err(Diagnostic::new(
+                            format!("duplicate member `{}`", field.name.spelling),
+                            field.name.span,
+                        ));
+                    }
+                }
+                ClassMember::Property(property) => {
+                    validate_modifier_set(&property.modifiers, property.name.span, "property")?;
+                    reject_modifiers(
+                        &property.modifiers,
+                        &[
+                            Modifier::Virtual,
+                            Modifier::Abstract,
+                            Modifier::Override,
+                            Modifier::Final,
+                        ],
+                        property.name.span,
+                        "property",
+                    )?;
+                    if values
+                        .insert(property.name.canonical.clone(), property.name.span)
+                        .is_some()
+                    {
+                        return Err(Diagnostic::new(
+                            format!("duplicate member `{}`", property.name.spelling),
+                            property.name.span,
+                        ));
+                    }
+                    let mut get = false;
+                    let mut set = false;
+                    for accessor in &property.accessors {
+                        let duplicate = match accessor.kind {
+                            AccessorKind::Get => std::mem::replace(&mut get, true),
+                            AccessorKind::Set => std::mem::replace(&mut set, true),
+                        };
+                        if duplicate {
+                            return Err(Diagnostic::new(
+                                "duplicate property accessor",
+                                accessor.span,
+                            ));
+                        }
+                    }
+                    if property.accessors.is_empty() {
+                        return Err(Diagnostic::new(
+                            "property requires at least one accessor",
+                            property.name.span,
+                        ));
+                    }
+                    if class.kind == ClassKind::Interface
+                        && (property.modifiers.contains(&Modifier::Private)
+                            || property.modifiers.contains(&Modifier::Protected))
+                    {
+                        return Err(Diagnostic::new(
+                            "interface properties must be public or global",
+                            property.name.span,
+                        ));
+                    }
+                }
+                ClassMember::Constructor(constructor) => {
+                    validate_modifier_set(
+                        &constructor.modifiers,
+                        constructor.name.span,
+                        "constructor",
+                    )?;
+                    reject_modifiers(
+                        &constructor.modifiers,
+                        &[
+                            Modifier::Static,
+                            Modifier::Virtual,
+                            Modifier::Abstract,
+                            Modifier::Override,
+                            Modifier::Final,
+                        ],
+                        constructor.name.span,
+                        "constructor",
+                    )?;
+                    let signature = constructor
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect::<Vec<_>>();
+                    if constructors
+                        .insert(signature, constructor.name.span)
+                        .is_some()
+                    {
+                        return Err(Diagnostic::new(
+                            "duplicate constructor overload",
+                            constructor.name.span,
+                        ));
+                    }
+                    if class.kind == ClassKind::Interface {
+                        return Err(Diagnostic::new(
+                            "interfaces cannot declare constructors",
+                            constructor.name.span,
+                        ));
+                    }
+                }
+                ClassMember::Method(method) => {
+                    validate_modifier_set(&method.modifiers, method.name.span, "method")?;
+                    if method.modifiers.contains(&Modifier::Static) {
+                        reject_modifiers(
+                            &method.modifiers,
+                            &[Modifier::Virtual, Modifier::Abstract, Modifier::Override],
+                            method.name.span,
+                            "static method",
+                        )?;
+                    }
+                    if method.modifiers.contains(&Modifier::Final) {
+                        reject_modifiers(
+                            &method.modifiers,
+                            &[Modifier::Virtual, Modifier::Abstract],
+                            method.name.span,
+                            "final method",
+                        )?;
+                    }
+                    let signature = (
+                        method.name.canonical.clone(),
+                        method
+                            .parameters
+                            .iter()
+                            .map(|parameter| parameter.ty.clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    if methods.insert(signature, method.name.span).is_some() {
+                        return Err(Diagnostic::new(
+                            format!("duplicate method overload `{}`", method.name.spelling),
+                            method.name.span,
+                        ));
+                    }
+                    let is_abstract = method.modifiers.contains(&Modifier::Abstract)
+                        || class.kind == ClassKind::Interface;
+                    if is_abstract && method.body.is_some() {
+                        return Err(Diagnostic::new(
+                            "abstract and interface methods cannot have a body",
+                            method.name.span,
+                        ));
+                    }
+                    if !is_abstract && method.body.is_none() {
+                        return Err(Diagnostic::new(
+                            "method without a body must be abstract",
+                            method.name.span,
+                        ));
+                    }
+                    if class.kind == ClassKind::Interface
+                        && method.modifiers.contains(&Modifier::Static)
+                    {
+                        return Err(Diagnostic::new(
+                            "interface methods cannot be static in the supported profile",
+                            method.name.span,
+                        ));
+                    }
+                    if class.kind == ClassKind::Interface
+                        && (method.modifiers.contains(&Modifier::Private)
+                            || method.modifiers.contains(&Modifier::Protected))
+                    {
+                        return Err(Diagnostic::new(
+                            "interface methods must be public or global",
+                            method.name.span,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_class_contracts(&self, class_id: usize) -> Result<(), Diagnostic> {
+        let class = &self.classes[class_id];
+        for signature in self.own_class_methods(class_id) {
+            let method = self.method_declaration(signature.target);
+            let inherited = self
+                .parent_class_id(class_id)
+                .and_then(|parent| self.find_matching_method(parent, method, true));
+            if method.modifiers.contains(&Modifier::Override) {
+                let Some(base) = inherited else {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "method `{}` does not override an inherited method",
+                            method.name.spelling
+                        ),
+                        method.name.span,
+                    ));
+                };
+                let base_method = self.method_declaration(base.target);
+                if base_method.modifiers.contains(&Modifier::Static)
+                    || !(base_method.modifiers.contains(&Modifier::Virtual)
+                        || base_method.modifiers.contains(&Modifier::Abstract)
+                        || self.classes[base.target.class_id].kind == ClassKind::Interface)
+                {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "method `{}` overrides a non-virtual method",
+                            method.name.spelling
+                        ),
+                        method.name.span,
+                    ));
+                }
+                if method.return_type != base_method.return_type {
+                    return Err(Diagnostic::new(
+                        "override return type must match the inherited method",
+                        method.name.span,
+                    ));
+                }
+                if access_rank(&method.modifiers) < access_rank(&base_method.modifiers) {
+                    return Err(Diagnostic::new(
+                        "override cannot reduce inherited method visibility",
+                        method.name.span,
+                    ));
+                }
+            } else if inherited.is_some()
+                && !method.modifiers.contains(&Modifier::Static)
+                && class.kind == ClassKind::Class
+            {
+                return Err(Diagnostic::new(
+                    format!("method `{}` must use `override`", method.name.spelling),
+                    method.name.span,
+                ));
+            }
+        }
+
+        if class.kind == ClassKind::Class && !class.modifiers.contains(&Modifier::Abstract) {
+            for required in self.required_abstract_methods(class_id) {
+                if self
+                    .find_concrete_implementation(class_id, &required)
+                    .is_none()
+                {
+                    let method = self.method_declaration(required.target);
+                    return Err(Diagnostic::new(
+                        format!(
+                            "non-abstract class `{}` must implement method `{}`",
+                            class.name.spelling, method.name.spelling
+                        ),
+                        class.name.span,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn parent_class_id(&self, class_id: usize) -> Option<usize> {
+        self.classes[class_id]
+            .superclass
+            .as_ref()
+            .and_then(|name| self.class_ids.get(&name.canonical).copied())
+    }
+
+    fn own_class_methods(&self, class_id: usize) -> Vec<ClassMethodSignature> {
+        self.classes[class_id]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(member_id, member)| {
+                let ClassMember::Method(method) = member else {
+                    return None;
+                };
+                let mut modifiers = method.modifiers.clone();
+                if self.classes[class_id].kind == ClassKind::Interface
+                    && access_rank(&modifiers) == 0
+                {
+                    modifiers.push(Modifier::Public);
+                }
+                Some(ClassMethodSignature {
+                    target: ClassMemberId {
+                        class_id,
+                        member_id,
+                    },
+                    name: method.name.canonical.clone(),
+                    parameter_types: method
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect(),
+                    return_type: method.return_type.clone(),
+                    modifiers,
+                })
+            })
+            .collect()
+    }
+
+    fn class_methods_named(&self, class_id: usize, canonical: &str) -> Vec<ClassMethodSignature> {
+        let mut methods = Vec::new();
+        let mut signatures = Vec::<Vec<TypeName>>::new();
+        let mut cursor = Some(class_id);
+        while let Some(id) = cursor {
+            for signature in self.own_class_methods(id).into_iter().filter(|signature| {
+                self.method_declaration(signature.target).name.canonical == canonical
+            }) {
+                if !signatures.contains(&signature.parameter_types) {
+                    signatures.push(signature.parameter_types.clone());
+                    methods.push(signature);
+                }
+            }
+            cursor = self.parent_class_id(id);
+        }
+        methods
+    }
+
+    fn method_declaration(&self, target: ClassMemberId) -> &MethodDeclaration {
+        let ClassMember::Method(method) = &self.classes[target.class_id].members[target.member_id]
+        else {
+            unreachable!("method target must refer to a method")
+        };
+        method
+    }
+
+    fn find_matching_method(
+        &self,
+        class_id: usize,
+        method: &MethodDeclaration,
+        include_abstract: bool,
+    ) -> Option<ClassMethodSignature> {
+        self.class_methods_named(class_id, &method.name.canonical)
+            .into_iter()
+            .find(|candidate| {
+                candidate.parameter_types
+                    == method
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect::<Vec<_>>()
+                    && (include_abstract
+                        || self.method_declaration(candidate.target).body.is_some())
+            })
+    }
+
+    fn required_abstract_methods(&self, class_id: usize) -> Vec<ClassMethodSignature> {
+        let mut required = Vec::new();
+        let mut cursor = Some(class_id);
+        while let Some(id) = cursor {
+            for method in self.own_class_methods(id) {
+                if self.method_declaration(method.target).body.is_none() {
+                    push_unique_signature(&mut required, method);
+                }
+            }
+            for interface in &self.classes[id].interfaces {
+                let interface_id = self.class_ids[&interface.canonical];
+                self.collect_interface_methods(interface_id, &mut required);
+            }
+            cursor = self.parent_class_id(id);
+        }
+        required
+    }
+
+    fn collect_interface_methods(
+        &self,
+        interface_id: usize,
+        required: &mut Vec<ClassMethodSignature>,
+    ) {
+        for method in self.own_class_methods(interface_id) {
+            push_unique_signature(required, method);
+        }
+        if let Some(parent) = self.parent_class_id(interface_id) {
+            self.collect_interface_methods(parent, required);
+        }
+        for interface in &self.classes[interface_id].interfaces {
+            self.collect_interface_methods(self.class_ids[&interface.canonical], required);
+        }
+    }
+
+    fn find_concrete_implementation(
+        &self,
+        class_id: usize,
+        required: &ClassMethodSignature,
+    ) -> Option<ClassMethodSignature> {
+        let required_method = self.method_declaration(required.target);
+        self.class_methods_named(class_id, &required_method.name.canonical)
+            .into_iter()
+            .find(|candidate| {
+                candidate.parameter_types == required.parameter_types
+                    && candidate.return_type == required.return_type
+                    && self.method_declaration(candidate.target).body.is_some()
+                    && !candidate.modifiers.contains(&Modifier::Abstract)
+                    && access_rank(&candidate.modifiers) >= access_rank(&required.modifiers)
+            })
+    }
+
+    fn class_value_member(&self, class_id: usize, canonical: &str) -> Option<ClassValueMember> {
+        let mut cursor = Some(class_id);
+        while let Some(id) = cursor {
+            for (member_id, member) in self.classes[id].members.iter().enumerate() {
+                let target = ClassMemberId {
+                    class_id: id,
+                    member_id,
+                };
+                match member {
+                    ClassMember::Field(field) if field.name.canonical == canonical => {
+                        return Some(ClassValueMember {
+                            target,
+                            ty: field.ty.clone(),
+                            modifiers: field.modifiers.clone(),
+                            read_access: field.modifiers.clone(),
+                            write_access: field.modifiers.clone(),
+                            readable: true,
+                            writable: !field.modifiers.contains(&Modifier::Final),
+                        });
+                    }
+                    ClassMember::Property(property) if property.name.canonical == canonical => {
+                        return Some(ClassValueMember {
+                            target,
+                            ty: property.ty.clone(),
+                            modifiers: property.modifiers.clone(),
+                            read_access: property
+                                .accessors
+                                .iter()
+                                .find(|accessor| accessor.kind == AccessorKind::Get)
+                                .and_then(|accessor| accessor.modifier)
+                                .map_or_else(
+                                    || property.modifiers.clone(),
+                                    |modifier| vec![modifier],
+                                ),
+                            write_access: property
+                                .accessors
+                                .iter()
+                                .find(|accessor| accessor.kind == AccessorKind::Set)
+                                .and_then(|accessor| accessor.modifier)
+                                .map_or_else(
+                                    || property.modifiers.clone(),
+                                    |modifier| vec![modifier],
+                                ),
+                            readable: property
+                                .accessors
+                                .iter()
+                                .any(|accessor| accessor.kind == AccessorKind::Get),
+                            writable: property
+                                .accessors
+                                .iter()
+                                .any(|accessor| accessor.kind == AccessorKind::Set),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            cursor = self.parent_class_id(id);
+        }
+        None
+    }
+
+    fn validate_type(&self, ty: &TypeName, span: Span) -> Result<(), Diagnostic> {
+        match ty {
+            TypeName::Custom(name) if !self.class_ids.contains_key(&name.canonical) => Err(
+                Diagnostic::new(format!("unknown type `{}`", name.spelling), span),
+            ),
+            TypeName::List(element) | TypeName::Set(element) => self.validate_type(element, span),
+            TypeName::Map(key, value) => {
+                self.validate_type(key, span)?;
+                self.validate_type(value, span)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn is_assignable(&self, expected: &TypeName, actual: &ExpressionType) -> bool {
+        match actual {
+            ExpressionType::Value(actual) => self.is_subtype(actual, expected),
+            ExpressionType::Null => true,
+            ExpressionType::Void => false,
+        }
+    }
+
+    fn is_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        if actual == expected || *expected == TypeName::Object {
+            return true;
+        }
+        if *expected == TypeName::Exception && actual.is_exception() {
+            return true;
+        }
+        let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
+            return false;
+        };
+        let Some(actual_id) = self.class_ids.get(&actual.canonical).copied() else {
+            return false;
+        };
+        let Some(expected_id) = self.class_ids.get(&expected.canonical).copied() else {
+            return false;
+        };
+        self.class_is_or_inherits(actual_id, expected_id)
+    }
+
+    fn class_is_or_inherits(&self, actual_id: usize, expected_id: usize) -> bool {
+        if actual_id == expected_id {
+            return true;
+        }
+        if self
+            .parent_class_id(actual_id)
+            .is_some_and(|parent| self.class_is_or_inherits(parent, expected_id))
+        {
+            return true;
+        }
+        self.classes[actual_id].interfaces.iter().any(|interface| {
+            self.class_is_or_inherits(self.class_ids[&interface.canonical], expected_id)
+        })
+    }
+
+    fn require_assignable(
+        &self,
+        expected: &TypeName,
+        actual: &ExpressionType,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if self.is_assignable(expected, actual) {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "cannot assign {} to {}",
+                    actual.name(),
+                    expected.apex_name()
+                ),
+                span,
+            ))
+        }
+    }
+
+    fn check_constructor(
+        &mut self,
+        constructor: &ConstructorDeclaration,
+    ) -> Result<(), Diagnostic> {
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let saved_return_type = self.return_type.replace(ReturnType::Void);
+        let result = (|| {
+            self.bind_parameters(&constructor.parameters)?;
+            self.check_method_body(&constructor.body)
+        })();
+        self.scopes = saved_scopes;
+        self.loop_depth = saved_loop_depth;
+        self.return_type = saved_return_type;
+        result
+    }
+
+    fn check_property_accessors(
+        &mut self,
+        property: &crate::ast::PropertyDeclaration,
+    ) -> Result<(), Diagnostic> {
+        for accessor in &property.accessors {
+            let Some(body) = &accessor.body else {
+                continue;
+            };
+            let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+            let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+            let saved_return_type = self.return_type.replace(match accessor.kind {
+                AccessorKind::Get => ReturnType::Value(property.ty.clone()),
+                AccessorKind::Set => ReturnType::Void,
+            });
+            if accessor.kind == AccessorKind::Set {
+                self.current_scope_mut()
+                    .insert("value".to_owned(), property.ty.clone());
+            }
+            let result = self.check_method_body(body);
+            self.scopes = saved_scopes;
+            self.loop_depth = saved_loop_depth;
+            self.return_type = saved_return_type;
+            result?;
+            if accessor.kind == AccessorKind::Get && !statement_definitely_returns_or_throws(body) {
+                return Err(Diagnostic::new(
+                    format!(
+                        "getter `{}` must return a value on every path",
+                        property.name.spelling
+                    ),
+                    accessor.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_parameters(&mut self, parameters: &[crate::ast::Parameter]) -> Result<(), Diagnostic> {
+        for parameter in parameters {
+            self.validate_type(&parameter.ty, parameter.span)?;
+            if self.current_scope().contains_key(&parameter.name.canonical) {
+                return Err(Diagnostic::new(
+                    format!("duplicate parameter `{}`", parameter.name.spelling),
+                    parameter.name.span,
+                ));
+            }
+            self.current_scope_mut()
+                .insert(parameter.name.canonical.clone(), parameter.ty.clone());
         }
         Ok(())
     }
@@ -86,25 +906,20 @@ impl Checker {
     }
 
     fn check_method(&mut self, method: &MethodDeclaration) -> Result<(), Diagnostic> {
+        self.validate_return_type(&method.return_type, method.name.span)?;
+        let Some(body) = method.body.as_ref() else {
+            return Ok(());
+        };
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_return_type = self.return_type.replace(method.return_type.clone());
 
         let result = (|| {
-            for parameter in &method.parameters {
-                if self.current_scope().contains_key(&parameter.name.canonical) {
-                    return Err(Diagnostic::new(
-                        format!("duplicate parameter `{}`", parameter.name.spelling),
-                        parameter.name.span,
-                    ));
-                }
-                self.current_scope_mut()
-                    .insert(parameter.name.canonical.clone(), parameter.ty.clone());
-            }
+            self.bind_parameters(&method.parameters)?;
 
-            self.check_method_body(&method.body)?;
+            self.check_method_body(body)?;
             if matches!(method.return_type, ReturnType::Value(_))
-                && !statement_definitely_returns_or_throws(&method.body)
+                && !statement_definitely_returns_or_throws(body)
             {
                 return Err(Diagnostic::new(
                     format!(
@@ -121,6 +936,13 @@ impl Checker {
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
         result
+    }
+
+    fn validate_return_type(&self, ty: &ReturnType, span: Span) -> Result<(), Diagnostic> {
+        match ty {
+            ReturnType::Void => Ok(()),
+            ReturnType::Value(ty) => self.validate_type(ty, span),
+        }
     }
 
     fn check_method_body(&mut self, body: &Statement) -> Result<(), Diagnostic> {
@@ -142,6 +964,7 @@ impl Checker {
                 initializer,
                 ..
             } => {
+                self.validate_type(ty, name.span)?;
                 if self.current_scope().contains_key(&name.canonical) {
                     return Err(Diagnostic::new(
                         format!("duplicate variable `{}`", name.spelling),
@@ -149,7 +972,7 @@ impl Checker {
                     ));
                 }
                 let initializer_type = self.expression_type(initializer)?;
-                require_assignable(ty, &initializer_type, initializer.span())?;
+                self.require_assignable(ty, &initializer_type, initializer.span())?;
                 self.current_scope_mut()
                     .insert(name.canonical.clone(), ty.clone());
                 Ok(())
@@ -237,7 +1060,7 @@ impl Checker {
                         ));
                     }
                 };
-                require_assignable(
+                self.require_assignable(
                     element_type,
                     &ExpressionType::Value(actual_element_type),
                     iterable.span(),
@@ -353,7 +1176,7 @@ impl Checker {
             )),
             (Some(ReturnType::Value(expected)), Some(value)) => {
                 let actual = self.expression_type(value)?;
-                if is_assignable(&expected, &actual) {
+                if self.is_assignable(&expected, &actual) {
                     Ok(())
                 } else {
                     Err(Diagnostic::new(
@@ -370,20 +1193,25 @@ impl Checker {
     }
 
     fn expression_type(&mut self, expression: &Expression) -> Result<ExpressionType, Diagnostic> {
+        let ty = self.expression_type_inner(expression)?;
+        self.expression_types.insert(expression.span(), ty.clone());
+        Ok(ty)
+    }
+
+    fn expression_type_inner(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
         match expression {
             Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
             Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
             Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
             Expression::NullLiteral(..) => Ok(ExpressionType::Null),
-            Expression::Variable(identifier) => self
-                .lookup(&identifier.canonical)
-                .cloned()
-                .map(ExpressionType::Value)
-                .ok_or_else(|| unknown_variable(identifier)),
+            Expression::Variable(identifier) => self.variable_type(identifier),
             Expression::Assignment { target, value, .. } => {
                 let expected = self.assignment_target_type(target)?;
                 let actual = self.expression_type(value)?;
-                require_assignable(&expected, &actual, value.span())?;
+                self.require_assignable(&expected, &actual, value.span())?;
                 Ok(ExpressionType::Value(expected))
             }
             Expression::NewCollection {
@@ -394,6 +1222,11 @@ impl Checker {
                 arguments,
                 ..
             } => self.new_exception_type(exception_type, arguments),
+            Expression::NewObject {
+                ty,
+                arguments,
+                span,
+            } => self.new_object_type(ty, arguments, *span),
             Expression::Index {
                 collection, index, ..
             } => self
@@ -402,15 +1235,19 @@ impl Checker {
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
-                ..
-            } => self.function_call_type(name, arguments, resolved_method),
+                span,
+            } => self.function_call_type(name, arguments, *span),
             Expression::MethodCall {
                 receiver,
                 method,
                 arguments,
-                ..
-            } => self.method_call_type(receiver, method, arguments),
+                span,
+            } => self.method_call_type(receiver, method, arguments, *span),
+            Expression::MemberAccess {
+                receiver,
+                member,
+                span,
+            } => self.member_access_type(receiver, member, *span, false),
             Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
             Expression::Unary {
                 operator,
@@ -434,6 +1271,353 @@ impl Checker {
         }
     }
 
+    fn variable_type(&mut self, identifier: &Identifier) -> Result<ExpressionType, Diagnostic> {
+        if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
+            self.references
+                .insert(identifier.span, ReferenceTarget::Local);
+            return Ok(ExpressionType::Value(ty));
+        }
+        let Some(class_id) = self.current_class else {
+            return Err(unknown_variable(identifier));
+        };
+        if identifier.canonical == "this" {
+            if self.current_static {
+                return Err(Diagnostic::new(
+                    "`this` is unavailable in a static context",
+                    identifier.span,
+                ));
+            }
+            self.references
+                .insert(identifier.span, ReferenceTarget::This);
+            return Ok(ExpressionType::Value(self.class_type(class_id)));
+        }
+        if identifier.canonical == "super" {
+            if self.current_static {
+                return Err(Diagnostic::new(
+                    "`super` is unavailable in a static context",
+                    identifier.span,
+                ));
+            }
+            let parent = self
+                .parent_class_id(class_id)
+                .ok_or_else(|| Diagnostic::new("class has no superclass", identifier.span))?;
+            self.references
+                .insert(identifier.span, ReferenceTarget::Super(parent));
+            return Ok(ExpressionType::Value(self.class_type(parent)));
+        }
+        let Some(member) = self.class_value_member(class_id, &identifier.canonical) else {
+            return Err(unknown_variable(identifier));
+        };
+        self.ensure_member_access(member.target, &member.read_access, identifier.span)?;
+        if !member.readable {
+            return Err(Diagnostic::new(
+                format!("property `{}` is write-only", identifier.spelling),
+                identifier.span,
+            ));
+        }
+        let is_static = member.modifiers.contains(&Modifier::Static);
+        if self.current_static && !is_static {
+            return Err(Diagnostic::new(
+                format!(
+                    "instance member `{}` is unavailable in a static context",
+                    identifier.spelling
+                ),
+                identifier.span,
+            ));
+        }
+        self.references.insert(
+            identifier.span,
+            if is_static {
+                ReferenceTarget::StaticMember(member.target)
+            } else {
+                ReferenceTarget::InstanceMember(member.target)
+            },
+        );
+        Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn new_object_type(
+        &mut self,
+        ty: &TypeName,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        self.validate_type(ty, span)?;
+        let TypeName::Custom(name) = ty else {
+            return Err(Diagnostic::new(
+                "object construction requires a class type",
+                span,
+            ));
+        };
+        let class_id = self.class_ids[&name.canonical];
+        let class = &self.classes[class_id];
+        if class.kind == ClassKind::Interface || class.modifiers.contains(&Modifier::Abstract) {
+            return Err(Diagnostic::new(
+                format!("cannot construct abstract type `{}`", name.spelling),
+                span,
+            ));
+        }
+        let constructors = class
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(member_id, member)| {
+                let ClassMember::Constructor(constructor) = member else {
+                    return None;
+                };
+                Some((
+                    ClassMemberId {
+                        class_id,
+                        member_id,
+                    },
+                    constructor.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        if constructors.is_empty() {
+            for argument in arguments {
+                self.expression_type(argument)?;
+            }
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!(
+                        "default constructor for `{}` expects no arguments",
+                        name.spelling
+                    ),
+                    arguments[0].span(),
+                ));
+            }
+            self.calls.insert(
+                span,
+                CallTarget::Constructor {
+                    class_id,
+                    member_id: None,
+                },
+            );
+            return Ok(ExpressionType::Value(ty.clone()));
+        }
+        let argument_types = arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>()?;
+        let applicable = constructors
+            .iter()
+            .filter(|(_, constructor)| {
+                constructor.parameters.len() == argument_types.len()
+                    && constructor
+                        .parameters
+                        .iter()
+                        .zip(&argument_types)
+                        .all(|(parameter, actual)| self.is_assignable(&parameter.ty, actual))
+            })
+            .collect::<Vec<_>>();
+        let selected = self.select_constructor(&applicable).ok_or_else(|| {
+            Diagnostic::new(
+                if applicable.is_empty() {
+                    format!("no matching constructor for `{}`", name.spelling)
+                } else {
+                    format!("ambiguous constructor for `{}`", name.spelling)
+                },
+                span,
+            )
+        })?;
+        self.ensure_member_access(selected.0, &selected.1.modifiers, span)?;
+        self.calls.insert(
+            span,
+            CallTarget::Constructor {
+                class_id,
+                member_id: Some(selected.0.member_id),
+            },
+        );
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn select_constructor<'a>(
+        &self,
+        applicable: &[&'a (ClassMemberId, ConstructorDeclaration)],
+    ) -> Option<&'a (ClassMemberId, ConstructorDeclaration)> {
+        let most_specific = applicable
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                !applicable.iter().copied().any(|other| {
+                    other.0 != candidate.0
+                        && self.parameter_types_more_specific(
+                            &other
+                                .1
+                                .parameters
+                                .iter()
+                                .map(|parameter| parameter.ty.clone())
+                                .collect::<Vec<_>>(),
+                            &candidate
+                                .1
+                                .parameters
+                                .iter()
+                                .map(|parameter| parameter.ty.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                })
+            })
+            .collect::<Vec<_>>();
+        let [selected] = most_specific.as_slice() else {
+            return None;
+        };
+        Some(*selected)
+    }
+
+    fn member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let (class_id, static_access) = if let Expression::Variable(identifier) = receiver {
+            if let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
+                && (self
+                    .class_value_member(class_id, &name.canonical)
+                    .is_some_and(|member| member.modifiers.contains(&Modifier::Static))
+                    || (self.lookup(&identifier.canonical).is_none()
+                        && self
+                            .current_class
+                            .and_then(|id| self.class_value_member(id, &identifier.canonical))
+                            .is_none()))
+            {
+                (class_id, true)
+            } else {
+                let receiver_type = self.expression_type(receiver)?;
+                (
+                    self.class_id_from_expression(&receiver_type, receiver.span())?,
+                    false,
+                )
+            }
+        } else {
+            let receiver_type = self.expression_type(receiver)?;
+            (
+                self.class_id_from_expression(&receiver_type, receiver.span())?,
+                false,
+            )
+        };
+        let member = self
+            .class_value_member(class_id, &name.canonical)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown member `{}` on {}",
+                        name.spelling, self.classes[class_id].name.spelling
+                    ),
+                    name.span,
+                )
+            })?;
+        self.ensure_member_access(
+            member.target,
+            if for_write {
+                &member.write_access
+            } else {
+                &member.read_access
+            },
+            name.span,
+        )?;
+        let is_static = member.modifiers.contains(&Modifier::Static);
+        if static_access != is_static {
+            return Err(Diagnostic::new(
+                if static_access {
+                    format!("instance member `{}` requires an object", name.spelling)
+                } else {
+                    format!(
+                        "static member `{}` must be accessed through its class",
+                        name.spelling
+                    )
+                },
+                name.span,
+            ));
+        }
+        if for_write && !member.writable {
+            return Err(Diagnostic::new(
+                format!("member `{}` is read-only", name.spelling),
+                name.span,
+            ));
+        }
+        if !for_write && !member.readable {
+            return Err(Diagnostic::new(
+                format!("member `{}` is write-only", name.spelling),
+                name.span,
+            ));
+        }
+        self.members.insert(
+            span,
+            if is_static {
+                MemberTarget::Static(member.target)
+            } else {
+                MemberTarget::Instance(member.target)
+            },
+        );
+        Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn class_id_from_expression(
+        &self,
+        ty: &ExpressionType,
+        span: Span,
+    ) -> Result<usize, Diagnostic> {
+        let ExpressionType::Value(TypeName::Custom(name)) = ty else {
+            return Err(Diagnostic::new(
+                format!(
+                    "member access requires a class instance, found {}",
+                    ty.name()
+                ),
+                span,
+            ));
+        };
+        Ok(self.class_ids[&name.canonical])
+    }
+
+    fn class_type(&self, class_id: usize) -> TypeName {
+        let class = &self.classes[class_id];
+        TypeName::Custom(crate::ast::NamedType::new(
+            class.name.spelling.clone(),
+            class.name.span,
+        ))
+    }
+
+    fn ensure_member_access(
+        &self,
+        target: ClassMemberId,
+        modifiers: &[Modifier],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Some(accessing) = self.current_class else {
+            if access_rank(modifiers) >= access_rank(&[Modifier::Public]) {
+                return Ok(());
+            }
+            return Err(Diagnostic::new("member is not accessible", span));
+        };
+        if accessing == target.class_id
+            || access_rank(modifiers) >= access_rank(&[Modifier::Public])
+            || (modifiers.contains(&Modifier::Protected)
+                && self.class_is_or_inherits(accessing, target.class_id))
+        {
+            Ok(())
+        } else {
+            Err(Diagnostic::new("member is not accessible", span))
+        }
+    }
+
+    fn parameter_types_more_specific(&self, left: &[TypeName], right: &[TypeName]) -> bool {
+        let mut strict = false;
+        for (left, right) in left.iter().zip(right) {
+            if left == right {
+                continue;
+            }
+            if self.is_subtype(left, right) {
+                strict = true;
+            } else {
+                return false;
+            }
+        }
+        strict
+    }
+
     fn new_exception_type(
         &mut self,
         exception_type: &TypeName,
@@ -453,7 +1637,7 @@ impl Checker {
         }
         if let Some(message) = arguments.first() {
             let actual = self.expression_type(message)?;
-            require_assignable(&TypeName::String, &actual, message.span())?;
+            self.require_assignable(&TypeName::String, &actual, message.span())?;
         }
         Ok(ExpressionType::Value(exception_type.clone()))
     }
@@ -462,12 +1646,34 @@ impl Checker {
         &mut self,
         name: &Identifier,
         arguments: &[Expression],
-        resolved_method: &std::cell::Cell<Option<usize>>,
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let argument_types = arguments
             .iter()
             .map(|argument| self.expression_type(argument))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(class_id) = self.current_class {
+            let candidates = self.class_methods_named(class_id, &name.canonical);
+            if !candidates.is_empty() {
+                let kind = if self.current_static
+                    || candidates
+                        .iter()
+                        .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
+                {
+                    ClassCallKind::Static
+                } else {
+                    ClassCallKind::Instance
+                };
+                return self.select_class_method_call(
+                    class_id,
+                    name,
+                    &argument_types,
+                    candidates,
+                    kind,
+                    span,
+                );
+            }
+        }
         let Some(overloads) = self.methods.get(&name.canonical) else {
             return Err(Diagnostic::new(
                 format!("unknown method `{}`", name.spelling),
@@ -483,7 +1689,7 @@ impl Checker {
                     .parameter_types
                     .iter()
                     .zip(&argument_types)
-                    .all(|(expected, actual)| is_assignable(expected, actual))
+                    .all(|(expected, actual)| self.is_assignable(expected, actual))
             })
             .collect::<Vec<_>>();
 
@@ -519,7 +1725,7 @@ impl Checker {
             ));
         };
 
-        resolved_method.set(Some(best.id));
+        self.calls.insert(span, CallTarget::TopLevelMethod(best.id));
         Ok(match &best.return_type {
             ReturnType::Void => ExpressionType::Void,
             ReturnType::Value(ty) => ExpressionType::Value(ty.clone()),
@@ -540,6 +1746,8 @@ impl Checker {
                     || *target == TypeName::Object
                     || (*source == TypeName::Exception && target.is_exception())
                     || (*target == TypeName::Exception && source.is_exception())
+                    || self.is_subtype(source, target)
+                    || self.is_subtype(target, source)
             }
             ExpressionType::Void => false,
         };
@@ -574,7 +1782,7 @@ impl Checker {
                 };
                 for element in elements {
                     let actual = self.expression_type(element)?;
-                    require_assignable(element_type, &actual, element.span())?;
+                    self.require_assignable(element_type, &actual, element.span())?;
                 }
             }
             CollectionInitializer::MapEntries(entries) => {
@@ -586,9 +1794,9 @@ impl Checker {
                 };
                 for entry in entries {
                     let actual_key = self.expression_type(&entry.key)?;
-                    require_assignable(key_type, &actual_key, entry.key.span())?;
+                    self.require_assignable(key_type, &actual_key, entry.key.span())?;
                     let actual_value = self.expression_type(&entry.value)?;
-                    require_assignable(value_type, &actual_value, entry.value.span())?;
+                    self.require_assignable(value_type, &actual_value, entry.value.span())?;
                 }
             }
             CollectionInitializer::SizedArray(size) => {
@@ -636,13 +1844,56 @@ impl Checker {
         target: &AssignmentTarget,
     ) -> Result<TypeName, Diagnostic> {
         match target {
-            AssignmentTarget::Variable(identifier) => self
-                .lookup(&identifier.canonical)
-                .cloned()
-                .ok_or_else(|| unknown_variable(identifier)),
+            AssignmentTarget::Variable(identifier) => {
+                if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
+                    self.references
+                        .insert(identifier.span, ReferenceTarget::Local);
+                    return Ok(ty);
+                }
+                let class_id = self
+                    .current_class
+                    .ok_or_else(|| unknown_variable(identifier))?;
+                let member = self
+                    .class_value_member(class_id, &identifier.canonical)
+                    .ok_or_else(|| unknown_variable(identifier))?;
+                self.ensure_member_access(member.target, &member.write_access, identifier.span)?;
+                if !member.writable {
+                    return Err(Diagnostic::new(
+                        format!("member `{}` is read-only", identifier.spelling),
+                        identifier.span,
+                    ));
+                }
+                let is_static = member.modifiers.contains(&Modifier::Static);
+                if self.current_static && !is_static {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "instance member `{}` is unavailable in a static context",
+                            identifier.spelling
+                        ),
+                        identifier.span,
+                    ));
+                }
+                self.references.insert(
+                    identifier.span,
+                    if is_static {
+                        ReferenceTarget::StaticMember(member.target)
+                    } else {
+                        ReferenceTarget::InstanceMember(member.target)
+                    },
+                );
+                Ok(member.ty)
+            }
             AssignmentTarget::Index {
                 collection, index, ..
             } => self.index_type(collection, index),
+            AssignmentTarget::Member {
+                receiver,
+                member,
+                span,
+            } => match self.member_access_type(receiver, member, *span, true)? {
+                ExpressionType::Value(ty) => Ok(ty),
+                _ => unreachable!("member access always has a value type"),
+            },
         }
     }
 
@@ -667,22 +1918,88 @@ impl Checker {
         receiver: &Expression,
         method: &Identifier,
         arguments: &[Expression],
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let result = if let Expression::Variable(identifier) = receiver {
             if let Some(receiver_type) = self.lookup(&identifier.canonical).cloned() {
-                self.instance_method_type(&receiver_type, method, arguments)
+                let static_candidates =
+                    self.class_ids
+                        .get(&identifier.canonical)
+                        .copied()
+                        .map(|class_id| {
+                            (
+                                class_id,
+                                self.class_methods_named(class_id, &method.canonical)
+                                    .into_iter()
+                                    .filter(|candidate| {
+                                        candidate.modifiers.contains(&Modifier::Static)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        });
+                if let Some((class_id, candidates)) = static_candidates
+                    && !candidates.is_empty()
+                {
+                    let argument_types = arguments
+                        .iter()
+                        .map(|argument| self.expression_type(argument))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.select_class_method_call(
+                        class_id,
+                        method,
+                        &argument_types,
+                        candidates,
+                        ClassCallKind::Static,
+                        span,
+                    )
+                } else {
+                    self.references
+                        .insert(identifier.span, ReferenceTarget::Local);
+                    self.instance_method_type(&receiver_type, method, arguments, span, false)
+                }
+            } else if let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
+                && self
+                    .current_class
+                    .and_then(|id| self.class_value_member(id, &identifier.canonical))
+                    .is_none()
+            {
+                let argument_types = arguments
+                    .iter()
+                    .map(|argument| self.expression_type(argument))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let candidates = self.class_methods_named(class_id, &method.canonical);
+                self.select_class_method_call(
+                    class_id,
+                    method,
+                    &argument_types,
+                    candidates,
+                    ClassCallKind::Static,
+                    span,
+                )
             } else {
                 match identifier.canonical.as_str() {
                     "string" => self.static_string_method_type(method, arguments),
                     "math" => self.static_math_method_type(method, arguments),
                     "system" => self.static_system_method_type(method, arguments),
-                    _ => Err(unknown_variable(identifier)),
+                    _ => {
+                        let receiver_type = self.variable_type(identifier)?;
+                        let ExpressionType::Value(receiver_type) = receiver_type else {
+                            unreachable!("variables always have value types")
+                        };
+                        self.instance_method_type(
+                            &receiver_type,
+                            method,
+                            arguments,
+                            span,
+                            identifier.canonical == "super",
+                        )
+                    }
                 }
             }
         } else {
             match self.expression_type(receiver)? {
                 ExpressionType::Value(receiver_type) => {
-                    self.instance_method_type(&receiver_type, method, arguments)
+                    self.instance_method_type(&receiver_type, method, arguments, span, false)
                 }
                 other => Err(Diagnostic::new(
                     format!(
@@ -708,6 +2025,8 @@ impl Checker {
         receiver_type: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
+        span: Span,
+        super_call: bool,
     ) -> Result<ExpressionType, Diagnostic> {
         match receiver_type {
             TypeName::List(element) => {
@@ -723,8 +2042,98 @@ impl Checker {
             ty if ty.is_exception() => {
                 self.exception_instance_method_type(receiver_type, method, arguments)
             }
+            TypeName::Custom(name) => {
+                let class_id = self.class_ids[&name.canonical];
+                let argument_types = arguments
+                    .iter()
+                    .map(|argument| self.expression_type(argument))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let candidates = self.class_methods_named(class_id, &method.canonical);
+                self.select_class_method_call(
+                    class_id,
+                    method,
+                    &argument_types,
+                    candidates,
+                    if super_call {
+                        ClassCallKind::Super
+                    } else {
+                        ClassCallKind::Instance
+                    },
+                    span,
+                )
+            }
             _ => Err(unknown_method(receiver_type, method)),
         }
+    }
+
+    fn select_class_method_call(
+        &mut self,
+        receiver_class_id: usize,
+        method: &Identifier,
+        argument_types: &[ExpressionType],
+        candidates: Vec<ClassMethodSignature>,
+        kind: ClassCallKind,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let static_call = kind == ClassCallKind::Static;
+        let candidates = candidates
+            .into_iter()
+            .filter(|candidate| candidate.modifiers.contains(&Modifier::Static) == static_call)
+            .collect::<Vec<_>>();
+        let applicable = candidates
+            .iter()
+            .filter(|candidate| candidate.parameter_types.len() == argument_types.len())
+            .filter(|candidate| {
+                candidate
+                    .parameter_types
+                    .iter()
+                    .zip(argument_types)
+                    .all(|(expected, actual)| self.is_assignable(expected, actual))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if applicable.is_empty() {
+            return Err(Diagnostic::new(
+                format!(
+                    "no matching {}method `{}` on {}",
+                    if static_call { "static " } else { "" },
+                    method.spelling,
+                    self.classes[receiver_class_id].name.spelling
+                ),
+                method.span,
+            ));
+        }
+        let most_specific = applicable
+            .iter()
+            .filter(|candidate| {
+                !applicable.iter().any(|other| {
+                    other.target != candidate.target
+                        && self.parameter_types_more_specific(
+                            &other.parameter_types,
+                            &candidate.parameter_types,
+                        )
+                })
+            })
+            .collect::<Vec<_>>();
+        let [best] = most_specific.as_slice() else {
+            return Err(Diagnostic::new(
+                format!("ambiguous overload for method `{}`", method.spelling),
+                method.span,
+            ));
+        };
+        self.ensure_member_access(best.target, &best.modifiers, method.span)?;
+        self.calls.insert(
+            span,
+            match kind {
+                ClassCallKind::Static => CallTarget::StaticMethod(best.target),
+                ClassCallKind::Instance => CallTarget::InstanceMethod(best.target),
+                ClassCallKind::Super => CallTarget::SuperMethod(best.target),
+            },
+        );
+        Ok(match &best.return_type {
+            ReturnType::Void => ExpressionType::Void,
+            ReturnType::Value(ty) => ExpressionType::Value(ty.clone()),
+        })
     }
 
     fn exception_instance_method_type(
@@ -1372,7 +2781,7 @@ impl Checker {
         expected: &TypeName,
     ) -> Result<(), Diagnostic> {
         let actual = self.expression_type(argument)?;
-        if is_assignable(expected, &actual) {
+        if self.is_assignable(expected, &actual) {
             Ok(())
         } else {
             Err(argument_type_error(
@@ -1595,13 +3004,21 @@ impl Checker {
         operator_span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let actual = match operand {
-            Expression::Variable(identifier) => self
-                .lookup(&identifier.canonical)
-                .cloned()
-                .ok_or_else(|| unknown_variable(identifier))?,
+            Expression::Variable(identifier) => {
+                self.assignment_target_type(&AssignmentTarget::Variable(identifier.clone()))?
+            }
             Expression::Index {
                 collection, index, ..
             } => self.index_type(collection, index)?,
+            Expression::MemberAccess {
+                receiver,
+                member,
+                span,
+            } => self.assignment_target_type(&AssignmentTarget::Member {
+                receiver: receiver.clone(),
+                member: member.clone(),
+                span: *span,
+            })?,
             _ => {
                 return Err(Diagnostic::new(
                     "increment/decrement operand must be a variable",
@@ -1657,32 +3074,104 @@ impl Checker {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ExpressionType {
-    Value(TypeName),
-    Null,
-    Void,
+fn validate_modifier_set(
+    modifiers: &[Modifier],
+    span: Span,
+    subject: &str,
+) -> Result<(), Diagnostic> {
+    let mut seen = Vec::new();
+    for modifier in modifiers {
+        if seen.contains(modifier) {
+            return Err(Diagnostic::new(
+                format!("duplicate modifier on {subject}"),
+                span,
+            ));
+        }
+        seen.push(*modifier);
+    }
+    let access_count = [
+        Modifier::Private,
+        Modifier::Protected,
+        Modifier::Public,
+        Modifier::Global,
+    ]
+    .iter()
+    .filter(|modifier| modifiers.contains(modifier))
+    .count();
+    if access_count > 1 {
+        return Err(Diagnostic::new(
+            format!("conflicting access modifiers on {subject}"),
+            span,
+        ));
+    }
+    if modifiers.contains(&Modifier::Abstract) && modifiers.contains(&Modifier::Final) {
+        return Err(Diagnostic::new(
+            format!("{subject} cannot be both abstract and final"),
+            span,
+        ));
+    }
+    Ok(())
 }
 
-impl ExpressionType {
-    fn name(&self) -> String {
-        match self {
-            Self::Value(ty) => ty.apex_name(),
-            Self::Null => "null".to_owned(),
-            Self::Void => "void".to_owned(),
-        }
+fn reject_modifiers(
+    modifiers: &[Modifier],
+    rejected: &[Modifier],
+    span: Span,
+    subject: &str,
+) -> Result<(), Diagnostic> {
+    if let Some(modifier) = rejected
+        .iter()
+        .find(|modifier| modifiers.contains(modifier))
+    {
+        Err(Diagnostic::new(
+            format!(
+                "modifier `{}` is not valid on {subject}",
+                modifier_name(*modifier)
+            ),
+            span,
+        ))
+    } else {
+        Ok(())
     }
 }
 
-fn is_assignable(expected: &TypeName, actual: &ExpressionType) -> bool {
-    match actual {
-        ExpressionType::Value(actual) => {
-            actual == expected
-                || *expected == TypeName::Object
-                || (*expected == TypeName::Exception && actual.is_exception())
-        }
-        ExpressionType::Null => true,
-        ExpressionType::Void => false,
+fn modifier_name(modifier: Modifier) -> &'static str {
+    match modifier {
+        Modifier::Public => "public",
+        Modifier::Private => "private",
+        Modifier::Protected => "protected",
+        Modifier::Global => "global",
+        Modifier::Static => "static",
+        Modifier::Virtual => "virtual",
+        Modifier::Abstract => "abstract",
+        Modifier::Override => "override",
+        Modifier::Final => "final",
+        Modifier::WithSharing => "with sharing",
+        Modifier::WithoutSharing => "without sharing",
+        Modifier::InheritedSharing => "inherited sharing",
+    }
+}
+
+fn access_rank(modifiers: &[Modifier]) -> u8 {
+    if modifiers.contains(&Modifier::Global) {
+        3
+    } else if modifiers.contains(&Modifier::Public) {
+        2
+    } else if modifiers.contains(&Modifier::Protected) {
+        1
+    } else {
+        0
+    }
+}
+
+fn push_unique_signature(
+    signatures: &mut Vec<ClassMethodSignature>,
+    signature: ClassMethodSignature,
+) {
+    if !signatures.iter().any(|existing| {
+        existing.name == signature.name && existing.parameter_types == signature.parameter_types
+    }) {
+        signatures.push(signature);
     }
 }
 
@@ -1704,25 +3193,6 @@ fn method_more_specific(left: &MethodSignature, right: &MethodSignature) -> bool
 fn type_more_specific(left: &TypeName, right: &TypeName) -> bool {
     *right == TypeName::Object
         || (*right == TypeName::Exception && left.is_exception() && *left != TypeName::Exception)
-}
-
-fn require_assignable(
-    expected: &TypeName,
-    actual: &ExpressionType,
-    span: Span,
-) -> Result<(), Diagnostic> {
-    if is_assignable(expected, actual) {
-        Ok(())
-    } else {
-        Err(Diagnostic::new(
-            format!(
-                "cannot assign {} to {}",
-                actual.name(),
-                expected.apex_name()
-            ),
-            span,
-        ))
-    }
 }
 
 fn is_statement_expression(expression: &Expression) -> bool {
@@ -2031,7 +3501,7 @@ mod tests {
 
     fn check_source(source: &str) -> Result<(), Diagnostic> {
         let program = crate::parse(source)?;
-        check(&program)
+        check(&program).map(|_| ())
     }
 
     #[test]

@@ -3,9 +3,11 @@
 ## Status
 
 Primitive expressions, lexical scopes, control flow, mutable collections, and
-the fixed M3 built-in call surface are implemented. M4 adds single-file
-user-defined calls, recursion, exception unwinding, runtime casts, and source
-call stacks. Transactions and platform effects remain later work.
+the fixed M3 built-in call surface are implemented. M4 adds user-defined calls,
+recursion, exception unwinding, runtime casts, and source call stacks. M5 adds
+object/static storage, constructors, properties, inheritance, virtual dispatch,
+and cross-file class execution. Transactions and platform effects remain later
+work.
 
 ## Program execution
 
@@ -19,7 +21,9 @@ under the identifier's canonical case-insensitive key. Assignment replaces the
 stored value. Reads of unknown variables are compile-time errors and are also
 guarded defensively by the runtime. Primitive values copy by value. Collection
 values carry interpreter-owned identity, so ordinary assignment aliases the
-same mutable collection.
+same mutable collection. Class instances also carry interpreter-owned identity;
+static fields and properties belong to one interpreter run rather than
+process-global state.
 
 ## Debug output
 
@@ -44,9 +48,29 @@ are validated before execution.
 User-defined call arguments are also evaluated left to right exactly once.
 Each invocation replaces the caller's lexical scopes with an isolated parameter
 scope while sharing runtime collections and debug output. The statically
-selected method ID is executed directly, so runtime values do not repeat
-overload selection. Return values unwind blocks and loops to the caller;
-recursive calls use the same isolation rules.
+selected HIR target is executed directly, so runtime values do not repeat
+overload or member resolution. Return values unwind blocks and loops to the
+caller; recursive calls use the same isolation rules.
+
+## Classes and objects
+
+**Implemented for M5, simplified.** Construction evaluates arguments left to
+right, allocates object identity and inherited typed slots, initializes base
+state before derived state, and then executes the selected constructor.
+Instance methods receive the checked object; static methods have no instance
+receiver. Class static fields initialize once per interpreter run.
+
+Fields and automatic properties use checked typed slots. Custom getters and
+setters execute isolated accessor frames; a setter receives the implicit
+`value` parameter. Member access, assignment, and increment/decrement use HIR
+targets selected during checking. Null object receivers raise
+`NullPointerException`.
+
+Virtual calls start from the checked signature and select the most-derived
+concrete override on the runtime object's class. `super` calls bypass virtual
+dispatch and execute the checked base target. User-object equality is identity
+equality. Deterministic debug text uses a local `ClassName@id` shape and is not
+claimed to match Salesforce formatting.
 
 ## Collections
 

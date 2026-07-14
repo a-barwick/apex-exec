@@ -1,13 +1,14 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
-        Identifier, MapEntry, MethodDeclaration, Parameter, PostfixOperator, Program, ReturnType,
-        Statement, TypeName, UnaryOperator,
+        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassKind,
+        ClassMember, CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration,
+        Identifier, MapEntry, MethodDeclaration, Modifier, NamedType, Parameter, PostfixOperator,
+        Program, PropertyAccessor, PropertyDeclaration, ReturnType, Statement, TypeName,
+        UnaryOperator,
     },
     diagnostic::Diagnostic,
     token::{Token, TokenKind},
 };
-use std::cell::Cell;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -20,26 +21,213 @@ impl Parser {
     }
 
     pub fn parse_program(mut self) -> Result<Program, Diagnostic> {
+        let mut classes = Vec::new();
         let mut methods = Vec::new();
         let mut statements = Vec::new();
         while !self.check(&TokenKind::Eof) {
-            if self.is_method_declaration_start() {
+            if self.is_class_declaration_start() {
+                classes.push(self.parse_class_declaration()?);
+            } else if self.is_method_declaration_start() {
                 methods.push(self.parse_method_declaration()?);
             } else {
                 statements.push(self.parse_statement()?);
             }
         }
         Ok(Program {
+            classes,
             methods,
             statements,
+        })
+    }
+
+    fn parse_class_declaration(&mut self) -> Result<ClassDeclaration, Diagnostic> {
+        let modifiers = self.parse_modifiers()?;
+        let start = self.current().span;
+        let kind = if self.check(&TokenKind::Class) {
+            self.advance();
+            ClassKind::Class
+        } else {
+            self.expect_simple(TokenKind::Interface, "expected `class` or `interface`")?;
+            ClassKind::Interface
+        };
+        let name = self.expect_identifier("expected a type name")?;
+        let superclass = if self.check(&TokenKind::Extends) {
+            self.advance();
+            Some(self.parse_named_type()?)
+        } else {
+            None
+        };
+        let mut interfaces = Vec::new();
+        if self.check(&TokenKind::Implements) {
+            self.advance();
+            loop {
+                interfaces.push(self.parse_named_type()?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        self.expect_simple(TokenKind::LeftBrace, "expected `{` after type declaration")?;
+        let mut members = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
+            members.push(self.parse_class_member(&name)?);
+        }
+        let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after type body")?;
+        Ok(ClassDeclaration {
+            kind,
+            modifiers,
+            name,
+            superclass,
+            interfaces,
+            members,
+            span: start.merge(end.span),
+        })
+    }
+
+    fn parse_class_member(&mut self, class_name: &Identifier) -> Result<ClassMember, Diagnostic> {
+        let modifiers = self.parse_modifiers()?;
+        if matches!(&self.current().kind, TokenKind::Identifier(spelling)
+            if spelling.eq_ignore_ascii_case(&class_name.spelling))
+            && matches!(self.peek(1).kind, TokenKind::LeftParen)
+        {
+            let name = self.expect_identifier("expected constructor name")?;
+            let parameters = self.parse_parameters()?;
+            let body = self.parse_block()?;
+            let span = name.span.merge(body.span());
+            return Ok(ClassMember::Constructor(ConstructorDeclaration {
+                modifiers,
+                name,
+                parameters,
+                body,
+                span,
+            }));
+        }
+
+        let (return_type, start) = self.parse_return_type()?;
+        let name = self.expect_identifier("expected a member name")?;
+        if self.check(&TokenKind::LeftParen) {
+            let parameters = self.parse_parameters()?;
+            let (body, end) = if self.check(&TokenKind::Semicolon) {
+                (None, self.advance().span)
+            } else {
+                let body = self.parse_block()?;
+                let end = body.span();
+                (Some(body), end)
+            };
+            return Ok(ClassMember::Method(MethodDeclaration {
+                modifiers,
+                return_type,
+                name,
+                parameters,
+                body,
+                span: start.merge(end),
+            }));
+        }
+
+        let ReturnType::Value(ty) = return_type else {
+            return Err(Diagnostic::new(
+                "fields and properties cannot have type void",
+                start,
+            ));
+        };
+        if self.check(&TokenKind::LeftBrace) {
+            return self
+                .parse_property(modifiers, ty, name, start)
+                .map(ClassMember::Property);
+        }
+        let initializer = if self.check(&TokenKind::Equal) {
+            self.advance();
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after field")?;
+        Ok(ClassMember::Field(FieldDeclaration {
+            modifiers,
+            ty,
+            name,
+            initializer,
+            span: start.merge(end.span),
+        }))
+    }
+
+    fn parse_property(
+        &mut self,
+        modifiers: Vec<Modifier>,
+        ty: TypeName,
+        name: Identifier,
+        start: crate::span::Span,
+    ) -> Result<PropertyDeclaration, Diagnostic> {
+        self.expect_simple(TokenKind::LeftBrace, "expected `{` after property name")?;
+        let mut accessors = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
+            let accessor_modifier = if self.check(&TokenKind::Public)
+                || self.check(&TokenKind::Private)
+                || self.check(&TokenKind::Protected)
+                || self.check(&TokenKind::Global)
+            {
+                Some(self.parse_modifier()?)
+            } else {
+                None
+            };
+            let accessor_start = self.current().span;
+            let kind = if matches!(&self.current().kind, TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("get"))
+            {
+                self.advance();
+                AccessorKind::Get
+            } else if matches!(&self.current().kind, TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("set"))
+            {
+                self.advance();
+                AccessorKind::Set
+            } else {
+                return Err(Diagnostic::new(
+                    "expected `get` or `set` property accessor",
+                    self.current().span,
+                ));
+            };
+            let (body, end) = if self.check(&TokenKind::Semicolon) {
+                (None, self.advance().span)
+            } else {
+                let body = self.parse_block()?;
+                let end = body.span();
+                (Some(body), end)
+            };
+            accessors.push(PropertyAccessor {
+                kind,
+                modifier: accessor_modifier,
+                body,
+                span: accessor_start.merge(end),
+            });
+        }
+        let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after property")?;
+        Ok(PropertyDeclaration {
+            modifiers,
+            ty,
+            name,
+            accessors,
+            span: start.merge(end.span),
         })
     }
 
     fn parse_method_declaration(&mut self) -> Result<MethodDeclaration, Diagnostic> {
         let (return_type, start) = self.parse_return_type()?;
         let name = self.expect_identifier("expected a method name")?;
-        self.expect_simple(TokenKind::LeftParen, "expected `(` after method name")?;
+        let parameters = self.parse_parameters()?;
+        let body = self.parse_block()?;
+        let span = start.merge(body.span());
+        Ok(MethodDeclaration {
+            modifiers: Vec::new(),
+            return_type,
+            name,
+            parameters,
+            body: Some(body),
+            span,
+        })
+    }
 
+    fn parse_parameters(&mut self) -> Result<Vec<Parameter>, Diagnostic> {
+        self.expect_simple(TokenKind::LeftParen, "expected `(`")?;
         let mut parameters = Vec::new();
         if !self.check(&TokenKind::RightParen) {
             loop {
@@ -57,15 +245,7 @@ impl Parser {
             TokenKind::RightParen,
             "expected `)` after method parameters",
         )?;
-        let body = self.parse_block()?;
-        let span = start.merge(body.span());
-        Ok(MethodDeclaration {
-            return_type,
-            name,
-            parameters,
-            body,
-            span,
-        })
+        Ok(parameters)
     }
 
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
@@ -364,6 +544,15 @@ impl Parser {
                 index,
                 span,
             },
+            Expression::MemberAccess {
+                receiver,
+                member,
+                span,
+            } => AssignmentTarget::Member {
+                receiver,
+                member,
+                span,
+            },
             _ => return Err(Diagnostic::new("invalid assignment target", equals.span)),
         };
         let span = target.span().merge(value.span());
@@ -499,21 +688,24 @@ impl Parser {
                 }
                 TokenKind::Dot => {
                     self.advance();
-                    let method = self.expect_identifier("expected a method name after `.`")?;
-                    if !self.check(&TokenKind::LeftParen) {
-                        return Err(Diagnostic::new(
-                            "expected `(` after method name",
-                            self.current().span,
-                        ));
+                    let member = self.expect_identifier("expected a member name after `.`")?;
+                    if self.check(&TokenKind::LeftParen) {
+                        let (arguments, end) = self.parse_argument_list()?;
+                        let span = expression.span().merge(end);
+                        expression = Expression::MethodCall {
+                            receiver: Box::new(expression),
+                            method: member,
+                            arguments,
+                            span,
+                        };
+                    } else {
+                        let span = expression.span().merge(member.span);
+                        expression = Expression::MemberAccess {
+                            receiver: Box::new(expression),
+                            member,
+                            span,
+                        };
                     }
-                    let (arguments, end) = self.parse_argument_list()?;
-                    let span = expression.span().merge(end);
-                    expression = Expression::MethodCall {
-                        receiver: Box::new(expression),
-                        method,
-                        arguments,
-                        span,
-                    };
                 }
                 TokenKind::PlusPlus | TokenKind::MinusMinus => {
                     let operator = if self.check(&TokenKind::PlusPlus) {
@@ -551,7 +743,6 @@ impl Parser {
                     return Ok(Expression::FunctionCall {
                         name,
                         arguments,
-                        resolved_method: Cell::new(None),
                         span: token.span.merge(end),
                     });
                 }
@@ -596,6 +787,21 @@ impl Parser {
             let (arguments, end) = self.parse_argument_list()?;
             return Ok(Expression::NewException {
                 exception_type: ty,
+                arguments,
+                span: start.span.merge(end),
+            });
+        }
+
+        if matches!(ty, TypeName::Custom(_)) {
+            if !self.check(&TokenKind::LeftParen) {
+                return Err(Diagnostic::new(
+                    "expected `(` after class name",
+                    self.current().span,
+                ));
+            }
+            let (arguments, end) = self.parse_argument_list()?;
+            return Ok(Expression::NewObject {
+                ty,
                 arguments,
                 span: start.span.merge(end),
             });
@@ -756,11 +962,85 @@ impl Parser {
                 TypeName::from_apex_name(&identifier.canonical).expect("type presence was checked"),
                 identifier.span,
             )),
-            _ => Err(Diagnostic::new(
-                format!("unsupported type `{}`", identifier.spelling),
+            _ => Ok((
+                TypeName::Custom(NamedType::new(identifier.spelling, identifier.span)),
                 identifier.span,
             )),
         }
+    }
+
+    fn parse_named_type(&mut self) -> Result<NamedType, Diagnostic> {
+        let identifier = self.expect_identifier("expected a type name")?;
+        Ok(NamedType::new(identifier.spelling, identifier.span))
+    }
+
+    fn parse_modifiers(&mut self) -> Result<Vec<Modifier>, Diagnostic> {
+        let mut modifiers = Vec::new();
+        loop {
+            if self.is_simple_modifier() {
+                modifiers.push(self.parse_modifier()?);
+                continue;
+            }
+            let sharing = match &self.current().kind {
+                TokenKind::Identifier(spelling)
+                    if spelling.eq_ignore_ascii_case("with")
+                        && matches!(&self.peek(1).kind, TokenKind::Identifier(next) if next.eq_ignore_ascii_case("sharing")) =>
+                {
+                    Some(Modifier::WithSharing)
+                }
+                TokenKind::Identifier(spelling)
+                    if spelling.eq_ignore_ascii_case("without")
+                        && matches!(&self.peek(1).kind, TokenKind::Identifier(next) if next.eq_ignore_ascii_case("sharing")) =>
+                {
+                    Some(Modifier::WithoutSharing)
+                }
+                TokenKind::Identifier(spelling)
+                    if spelling.eq_ignore_ascii_case("inherited")
+                        && matches!(&self.peek(1).kind, TokenKind::Identifier(next) if next.eq_ignore_ascii_case("sharing")) =>
+                {
+                    Some(Modifier::InheritedSharing)
+                }
+                _ => None,
+            };
+            let Some(sharing) = sharing else {
+                break;
+            };
+            self.advance();
+            self.advance();
+            modifiers.push(sharing);
+        }
+        Ok(modifiers)
+    }
+
+    fn parse_modifier(&mut self) -> Result<Modifier, Diagnostic> {
+        let token = self.advance();
+        match token.kind {
+            TokenKind::Public => Ok(Modifier::Public),
+            TokenKind::Private => Ok(Modifier::Private),
+            TokenKind::Protected => Ok(Modifier::Protected),
+            TokenKind::Global => Ok(Modifier::Global),
+            TokenKind::Static => Ok(Modifier::Static),
+            TokenKind::Virtual => Ok(Modifier::Virtual),
+            TokenKind::Abstract => Ok(Modifier::Abstract),
+            TokenKind::Override => Ok(Modifier::Override),
+            TokenKind::Final => Ok(Modifier::Final),
+            _ => Err(Diagnostic::new("expected a modifier", token.span)),
+        }
+    }
+
+    fn is_simple_modifier(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Public
+                | TokenKind::Private
+                | TokenKind::Protected
+                | TokenKind::Global
+                | TokenKind::Static
+                | TokenKind::Virtual
+                | TokenKind::Abstract
+                | TokenKind::Override
+                | TokenKind::Final
+        )
     }
 
     fn is_declaration_start(&self) -> bool {
@@ -773,6 +1053,36 @@ impl Parser {
             matches!(self.token_at(end).kind, TokenKind::Identifier(_))
                 && matches!(self.token_at(end + 1).kind, TokenKind::LeftParen)
         })
+    }
+
+    fn is_class_declaration_start(&self) -> bool {
+        let mut cursor = self.cursor;
+        loop {
+            match self.token_at(cursor).kind {
+                TokenKind::Public
+                | TokenKind::Private
+                | TokenKind::Protected
+                | TokenKind::Global
+                | TokenKind::Static
+                | TokenKind::Virtual
+                | TokenKind::Abstract
+                | TokenKind::Override
+                | TokenKind::Final => cursor += 1,
+                TokenKind::Identifier(ref spelling)
+                    if ["with", "without", "inherited"]
+                        .iter()
+                        .any(|candidate| spelling.eq_ignore_ascii_case(candidate))
+                        && matches!(&self.token_at(cursor + 1).kind, TokenKind::Identifier(next) if next.eq_ignore_ascii_case("sharing")) =>
+                {
+                    cursor += 2;
+                }
+                _ => break,
+            }
+        }
+        matches!(
+            self.token_at(cursor).kind,
+            TokenKind::Class | TokenKind::Interface
+        )
     }
 
     fn is_cast_start(&self) -> bool {
@@ -833,7 +1143,7 @@ impl Parser {
                 }
                 end += 1;
             }
-            _ => return None,
+            _ => {}
         }
         while matches!(self.token_at(end).kind, TokenKind::LeftBracket)
             && matches!(self.token_at(end + 1).kind, TokenKind::RightBracket)
@@ -1241,10 +1551,10 @@ mod tests {
         assert_eq!(add.parameters[0].name.canonical, "left");
         assert!(matches!(
             add.body,
-            Statement::Block {
+            Some(Statement::Block {
                 ref statements,
                 ..
-            } if matches!(statements.as_slice(), [Statement::Return { value: Some(_), .. }])
+            }) if matches!(statements.as_slice(), [Statement::Return { value: Some(_), .. }])
         ));
 
         let report = &program.methods[1];
@@ -1263,11 +1573,9 @@ mod tests {
             Expression::FunctionCall {
                 name,
                 arguments,
-                resolved_method,
                 ..
             } if name.canonical == "add"
                 && arguments.len() == 2
-                && resolved_method.get().is_none()
         ));
     }
 

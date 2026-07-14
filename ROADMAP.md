@@ -113,7 +113,7 @@ failures with useful Apex source stacks.
 
 ## M5 — Classes and project compilation
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -129,12 +129,12 @@ failures with useful Apex source stacks.
 
 An ordinary multi-file Apex service layer compiles and can be invoked locally.
 
-Before this milestone grows substantially, introduce a typed intermediate
-representation as described in `docs/ARCHITECTURE.md`.
+The milestone introduces the typed HIR boundary described in
+`docs/ARCHITECTURE.md` before expanding class/member resolution.
 
 ## M6 — Apex test runner
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 
