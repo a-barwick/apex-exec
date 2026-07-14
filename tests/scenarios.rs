@@ -71,3 +71,16 @@ fn runs_batch_processing_through_every_stage_and_the_cli() {
         &["batches=3", "processed=9", "result=complete"],
     );
 }
+
+#[test]
+fn runs_collections_through_every_stage_and_the_cli() {
+    let expected = (0..100).map(|value| value.to_string()).collect::<String>();
+    assert_scenario(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/scenarios/collections.apex"
+        ),
+        include_str!("scenarios/collections.apex"),
+        &[expected.as_str()],
+    );
+}

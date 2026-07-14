@@ -63,7 +63,10 @@ impl<'a> Lexer<'a> {
         let ch = self.bump().expect("lexer called before EOF");
         let kind = match ch {
             '.' => TokenKind::Dot,
+            ',' => TokenKind::Comma,
+            ':' => TokenKind::Colon,
             '=' if self.take('=') => TokenKind::EqualEqual,
+            '=' if self.take('>') => TokenKind::FatArrow,
             '=' => TokenKind::Equal,
             '!' if self.take('=') => TokenKind::BangEqual,
             '!' => TokenKind::Bang,
@@ -84,6 +87,8 @@ impl<'a> Lexer<'a> {
             ')' => TokenKind::RightParen,
             '{' => TokenKind::LeftBrace,
             '}' => TokenKind::RightBrace,
+            '[' => TokenKind::LeftBracket,
+            ']' => TokenKind::RightBracket,
             ';' => TokenKind::Semicolon,
             '\'' => return self.string_token(start),
             ch if is_identifier_start(ch) => {
@@ -103,6 +108,7 @@ impl<'a> Lexer<'a> {
                     "break" => TokenKind::Break,
                     "continue" => TokenKind::Continue,
                     "return" => TokenKind::Return,
+                    "new" => TokenKind::New,
                     _ => TokenKind::Identifier(text.to_owned()),
                 }
             }
@@ -266,5 +272,23 @@ mod tests {
 
         assert_eq!(error.message, "unterminated block comment");
         assert_eq!(&source[error.span.start..error.span.end], "/* never closed");
+    }
+
+    #[test]
+    fn tokenizes_collection_syntax_and_new_case_insensitively() {
+        let source = "NeW Map<String, Integer>{'one' => values[0]}; for (String item : items) {}";
+        let kinds: Vec<TokenKind> = Lexer::new(source)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect();
+
+        assert!(matches!(kinds[0], TokenKind::New));
+        assert!(kinds.contains(&TokenKind::Comma));
+        assert!(kinds.contains(&TokenKind::FatArrow));
+        assert!(kinds.contains(&TokenKind::LeftBracket));
+        assert!(kinds.contains(&TokenKind::RightBracket));
+        assert!(kinds.contains(&TokenKind::Colon));
     }
 }
