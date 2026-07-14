@@ -66,8 +66,44 @@ fn class_names_members_and_overrides_are_case_insensitive() {
         }
         PARENT value = new CHILD();
         System.debug(value.NAME());
+        Child child = (Child) value;
+        System.debug(child.name());
+        Parent plain = new Parent();
+        try {
+            Child invalid = (Child) plain;
+        } catch (TypeException error) {
+            System.debug(error.getTypeName());
+        }
     ";
-    assert_eq!(execute(source).unwrap(), ["child"]);
+    assert_eq!(
+        execute(source).unwrap(),
+        ["child", "child", "TypeException"]
+    );
+}
+
+#[test]
+fn executes_overloaded_constructors_and_custom_property_accessors() {
+    let source = "
+        public class BoxedInteger {
+            private Integer stored;
+
+            public Integer Value {
+                get { return stored; }
+                set { stored = value; }
+            }
+
+            public BoxedInteger() { Value = 1; }
+            public BoxedInteger(Integer start) { Value = start; }
+        }
+
+        BoxedInteger first = new BoxedInteger();
+        BoxedInteger second = new BoxedInteger(4);
+        System.debug(first.Value);
+        System.debug(second.Value++);
+        System.debug(second.Value);
+    ";
+
+    assert_eq!(execute(source).unwrap(), ["1", "4", "5"]);
 }
 
 #[test]
@@ -103,12 +139,27 @@ fn enforces_access_static_and_abstract_contracts() {
         check(missing_interface).unwrap_err().message,
         "non-abstract class `Worker` must implement method `run`"
     );
+
+    let abstract_construction = "
+        public abstract class Job { public abstract void run(); }
+        Job job = new Job();
+    ";
+    assert_eq!(
+        check(abstract_construction).unwrap_err().message,
+        "cannot construct abstract type `Job`"
+    );
+
+    let sharing = "public with sharing class SharedService {}";
+    assert_eq!(
+        check(sharing).unwrap_err().message,
+        "sharing modifiers are parsed but not supported by the active compatibility profile"
+    );
 }
 
 #[test]
 fn rejects_invalid_override_and_inheritance_cycles() {
     let non_virtual = "
-        public class Parent { public String name() { return 'p'; } }
+        public virtual class Parent { public String name() { return 'p'; } }
         public class Child extends Parent {
             public override String name() { return 'c'; }
         }
@@ -118,9 +169,18 @@ fn rejects_invalid_override_and_inheritance_cycles() {
         "method `name` overrides a non-virtual method"
     );
 
+    let sealed_parent = "
+        public class Parent {}
+        public class Child extends Parent {}
+    ";
+    assert_eq!(
+        check(sealed_parent).unwrap_err().message,
+        "cannot extend non-virtual class `Parent`"
+    );
+
     let cycle = "
-        public class Left extends Right {}
-        public class Right extends Left {}
+        public virtual class Left extends Right {}
+        public virtual class Right extends Left {}
     ";
     assert_eq!(
         check(cycle).unwrap_err().message,

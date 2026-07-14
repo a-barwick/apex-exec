@@ -9,13 +9,13 @@ Apex source
   Lexer ──► tokens with byte spans
     │
     ▼
-  Parser ─► untyped AST
+  Parser ─► immutable untyped AST
     │
     ▼
-Semantic checker ─► validated AST
+Semantic checker ─► checked HIR (syntax plus typed resolution side tables)
     │
     ▼
-Tree-walking interpreter ─► values and debug output
+Tree-walking interpreter ─► values, objects, and debug output
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -24,12 +24,21 @@ The public library entry points in `src/lib.rs` deliberately expose each phase:
 - `parse`
 - `check`
 - `execute`
+- `project::discover`
+- `project::compile` / `ProjectCompiler::compile`
 
-M4 keeps the tree-walking pipeline but adds one checked annotation: semantic
-analysis collects every single-file method signature before checking bodies and
-writes the selected method ID into each bare call node. The runtime executes
-that ID directly. This prevents dynamic values from repeating or changing
-overload resolution while a typed HIR is still pending.
+M5 keeps parsed syntax immutable and introduces a checked HIR program. Semantic
+analysis records expression types and selected top-level, constructor, static,
+instance, super, field, and property targets in side tables keyed by source
+span. The runtime executes those targets directly. Dynamic values never repeat
+or change compiler overload/member resolution.
+
+Project compilation discovers SFDX package directories, caches parsed source
+units, rebases their spans into a project coordinate space, builds class
+dependency edges, and checks one merged cross-file program. An unchanged input
+set reuses the complete checked program; after a change, unchanged parsed units
+are retained and reverse dependents are identified before project-wide semantic
+linking.
 
 The CLI is a thin adapter over those functions.
 
@@ -41,9 +50,11 @@ The CLI is a thin adapter over those functions.
 | `token` | Token kinds and lexical spelling |
 | `lexer` | Source-to-token conversion and lexical errors |
 | `ast` | Parsed program representation |
+| `hir` | Checked expression types and resolved execution targets |
 | `parser` | Grammar and syntax diagnostics |
 | `semantic` | Name lookup and primitive type validation |
 | `runtime` | AST execution, environments, and values |
+| `project` | SFDX discovery, source-unit caching, dependency graphs, and source mapping |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 
@@ -81,12 +92,19 @@ behavior.
 
 ### Calls and scopes
 
-The parsed `Program` stores interim top-level method declarations separately
-from executable statements. Signature collection is a first semantic pass, so
-forward calls and recursion work without source-order dependence. Runtime
-invocations replace the caller's lexical-scope stack with a new parameter scope
-and restore it on every completion path. Collections and output remain
-interpreter-owned shared runtime state.
+The parsed `Program` stores classes, backwards-compatible top-level method
+declarations, and executable anonymous statements separately. Signature and
+class collection are early semantic passes, so cross-file lookup, forward
+calls, and recursion work without source-order dependence. Runtime invocations
+replace the caller's lexical-scope stack with a new parameter scope and restore
+it on every completion path. Collections, class/static state, object arenas,
+and output remain interpreter-owned shared runtime state.
+
+Class member targets pair a class index with a member index. Instance calls may
+perform virtual dispatch only within the checked signature selected by the HIR;
+`super` calls execute their checked base target directly. Fields and automatic
+properties use typed slots keyed by the same target. Static slots live on the
+interpreter, while instance slots live on arena-backed object identities.
 
 Returns, loop control, and exceptions use the same statement-flow boundary.
 This lets `finally` observe and, when it completes abruptly, replace every kind
@@ -114,10 +132,9 @@ The typed representation should make conversions, selected overloads, member
 resolution, loop targets, and runtime operations explicit. Execution should not
 repeat compiler reasoning.
 
-The M4 call-ID cell is intentionally transitional. M5 should introduce the
-typed representation before class/member resolution expands and move selected
-calls and conversions there rather than adding more semantic annotations to the
-parsed AST.
+The first typed representation is now implemented as immutable syntax plus HIR
+side tables. A lowered executable IR remains a future evolution; it can replace
+this layout without moving semantic state back into parsed nodes.
 
 ## Target runtime boundaries
 

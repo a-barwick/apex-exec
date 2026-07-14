@@ -48,14 +48,16 @@ conformance harness is a later milestone.
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive M3 collection, String, Math, and System surface |
-| User-defined methods | Yes | Yes | Yes | Simplified | Interim top-level single-file declarations, typed parameters/returns, forward calls, overloads, and recursion |
-| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, minimal Object up/downcasts, and concrete-exception/root casts; invalid runtime casts throw `TypeException` |
+| User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
+| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts; invalid runtime casts throw `TypeException` |
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames when caught or unhandled |
-| Classes/interfaces | No | No | No | Planned | M5 |
-| Inheritance/access modifiers | No | No | No | Planned | M5 |
-| Properties/annotations | No | No | No | Planned | M5–M6 |
+| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
+| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
+| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
+| Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
+| Annotations | No | No | No | Planned | M6 begins with `@isTest` and test annotations |
 
 ## M3 built-in method surface
 
@@ -105,12 +107,13 @@ more specific than the corresponding parameter on the others, with at least
 one strict improvement. The supported subtype relationships are concrete core
 exceptions to `Exception` and every value type to `Object`. Crossing or
 unrelated candidates remain ambiguous, including for `null`. The selected
-method ID is recorded during checking rather than rediscovered from runtime
-values.
+call target is recorded during checking rather than rediscovered from runtime
+values. M5 moves that target and every checked expression type out of parsed
+syntax into typed HIR side tables.
 
-Until M5 class compilation lands, declarations use an interim top-level
-single-file form. Each invocation has an isolated local scope and cannot read
-the caller's locals. Non-`void` methods must return or throw on every statically
+Backwards-compatible top-level declarations remain available to anonymous
+scripts. Each invocation has an isolated local scope and cannot read the
+caller's locals. Non-`void` methods must return or throw on every statically
 reachable path. `finally` executes during normal completion, return, loop
 control, and exception unwinding; an abrupt completion in `finally` replaces
 the pending result.
@@ -124,18 +127,52 @@ one-String-argument construction and `getMessage()`, `getTypeName()`, and
 hierarchy, and Salesforce-exact message and stack formatting are not yet
 claimed.
 
-`Object` exists only to make useful checked widening, overload selection, and
-runtime downcasts possible in M4. It does not claim the broader platform type
-surface planned for M10. Casts are limited to identical types, `Object`
-up/downcasts, and casts between a concrete core exception and the `Exception`
-root. Unsupported unrelated casts are compile errors, while a permitted
-downcast with the wrong runtime value throws `TypeException`.
+`Object` remains a narrow checked widening, overload, and runtime-cast carrier;
+it does not claim the broader platform surface planned for M10. Casts include
+identical types, `Object` up/downcasts, the core exception root, and related
+user classes/interfaces. Unsupported unrelated casts are compile errors, while
+a permitted downcast with the wrong runtime value throws `TypeException`.
+
+## M5 classes and project compilation
+
+Top-level class and interface names are case-insensitive and participate in
+cross-file resolution. Supported class members are constructors, fields,
+properties, and methods. Fields receive typed null before explicit
+initialization; static state belongs to the interpreter and instance state uses
+object identity. Auto properties use interpreter-owned backing storage, while
+custom accessors execute checked bodies. `this`, `super`, static access, and
+bare member access resolve at compile time.
+
+Classes may extend one virtual/abstract class and implement interfaces.
+Abstract, virtual, and override declarations are validated, interface
+obligations are enforced, and instance calls use virtual dispatch. User types
+participate in assignment, overload ranking, and related up/downcasts. Access
+checks cover public, private, protected, and global members, including
+accessor-specific property visibility. Nested types, enums, explicit
+superclass-constructor calls, custom exception classes, and the full Apex
+conversion system remain unsupported.
+Sharing modifiers parse so class declarations remain structurally inspectable,
+but semantic checking rejects them because sharing/security behavior is
+deferred rather than silently ignored.
+
+SFDX project compilation finds `sfdx-project.json`, loads package-directory
+paths, recursively discovers `.cls` units, and requires one top-level type whose
+name matches each filename. Compilation produces cross-file dependency edges
+and a merged checked HIR with file-aware diagnostics. A persistent compiler
+reuses unchanged parsed units, calculates reverse-dependent invalidation, and
+reuses the complete checked build when all inputs are unchanged; semantic
+linking currently reruns across the project after any source change.
+
+The CLI accepts `check <project-or-package-directory>` and an `invoke` form with
+`<project> <Class.method>`. Invocation is deliberately limited to a
+public/global static zero-argument method and prints a non-void return after any
+`System.debug` output.
 
 ## Platform surface
 
 | Feature | Status | Target milestone |
 |---|---|---|
-| SFDX project loading | Planned | M5 |
+| SFDX project loading | Implemented (simplified) | M5 |
 | Apex unit tests | Planned | M6 |
 | SObject schema | Planned | M7 |
 | SQLite storage | Planned | M7 |
@@ -158,6 +195,9 @@ downcast with the wrong runtime value throws `TypeException`.
   invalid built-in or user-defined calls fail semantic checking.
 - Duplicate method signatures, ambiguous/no-match overloads, invalid return
   paths, invalid catches, and unsupported casts fail semantic checking.
+- Duplicate/unknown classes, inheritance cycles, inaccessible members, invalid
+  static/instance access, bad overrides, and missing abstract/interface
+  implementations fail semantic checking.
 - Supported runtime language faults are typed, catchable exceptions. Internal
   checked-state violations remain distinct diagnostics.
 - Unsupported built-in methods are rejected explicitly rather than silently
@@ -168,10 +208,10 @@ downcast with the wrong runtime value throws `TypeException`.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M4 completion those indicators pass 1 of 14 goals (7.14%): 1 of 7 lexer
-goals and 0 of 7 parser goals. The remaining first blockers are annotations,
-ternary and compound-bitwise syntax, and M5 class declarations rather than the
-M4 executable surface.
+At M5 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
+ordinary members until unsupported `instanceof`; the remaining first blockers
+also include annotations, ternary syntax, and compound-bitwise operators.
 
 ## Updating this document
 

@@ -1,10 +1,10 @@
 # Current Status
 
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-14
 
 ## Active milestone
 
-M5 — Classes and project compilation
+M6 — Apex test runner
 
 ## Completed
 
@@ -51,30 +51,50 @@ M5 — Classes and project compilation
 - The unchanged M3 acceptance program executes from both the library and CLI
 - The M4 methods-and-exceptions core sample executes from both the library and
   CLI
+- Typed HIR side tables own checked expression types and selected call/member
+  targets; parsed syntax no longer carries semantic mutation
+- Class and interface declarations with case-insensitive user-defined types
+- Constructors, default field initialization, instance/static fields, and
+  automatic or custom properties
+- Instance/static methods, member overload selection, `this`, `super`, and
+  runtime virtual dispatch
+- Public, private, protected, and global member access checks, including
+  accessor-specific visibility
+- Class inheritance, abstract/virtual methods, overrides, interfaces, subtype
+  assignment, and contract validation
+- Object identity, inherited storage, class casts, and source-mapped class call
+  execution
+- SFDX `packageDirectories` discovery, recursive `.cls` loading, filename/type
+  validation, and cross-file semantic resolution
+- Cross-file dependency graphs, cached parsed units, dependent invalidation,
+  and complete-build reuse when project inputs are unchanged
+- Project-aware `check` and public static zero-argument `invoke` CLI workflows
+- A three-file SFDX service-layer example that compiles and runs locally
 - A pinned seven-file, 14,740-line open-source Apex North Star corpus with
   executable lexer/parser milestone indicators
 
 ## Immediate target
 
-Implement M5 classes and project compilation while preserving the checked call
-and runtime-exception boundaries established in M4.
+Implement M6 Apex test discovery and execution on the checked class/project
+runtime established in M5.
 
 Recommended implementation order:
 
-1. Introduce the typed intermediate representation described in
-   `docs/ARCHITECTURE.md` and move resolved call targets out of the parsed AST.
-2. Add SFDX project discovery and `.cls` compilation-unit loading.
-3. Implement classes, constructors, fields, properties, and static/instance
-   member resolution.
-4. Add interfaces, inheritance, abstract/virtual methods, and overrides.
-5. Build cross-file dependency graphs and incremental project compilation.
+1. Parse `@isTest` and test-related annotations without weakening unsupported
+   annotation diagnostics.
+2. Discover test classes, test methods, and setup methods in compiled projects.
+3. Add deterministic assertions, expected failures, filtering, and per-test
+   runtime isolation.
+4. Produce useful console and JUnit results with line/branch coverage.
+5. Add safe parallel execution after isolation is executable and measured.
 
 ## North Star indicators
 
-At M4 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M5 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
-`JSONParse.cls` lexes and stops at its M5 class declaration. The other first
-blockers are annotations, ternary syntax, and compound bitwise operators. These
+`JSONParse.cls` now parses through its class and ordinary members before
+stopping at unsupported `instanceof` syntax. The other first blockers are
+annotations, ternary syntax, and compound bitwise operators. These
 are syntax-progress indicators, not semantic, execution, or Salesforce
 compatibility percentages.
 
@@ -94,20 +114,29 @@ compatibility percentages.
 - String length, index, and substring operations use UTF-16 code-unit offsets
   for ordinary Unicode scalar strings. A substring boundary that would split a
   surrogate pair is rejected because Rust strings cannot represent the result.
-- Top-level method declarations are an interim single-file M4 compilation
-  model. Ordinary class-contained Apex methods and cross-file lookup arrive in
-  M5.
-- Overload resolution supports exact matches plus the documented `Exception`
-  and minimal `Object` widening relationships. General Apex conversions and
-  inheritance-aware overload ranking remain future work.
+- Top-level method declarations remain as a backwards-compatible anonymous
+  script surface. Ordinary project code uses class-contained methods.
+- Overload resolution supports exact matches, `Exception` and `Object`
+  widening, and checked user-class/interface subtyping. Numeric and broader
+  platform conversions remain future work.
 - `Object` is currently a typed assignment and cast carrier, not the full Apex
   `Object` API planned for the curated platform milestone.
 - The core exception subset supports construction, catching, rethrowing,
   messages, type names, and deterministic stack text. Custom exception classes,
-  causes, and Salesforce-exact stack formatting require later class/project and
+  causes, and Salesforce-exact stack formatting require later compatibility and
   differential work.
-- Only the documented built-in method subset and single-file user-defined
-  methods are callable. Classes, SOQL, SOSL, DML, and SObjects are not
+- SFDX discovery reads package-directory paths but does not yet interpret the
+  full Salesforce DX configuration or metadata surface. Each `.cls` file must
+  contain exactly one matching top-level class or interface.
+- Parsed source units and unchanged complete builds are cached. A changed unit
+  computes dependency invalidation and reuses unchanged parsed ASTs, while the
+  cross-file semantic link currently reruns project-wide.
+- Nested types, enums, annotations, explicit superclass-constructor calls,
+  custom exception classes, and Salesforce-exact object string formatting are
+  not implemented.
+- Sharing modifiers are parsed for structural progress but rejected during
+  checking because sharing/security semantics remain deferred.
+- SOQL, SOSL, DML, SObjects, and Apex test annotations/running are not
   implemented.
 
 ## Handoff checklist

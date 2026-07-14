@@ -127,6 +127,28 @@ impl Checker {
     fn validate_class_hierarchy(&self) -> Result<(), Diagnostic> {
         for (class_id, class) in self.classes.iter().enumerate() {
             validate_modifier_set(&class.modifiers, class.name.span, "type")?;
+            reject_modifiers(
+                &class.modifiers,
+                &[
+                    Modifier::Private,
+                    Modifier::Protected,
+                    Modifier::Static,
+                    Modifier::Override,
+                ],
+                class.name.span,
+                "top-level type",
+            )?;
+            if class.modifiers.iter().any(|modifier| {
+                matches!(
+                    modifier,
+                    Modifier::WithSharing | Modifier::WithoutSharing | Modifier::InheritedSharing
+                )
+            }) {
+                return Err(Diagnostic::new(
+                    "sharing modifiers are parsed but not supported by the active compatibility profile",
+                    class.name.span,
+                ));
+            }
             if let Some(superclass) = &class.superclass {
                 let parent_id = self
                     .class_ids
@@ -154,6 +176,15 @@ impl Checker {
                 if parent.modifiers.contains(&Modifier::Final) {
                     return Err(Diagnostic::new(
                         format!("cannot extend final class `{}`", superclass.spelling),
+                        superclass.span,
+                    ));
+                }
+                if class.kind == ClassKind::Class
+                    && !(parent.modifiers.contains(&Modifier::Virtual)
+                        || parent.modifiers.contains(&Modifier::Abstract))
+                {
+                    return Err(Diagnostic::new(
+                        format!("cannot extend non-virtual class `{}`", superclass.spelling),
                         superclass.span,
                     ));
                 }
@@ -245,6 +276,12 @@ impl Checker {
             match member {
                 ClassMember::Field(field) => {
                     validate_modifier_set(&field.modifiers, field.name.span, "field")?;
+                    reject_modifiers(
+                        &field.modifiers,
+                        &[Modifier::Virtual, Modifier::Abstract, Modifier::Override],
+                        field.name.span,
+                        "field",
+                    )?;
                     if values
                         .insert(field.name.canonical.clone(), field.name.span)
                         .is_some()
@@ -257,6 +294,17 @@ impl Checker {
                 }
                 ClassMember::Property(property) => {
                     validate_modifier_set(&property.modifiers, property.name.span, "property")?;
+                    reject_modifiers(
+                        &property.modifiers,
+                        &[
+                            Modifier::Virtual,
+                            Modifier::Abstract,
+                            Modifier::Override,
+                            Modifier::Final,
+                        ],
+                        property.name.span,
+                        "property",
+                    )?;
                     if values
                         .insert(property.name.canonical.clone(), property.name.span)
                         .is_some()
@@ -302,6 +350,18 @@ impl Checker {
                         constructor.name.span,
                         "constructor",
                     )?;
+                    reject_modifiers(
+                        &constructor.modifiers,
+                        &[
+                            Modifier::Static,
+                            Modifier::Virtual,
+                            Modifier::Abstract,
+                            Modifier::Override,
+                            Modifier::Final,
+                        ],
+                        constructor.name.span,
+                        "constructor",
+                    )?;
                     let signature = constructor
                         .parameters
                         .iter()
@@ -325,6 +385,22 @@ impl Checker {
                 }
                 ClassMember::Method(method) => {
                     validate_modifier_set(&method.modifiers, method.name.span, "method")?;
+                    if method.modifiers.contains(&Modifier::Static) {
+                        reject_modifiers(
+                            &method.modifiers,
+                            &[Modifier::Virtual, Modifier::Abstract, Modifier::Override],
+                            method.name.span,
+                            "static method",
+                        )?;
+                    }
+                    if method.modifiers.contains(&Modifier::Final) {
+                        reject_modifiers(
+                            &method.modifiers,
+                            &[Modifier::Virtual, Modifier::Abstract],
+                            method.name.span,
+                            "final method",
+                        )?;
+                    }
                     let signature = (
                         method.name.canonical.clone(),
                         method
@@ -3035,6 +3111,45 @@ fn validate_modifier_set(
         ));
     }
     Ok(())
+}
+
+fn reject_modifiers(
+    modifiers: &[Modifier],
+    rejected: &[Modifier],
+    span: Span,
+    subject: &str,
+) -> Result<(), Diagnostic> {
+    if let Some(modifier) = rejected
+        .iter()
+        .find(|modifier| modifiers.contains(modifier))
+    {
+        Err(Diagnostic::new(
+            format!(
+                "modifier `{}` is not valid on {subject}",
+                modifier_name(*modifier)
+            ),
+            span,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn modifier_name(modifier: Modifier) -> &'static str {
+    match modifier {
+        Modifier::Public => "public",
+        Modifier::Private => "private",
+        Modifier::Protected => "protected",
+        Modifier::Global => "global",
+        Modifier::Static => "static",
+        Modifier::Virtual => "virtual",
+        Modifier::Abstract => "abstract",
+        Modifier::Override => "override",
+        Modifier::Final => "final",
+        Modifier::WithSharing => "with sharing",
+        Modifier::WithoutSharing => "without sharing",
+        Modifier::InheritedSharing => "inherited sharing",
+    }
 }
 
 fn access_rank(modifiers: &[Modifier]) -> u8 {

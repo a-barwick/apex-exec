@@ -3,6 +3,9 @@
 **Status:** Accepted
 **Date:** 2026-07-13
 
+The M4 abrupt-flow decision remains active. The transitional parsed-AST call
+cell was superseded by the typed HIR side tables in ADR 0006.
+
 ## Context
 
 M4 adds overloaded user-defined methods, recursion, exceptions, and `finally`

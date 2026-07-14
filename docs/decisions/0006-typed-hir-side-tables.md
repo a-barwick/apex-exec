@@ -19,10 +19,10 @@ checked expression type and selected call target. The runtime accepts only this
 checked program and reads the selected targets directly. The parsed AST no
 longer contains semantic cells.
 
-Class and project compilation will extend the checked representation with
-member, constructor, and dispatch targets. Parsing caches retain only syntax;
-checked HIR is rebuilt for a source unit when it or one of its dependencies
-changes.
+Class and project compilation extends the checked representation with member,
+constructor, and dispatch targets. Parsing caches retain only syntax; the
+project checked HIR is rebuilt when an input changes, while unchanged complete
+input sets reuse the prior checked program.
 
 ## Consequences
 
