@@ -25,6 +25,8 @@ M3 — Collections and core standard library
 - Sixteen focused compiler/runtime unit tests
 - Thirty integration and full-scenario tests, including disk-backed Apex run
   through every compiler stage and the CLI
+- A pinned seven-file, 14,740-line open-source Apex North Star corpus with
+  executable lexer/parser milestone indicators
 
 ## Immediate target
 
