@@ -1,7 +1,8 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier,
-        PostfixOperator, Program, Statement, TypeName, UnaryOperator,
+        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
+        Identifier, MethodDeclaration, PostfixOperator, Program, ReturnType, Statement, TypeName,
+        UnaryOperator,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -11,12 +12,13 @@ use std::{cmp::Ordering, collections::HashMap};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CollectionId(usize);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Value {
     String(String),
     Boolean(bool),
     Integer(i64),
     Collection(CollectionId),
+    Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
 }
@@ -58,6 +60,12 @@ struct EvaluatedArgument {
     span: Span,
 }
 
+#[derive(Clone, Debug)]
+struct ActiveCall {
+    method: String,
+    call_span: Span,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticReceiver {
     String,
@@ -71,18 +79,20 @@ enum CallReceiver {
     Value(Value),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Flow {
     Normal,
     Break,
     Continue,
-    Return,
+    Return(Option<Value>),
 }
 
 pub struct Interpreter {
     scopes: Vec<HashMap<String, Slot>>,
     collections: Vec<Collection>,
     output: Vec<String>,
+    methods: Vec<MethodDeclaration>,
+    call_stack: Vec<ActiveCall>,
 }
 
 impl Interpreter {
@@ -91,14 +101,23 @@ impl Interpreter {
             scopes: vec![HashMap::new()],
             collections: Vec::new(),
             output: Vec::new(),
+            methods: Vec::new(),
+            call_stack: Vec::new(),
         }
     }
 
     pub fn execute(mut self, program: &Program) -> Result<Vec<String>, Diagnostic> {
+        self.methods = program.methods.clone();
         for statement in &program.statements {
             match self.execute_statement(statement)? {
                 Flow::Normal => {}
-                Flow::Return => break,
+                Flow::Return(None) => break,
+                Flow::Return(Some(_)) => {
+                    return Err(Diagnostic::new(
+                        "value return escaped semantic validation",
+                        statement.span(),
+                    ));
+                }
                 Flow::Break => {
                     return Err(Diagnostic::new(
                         "`break` escaped semantic validation",
@@ -160,7 +179,7 @@ impl Interpreter {
                     match self.execute_statement(body)? {
                         Flow::Normal | Flow::Continue => {}
                         Flow::Break => break,
-                        Flow::Return => return Ok(Flow::Return),
+                        flow @ Flow::Return(_) => return Ok(flow),
                     }
                 }
                 Ok(Flow::Normal)
@@ -172,7 +191,7 @@ impl Interpreter {
                     match self.execute_statement(body)? {
                         Flow::Normal | Flow::Continue => {}
                         Flow::Break => break,
-                        Flow::Return => return Ok(Flow::Return),
+                        flow @ Flow::Return(_) => return Ok(flow),
                     }
                     if !self.evaluate_boolean(condition)? {
                         break;
@@ -201,8 +220,80 @@ impl Interpreter {
             } => self.execute_for_each(element_type, name, iterable, body),
             Statement::Break { .. } => Ok(Flow::Break),
             Statement::Continue { .. } => Ok(Flow::Continue),
-            Statement::Return { .. } => Ok(Flow::Return),
+            Statement::Return { value, .. } => {
+                let value = value
+                    .as_ref()
+                    .map(|value| self.evaluate(value))
+                    .transpose()?;
+                Ok(Flow::Return(value))
+            }
+            Statement::Try {
+                try_block,
+                catches,
+                finally_block,
+                ..
+            } => self.execute_try(try_block, catches, finally_block.as_deref()),
+            Statement::Throw { value, span } => {
+                let value = self.evaluate(value)?;
+                match value {
+                    Value::Exception(mut exception) => {
+                        if exception.span == Span::new(0, 0) {
+                            exception.span = *span;
+                        }
+                        Err(*exception)
+                    }
+                    Value::Null(_) => Err(runtime_exception(
+                        "NullPointerException",
+                        "attempt to throw null",
+                        *span,
+                    )),
+                    _ => Err(Diagnostic::new(
+                        "non-exception throw escaped semantic validation",
+                        *span,
+                    )),
+                }
+            }
         }
+    }
+
+    fn execute_try(
+        &mut self,
+        try_block: &Statement,
+        catches: &[CatchClause],
+        finally_block: Option<&Statement>,
+    ) -> Result<Flow, Diagnostic> {
+        let mut outcome = self.execute_statement(try_block);
+
+        if let Err(mut exception) = outcome {
+            self.attach_stack_if_missing(&mut exception);
+            if exception.exception_type.is_some()
+                && let Some(catch) = catches
+                    .iter()
+                    .find(|catch| exception_matches(&exception, &catch.exception_type))
+            {
+                self.scopes.push(HashMap::new());
+                self.current_scope_mut().insert(
+                    catch.name.canonical.clone(),
+                    Slot {
+                        ty: catch.exception_type.clone(),
+                        value: Value::Exception(Box::new(exception)),
+                    },
+                );
+                outcome = self.execute_statement(&catch.body);
+                self.scopes.pop();
+            } else {
+                outcome = Err(exception);
+            }
+        }
+
+        if let Some(finally_block) = finally_block {
+            match self.execute_statement(finally_block) {
+                Ok(Flow::Normal) => {}
+                overriding => return overriding,
+            }
+        }
+
+        outcome
     }
 
     fn execute_block(&mut self, statements: &[Statement]) -> Result<Flow, Diagnostic> {
@@ -244,7 +335,7 @@ impl Interpreter {
                 match self.execute_statement(body)? {
                     Flow::Normal | Flow::Continue => {}
                     Flow::Break => break,
-                    Flow::Return => return Ok(Flow::Return),
+                    flow @ Flow::Return(_) => return Ok(flow),
                 }
                 if let Some(update) = update {
                     let flow = self.execute_statement(update)?;
@@ -270,7 +361,11 @@ impl Interpreter {
         let id = match iterable_value {
             Value::Collection(id) => id,
             Value::Null(_) => {
-                return Err(Diagnostic::new("cannot iterate over null", iterable.span()));
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "cannot iterate over null",
+                    iterable.span(),
+                ));
             }
             _ => return Err(invalid_runtime_operands(iterable.span())),
         };
@@ -310,7 +405,7 @@ impl Interpreter {
                 match self.execute_statement(body)? {
                     Flow::Normal | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::Normal),
-                    Flow::Return => return Ok(Flow::Return),
+                    flow @ Flow::Return(_) => return Ok(flow),
                 }
             }
             Ok(Flow::Normal)
@@ -345,6 +440,30 @@ impl Interpreter {
                 initializer,
                 span,
             } => self.evaluate_new_collection(ty, initializer, *span),
+            Expression::NewException {
+                exception_type,
+                arguments,
+                span,
+            } => self.evaluate_new_exception(exception_type, arguments, *span),
+            Expression::FunctionCall {
+                name,
+                arguments,
+                resolved_method,
+                span,
+            } => {
+                let method_id = resolved_method.get().ok_or_else(|| {
+                    Diagnostic::new(
+                        "unresolved method call escaped semantic validation",
+                        name.span,
+                    )
+                })?;
+                self.evaluate_function_call(method_id, name, arguments, *span)
+            }
+            Expression::Cast {
+                ty,
+                expression,
+                span,
+            } => self.evaluate_cast(ty, expression, *span),
             Expression::Index {
                 collection,
                 index,
@@ -376,6 +495,126 @@ impl Interpreter {
                 ..
             } => self.evaluate_binary(left, *operator, right, *operator_span),
         }
+    }
+
+    fn evaluate_new_exception(
+        &mut self,
+        exception_type: &TypeName,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let message = match arguments {
+            [] => String::new(),
+            [message] => match self.evaluate(message)? {
+                Value::String(message) => message,
+                Value::Null(_) => String::new(),
+                _ => {
+                    return Err(Diagnostic::new(
+                        "invalid exception message escaped semantic validation",
+                        message.span(),
+                    ));
+                }
+            },
+            _ => {
+                return Err(Diagnostic::new(
+                    "invalid exception constructor arity escaped semantic validation",
+                    span,
+                ));
+            }
+        };
+        if !exception_type.is_exception() {
+            return Err(Diagnostic::new(
+                "non-exception construction escaped semantic validation",
+                span,
+            ));
+        }
+        Ok(Value::Exception(Box::new(Diagnostic::runtime_exception(
+            exception_type.apex_name(),
+            message,
+            Span::new(0, 0),
+        ))))
+    }
+
+    fn evaluate_function_call(
+        &mut self,
+        method_id: usize,
+        name: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let arguments = self.evaluate_arguments(arguments)?;
+        let method = self.methods.get(method_id).cloned().ok_or_else(|| {
+            Diagnostic::new("resolved method does not exist at runtime", name.span)
+        })?;
+
+        let mut method_scope = HashMap::new();
+        for (parameter, argument) in method.parameters.iter().zip(arguments) {
+            method_scope.insert(
+                parameter.name.canonical.clone(),
+                Slot {
+                    ty: parameter.ty.clone(),
+                    value: typed_value(argument.value, &parameter.ty),
+                },
+            );
+        }
+
+        let caller_scopes = std::mem::replace(&mut self.scopes, vec![method_scope]);
+        self.call_stack.push(ActiveCall {
+            method: method.name.spelling.clone(),
+            call_span: span,
+        });
+        let mut outcome = self.execute_statement(&method.body);
+        if let Err(exception) = &mut outcome {
+            self.attach_stack_if_missing(exception);
+        }
+        self.call_stack.pop();
+        self.scopes = caller_scopes;
+
+        match outcome {
+            Ok(Flow::Return(value)) => match (&method.return_type, value) {
+                (ReturnType::Void, None) => Ok(Value::Void),
+                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                _ => Err(Diagnostic::new(
+                    "invalid method return escaped semantic validation",
+                    method.name.span,
+                )),
+            },
+            Ok(Flow::Normal) if matches!(method.return_type, ReturnType::Void) => Ok(Value::Void),
+            Ok(Flow::Normal) => Err(Diagnostic::new(
+                "value-returning method completed without a return",
+                method.name.span,
+            )),
+            Ok(Flow::Break | Flow::Continue) => Err(Diagnostic::new(
+                "loop control escaped method semantic validation",
+                method.name.span,
+            )),
+            Err(exception) => Err(exception),
+        }
+    }
+
+    fn evaluate_cast(
+        &mut self,
+        target: &TypeName,
+        expression: &Expression,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let value = self.evaluate(expression)?;
+        if matches!(value, Value::Null(_)) {
+            return Ok(Value::Null(Some(target.clone())));
+        }
+        if self.value_has_type(&value, target) || matches!(target, TypeName::Object) {
+            return Ok(value);
+        }
+
+        Err(runtime_exception(
+            "TypeException",
+            format!(
+                "invalid conversion from runtime type {} to {}",
+                self.value_type_name(&value),
+                target.apex_name()
+            ),
+            span,
+        ))
     }
 
     fn evaluate_assignment(
@@ -429,23 +668,29 @@ impl Interpreter {
                 let size_span = size.span();
                 let value = self.evaluate(size)?;
                 let Value::Integer(size_value) = value else {
-                    return Err(Diagnostic::new(
+                    return Err(runtime_exception(
+                        "NullPointerException",
                         "array size must be a non-null Integer",
                         size_span,
                     ));
                 };
                 if size_value < 0 {
-                    return Err(Diagnostic::new("array size cannot be negative", size_span));
+                    return Err(runtime_exception(
+                        "ListException",
+                        "array size cannot be negative",
+                        size_span,
+                    ));
                 }
                 let TypeName::List(element_type) = ty else {
                     return Err(invalid_runtime_operands(span));
                 };
-                let size = usize::try_from(size_value)
-                    .map_err(|_| Diagnostic::new("array size is too large", size_span))?;
+                let size = usize::try_from(size_value).map_err(|_| {
+                    runtime_exception("ListException", "array size is too large", size_span)
+                })?;
                 let mut elements = Vec::new();
-                elements
-                    .try_reserve_exact(size)
-                    .map_err(|_| Diagnostic::new("array size is too large", size_span))?;
+                elements.try_reserve_exact(size).map_err(|_| {
+                    runtime_exception("ListException", "array size is too large", size_span)
+                })?;
                 elements.resize(size, Value::Null(Some((**element_type).clone())));
                 Ok(self.allocate(Collection::List {
                     element_type: (**element_type).clone(),
@@ -473,7 +718,8 @@ impl Interpreter {
         };
         let Value::Collection(source_id) = source.value else {
             if matches!(source.value, Value::Null(_)) {
-                return Err(Diagnostic::new(
+                return Err(runtime_exception(
+                    "NullPointerException",
                     "cannot copy a null collection",
                     source.span,
                 ));
@@ -834,7 +1080,8 @@ impl Interpreter {
                 let right_span = right.span;
                 let right = expect_integer(&right.value, right_span)?;
                 if right == 0 {
-                    return Err(Diagnostic::new(
+                    return Err(runtime_exception(
+                        "MathException",
                         "Math.mod divisor cannot be zero",
                         right_span,
                     ));
@@ -879,7 +1126,11 @@ impl Interpreter {
         match receiver {
             Value::String(value) => self.call_string_instance(value, method, arguments, span),
             Value::Collection(id) => self.call_collection(id, method, arguments, span),
-            Value::Null(_) => Err(Diagnostic::new(
+            Value::Exception(exception) => {
+                self.call_exception_instance(&exception, method, arguments, span)
+            }
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
                 format!(
                     "attempt to de-reference a null value while calling `{}`",
                     method.spelling
@@ -895,6 +1146,39 @@ impl Interpreter {
         }
     }
 
+    fn call_exception_instance(
+        &self,
+        exception: &Diagnostic,
+        method: &Identifier,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        match method.canonical.as_str() {
+            "getmessage" => Ok(Value::String(exception.message.clone())),
+            "gettypename" => Ok(Value::String(
+                exception
+                    .exception_type
+                    .clone()
+                    .unwrap_or_else(|| "Exception".to_owned()),
+            )),
+            "getstacktracestring" => Ok(Value::String(
+                exception
+                    .stack_trace
+                    .iter()
+                    .map(|frame| {
+                        format!(
+                            "{} @ bytes {}..{}",
+                            frame.method, frame.span.start, frame.span.end
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )),
+            _ => Err(unsupported_method("Exception", method)),
+        }
+    }
+
     fn call_string_instance(
         &mut self,
         receiver: String,
@@ -907,8 +1191,9 @@ impl Interpreter {
                 let [] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
-                let length = i64::try_from(receiver.encode_utf16().count())
-                    .map_err(|_| Diagnostic::new("String length is too large", span))?;
+                let length = i64::try_from(receiver.encode_utf16().count()).map_err(|_| {
+                    runtime_exception("StringException", "String length is too large", span)
+                })?;
                 Ok(Value::Integer(length))
             }
             "contains" | "startswith" | "endswith" | "equals" | "equalsignorecase" | "indexof" => {
@@ -985,7 +1270,8 @@ impl Interpreter {
             _ => return Err(invalid_call_arguments(span)),
         };
         if start > end || end > utf16_length {
-            return Err(Diagnostic::new(
+            return Err(runtime_exception(
+                "StringException",
                 format!(
                     "String substring range {start}..{end} is out of bounds for length {utf16_length}"
                 ),
@@ -993,10 +1279,18 @@ impl Interpreter {
             ));
         }
         let start_byte = utf16_byte_index(receiver, start).ok_or_else(|| {
-            Diagnostic::new("String index splits a UTF-16 surrogate pair", error_span)
+            runtime_exception(
+                "StringException",
+                "String index splits a UTF-16 surrogate pair",
+                error_span,
+            )
         })?;
         let end_byte = utf16_byte_index(receiver, end).ok_or_else(|| {
-            Diagnostic::new("String index splits a UTF-16 surrogate pair", error_span)
+            runtime_exception(
+                "StringException",
+                "String index splits a UTF-16 surrogate pair",
+                error_span,
+            )
         })?;
         Ok(Value::String(receiver[start_byte..end_byte].to_owned()))
     }
@@ -1671,7 +1965,8 @@ impl Interpreter {
                             .checked_add(*right)
                             .map(Value::Integer)
                             .ok_or_else(|| integer_overflow(operator_span)),
-                        (Value::Null(_), _) | (_, Value::Null(_)) => Err(Diagnostic::new(
+                        (Value::Null(_), _) | (_, Value::Null(_)) => Err(runtime_exception(
+                            "NullPointerException",
                             "operator cannot be applied to null at runtime",
                             operator_span,
                         )),
@@ -1688,7 +1983,11 @@ impl Interpreter {
             BinaryOperator::Divide => {
                 let (left, right) = integer_pair(left, right, operator_span)?;
                 if right == 0 {
-                    return Err(Diagnostic::new("division by zero", operator_span));
+                    return Err(runtime_exception(
+                        "MathException",
+                        "division by zero",
+                        operator_span,
+                    ));
                 }
                 left.checked_div(right)
                     .map(Value::Integer)
@@ -1697,7 +1996,11 @@ impl Interpreter {
             BinaryOperator::Remainder => {
                 let (left, right) = integer_pair(left, right, operator_span)?;
                 if right == 0 {
-                    return Err(Diagnostic::new("remainder by zero", operator_span));
+                    return Err(runtime_exception(
+                        "MathException",
+                        "remainder by zero",
+                        operator_span,
+                    ));
                 }
                 left.checked_rem(right)
                     .map(Value::Integer)
@@ -1722,20 +2025,24 @@ impl Interpreter {
     fn evaluate_boolean(&mut self, expression: &Expression) -> Result<bool, Diagnostic> {
         match self.evaluate(expression)? {
             Value::Boolean(value) => Ok(value),
-            _ => Err(Diagnostic::new(
-                "expected Boolean value at runtime",
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "expected non-null Boolean value at runtime",
                 expression.span(),
             )),
+            _ => Err(invalid_runtime_operands(expression.span())),
         }
     }
 
     fn evaluate_integer(&mut self, expression: &Expression) -> Result<i64, Diagnostic> {
         match self.evaluate(expression)? {
             Value::Integer(value) => Ok(value),
-            _ => Err(Diagnostic::new(
-                "expected Integer value at runtime",
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "expected non-null Integer value at runtime",
                 expression.span(),
             )),
+            _ => Err(invalid_runtime_operands(expression.span())),
         }
     }
 
@@ -1751,7 +2058,8 @@ impl Interpreter {
                 let old = match self.lookup(identifier)?.value {
                     Value::Integer(value) => value,
                     _ => {
-                        return Err(Diagnostic::new(
+                        return Err(runtime_exception(
+                            "NullPointerException",
                             "increment/decrement requires a non-null Integer value",
                             operator_span,
                         ));
@@ -1783,7 +2091,8 @@ impl Interpreter {
                 };
                 let (index, old) = old;
                 let Value::Integer(old) = old else {
-                    return Err(Diagnostic::new(
+                    return Err(runtime_exception(
+                        "NullPointerException",
                         "increment/decrement requires a non-null Integer value",
                         operator_span,
                     ));
@@ -1819,7 +2128,8 @@ impl Interpreter {
     fn expect_collection_id(&self, value: Value, span: Span) -> Result<CollectionId, Diagnostic> {
         match value {
             Value::Collection(id) => Ok(id),
-            Value::Null(_) => Err(Diagnostic::new(
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
                 "attempt to de-reference a null value",
                 span,
             )),
@@ -1830,7 +2140,8 @@ impl Interpreter {
     fn expect_index(&self, value: Value, span: Span) -> Result<i64, Diagnostic> {
         match value {
             Value::Integer(value) => Ok(value),
-            Value::Null(_) => Err(Diagnostic::new(
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
                 "list index must be a non-null Integer",
                 span,
             )),
@@ -1851,7 +2162,8 @@ impl Interpreter {
         if iteration_depth == 0 {
             Ok(())
         } else {
-            Err(Diagnostic::new(
+            Err(runtime_exception(
+                "FinalException",
                 "cannot modify a collection while it is being iterated",
                 span,
             ))
@@ -1889,6 +2201,7 @@ impl Interpreter {
             (Value::Collection(left), Value::Collection(right)) => {
                 self.collections_equal(*left, *right)
             }
+            (Value::Exception(left), Value::Exception(right)) => left == right,
             (Value::Null(_), Value::Null(_)) => true,
             (Value::Void, Value::Void) => true,
             _ => false,
@@ -1980,6 +2293,14 @@ impl Interpreter {
                         .join(", ")
                 ),
             },
+            Value::Exception(exception) => {
+                let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
+                if exception.message.is_empty() {
+                    exception_type.to_owned()
+                } else {
+                    format!("{exception_type}: {}", exception.message)
+                }
+            }
             Value::Null(_) => "null".to_owned(),
             Value::Void => "void".to_owned(),
         }
@@ -2028,6 +2349,71 @@ impl Interpreter {
             .last_mut()
             .expect("interpreter always has a scope")
     }
+
+    fn value_has_type(&self, value: &Value, target: &TypeName) -> bool {
+        if matches!(target, TypeName::Object) {
+            return !matches!(value, Value::Void);
+        }
+        match value {
+            Value::String(_) => matches!(target, TypeName::String),
+            Value::Boolean(_) => matches!(target, TypeName::Boolean),
+            Value::Integer(_) => matches!(target, TypeName::Integer),
+            Value::Collection(id) => self.collection_type(*id) == *target,
+            Value::Exception(exception) => {
+                matches!(target, TypeName::Exception)
+                    || exception.exception_type.as_deref() == Some(target.apex_name().as_str())
+            }
+            Value::Null(ty) => ty.as_ref().is_none_or(|ty| ty == target),
+            Value::Void => false,
+        }
+    }
+
+    fn value_type_name(&self, value: &Value) -> String {
+        match value {
+            Value::String(_) => TypeName::String.apex_name(),
+            Value::Boolean(_) => TypeName::Boolean.apex_name(),
+            Value::Integer(_) => TypeName::Integer.apex_name(),
+            Value::Collection(id) => self.collection_type(*id).apex_name(),
+            Value::Exception(exception) => exception
+                .exception_type
+                .clone()
+                .unwrap_or_else(|| "Exception".to_owned()),
+            Value::Null(ty) => ty
+                .as_ref()
+                .map_or_else(|| "null".to_owned(), TypeName::apex_name),
+            Value::Void => "void".to_owned(),
+        }
+    }
+
+    fn collection_type(&self, id: CollectionId) -> TypeName {
+        match self.collection(id) {
+            Collection::List { element_type, .. } => TypeName::List(Box::new(element_type.clone())),
+            Collection::Set { element_type, .. } => TypeName::Set(Box::new(element_type.clone())),
+            Collection::Map {
+                key_type,
+                value_type,
+                ..
+            } => TypeName::Map(Box::new(key_type.clone()), Box::new(value_type.clone())),
+        }
+    }
+
+    fn attach_stack_if_missing(&self, exception: &mut Diagnostic) {
+        if exception.exception_type.is_none()
+            || !exception.stack_trace.is_empty()
+            || self.call_stack.is_empty()
+        {
+            return;
+        }
+
+        for index in (0..self.call_stack.len()).rev() {
+            let span = if index + 1 == self.call_stack.len() {
+                exception.span
+            } else {
+                self.call_stack[index + 1].call_span
+            };
+            exception.push_frame(self.call_stack[index].method.clone(), span);
+        }
+    }
 }
 
 impl Default for Interpreter {
@@ -2043,6 +2429,18 @@ fn static_receiver(identifier: &Identifier) -> Option<StaticReceiver> {
         "system" => Some(StaticReceiver::System),
         _ => None,
     }
+}
+
+fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Span) -> Diagnostic {
+    Diagnostic::runtime_exception(exception_type, message, span)
+}
+
+fn exception_matches(exception: &Diagnostic, catch_type: &TypeName) -> bool {
+    let Some(exception_type) = exception.exception_type.as_deref() else {
+        return false;
+    };
+    matches!(catch_type, TypeName::Exception)
+        || exception_type.eq_ignore_ascii_case(&catch_type.apex_name())
 }
 
 fn checked_integer_binary(
@@ -2070,7 +2468,8 @@ fn compare_integers(
 fn integer_pair(left: Value, right: Value, span: Span) -> Result<(i64, i64), Diagnostic> {
     match (left, right) {
         (Value::Integer(left), Value::Integer(right)) => Ok((left, right)),
-        (Value::Null(_), _) | (_, Value::Null(_)) => Err(Diagnostic::new(
+        (Value::Null(_), _) | (_, Value::Null(_)) => Err(runtime_exception(
+            "NullPointerException",
             "operator cannot be applied to null at runtime",
             span,
         )),
@@ -2088,7 +2487,8 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
 fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
     match value {
         Value::Integer(value) => Ok(*value),
-        Value::Null(_) => Err(Diagnostic::new(
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
             "expected non-null Integer at runtime",
             span,
         )),
@@ -2099,7 +2499,11 @@ fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
 fn expect_string(value: &Value, span: Span) -> Result<&str, Diagnostic> {
     match value {
         Value::String(value) => Ok(value),
-        Value::Null(_) => Err(Diagnostic::new("expected non-null String at runtime", span)),
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
+            "expected non-null String at runtime",
+            span,
+        )),
         _ => Err(invalid_runtime_operands(span)),
     }
 }
@@ -2107,9 +2511,14 @@ fn expect_string(value: &Value, span: Span) -> Result<&str, Diagnostic> {
 fn nonnegative_usize(value: &Value, span: Span, label: &str) -> Result<usize, Diagnostic> {
     let value = expect_integer(value, span)?;
     if value < 0 {
-        return Err(Diagnostic::new(format!("{label} cannot be negative"), span));
+        return Err(runtime_exception(
+            "StringException",
+            format!("{label} cannot be negative"),
+            span,
+        ));
     }
-    usize::try_from(value).map_err(|_| Diagnostic::new(format!("{label} is too large"), span))
+    usize::try_from(value)
+        .map_err(|_| runtime_exception("StringException", format!("{label} is too large"), span))
 }
 
 fn checked_list_index(
@@ -2123,7 +2532,8 @@ fn checked_list_index(
     if valid {
         Ok(converted.expect("validated above"))
     } else {
-        Err(Diagnostic::new(
+        Err(runtime_exception(
+            "ListException",
             format!("list index {index} is out of bounds for size {size}"),
             span,
         ))
@@ -2131,7 +2541,8 @@ fn checked_list_index(
 }
 
 fn collection_size(size: usize, span: Span) -> Result<i64, Diagnostic> {
-    i64::try_from(size).map_err(|_| Diagnostic::new("collection size is too large", span))
+    i64::try_from(size)
+        .map_err(|_| runtime_exception("ListException", "collection size is too large", span))
 }
 
 fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnostic> {
@@ -2139,7 +2550,8 @@ fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnos
         .iter()
         .any(|value| !matches!(value, Value::String(_) | Value::Integer(_) | Value::Null(_)))
     {
-        return Err(Diagnostic::new(
+        return Err(runtime_exception(
+            "TypeException",
             "List.sort currently requires String or Integer values",
             span,
         ));
@@ -2188,7 +2600,8 @@ fn unknown_variable(identifier: &Identifier) -> Diagnostic {
 }
 
 fn unsupported_method(receiver: &str, method: &Identifier) -> Diagnostic {
-    Diagnostic::new(
+    runtime_exception(
+        "TypeException",
         format!(
             "unsupported {receiver} method `{}` escaped semantic validation",
             method.spelling
@@ -2198,15 +2611,23 @@ fn unsupported_method(receiver: &str, method: &Identifier) -> Diagnostic {
 }
 
 fn invalid_call_arguments(span: Span) -> Diagnostic {
-    Diagnostic::new("invalid call arguments escaped semantic validation", span)
+    runtime_exception(
+        "TypeException",
+        "invalid call arguments escaped semantic validation",
+        span,
+    )
 }
 
 fn invalid_runtime_operands(span: Span) -> Diagnostic {
-    Diagnostic::new("invalid operands escaped semantic validation", span)
+    runtime_exception(
+        "TypeException",
+        "invalid operands escaped semantic validation",
+        span,
+    )
 }
 
 fn integer_overflow(span: Span) -> Diagnostic {
-    Diagnostic::new("integer overflow", span)
+    runtime_exception("MathException", "integer overflow", span)
 }
 
 #[cfg(test)]

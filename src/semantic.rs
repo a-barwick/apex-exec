@@ -1,7 +1,8 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier,
-        PostfixOperator, Program, Statement, TypeName, UnaryOperator,
+        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
+        Identifier, MethodDeclaration, PostfixOperator, Program, ReturnType, Statement, TypeName,
+        UnaryOperator,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -12,9 +13,18 @@ pub fn check(program: &Program) -> Result<(), Diagnostic> {
     Checker::new().check_program(program)
 }
 
+#[derive(Clone)]
+struct MethodSignature {
+    id: usize,
+    parameter_types: Vec<TypeName>,
+    return_type: ReturnType,
+}
+
 struct Checker {
     scopes: Vec<HashMap<String, TypeName>>,
     loop_depth: usize,
+    return_type: Option<ReturnType>,
+    methods: HashMap<String, Vec<MethodSignature>>,
 }
 
 impl Checker {
@@ -22,14 +32,106 @@ impl Checker {
         Self {
             scopes: vec![HashMap::new()],
             loop_depth: 0,
+            return_type: None,
+            methods: HashMap::new(),
         }
     }
 
     fn check_program(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        self.collect_method_signatures(program)?;
+        for method in &program.methods {
+            self.check_method(method)?;
+        }
         for statement in &program.statements {
             self.check_statement(statement)?;
         }
         Ok(())
+    }
+
+    fn collect_method_signatures(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        for (id, method) in program.methods.iter().enumerate() {
+            let parameter_types = method
+                .parameters
+                .iter()
+                .map(|parameter| parameter.ty.clone())
+                .collect::<Vec<_>>();
+            let overloads = self
+                .methods
+                .entry(method.name.canonical.clone())
+                .or_default();
+            if overloads
+                .iter()
+                .any(|overload| overload.parameter_types == parameter_types)
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "duplicate method overload `{}`({})",
+                        method.name.spelling,
+                        parameter_types
+                            .iter()
+                            .map(TypeName::apex_name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    method.name.span,
+                ));
+            }
+            overloads.push(MethodSignature {
+                id,
+                parameter_types,
+                return_type: method.return_type.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_method(&mut self, method: &MethodDeclaration) -> Result<(), Diagnostic> {
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let saved_return_type = self.return_type.replace(method.return_type.clone());
+
+        let result = (|| {
+            for parameter in &method.parameters {
+                if self.current_scope().contains_key(&parameter.name.canonical) {
+                    return Err(Diagnostic::new(
+                        format!("duplicate parameter `{}`", parameter.name.spelling),
+                        parameter.name.span,
+                    ));
+                }
+                self.current_scope_mut()
+                    .insert(parameter.name.canonical.clone(), parameter.ty.clone());
+            }
+
+            self.check_method_body(&method.body)?;
+            if matches!(method.return_type, ReturnType::Value(_))
+                && !statement_definitely_returns_or_throws(&method.body)
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "method `{}` must return a value on every path",
+                        method.name.spelling
+                    ),
+                    method.name.span,
+                ));
+            }
+            Ok(())
+        })();
+
+        self.scopes = saved_scopes;
+        self.loop_depth = saved_loop_depth;
+        self.return_type = saved_return_type;
+        result
+    }
+
+    fn check_method_body(&mut self, body: &Statement) -> Result<(), Diagnostic> {
+        if let Statement::Block { statements, .. } = body {
+            for statement in statements {
+                self.check_statement(statement)?;
+            }
+            Ok(())
+        } else {
+            self.check_statement(body)
+        }
     }
 
     fn check_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
@@ -167,14 +269,101 @@ impl Checker {
                     Ok(())
                 }
             }
-            Statement::Return { value, .. } => {
-                if let Some(value) = value {
+            Statement::Try {
+                try_block,
+                catches,
+                finally_block,
+                ..
+            } => {
+                self.check_statement(try_block)?;
+                self.check_catches(catches)?;
+                if let Some(finally_block) = finally_block {
+                    self.check_statement(finally_block)?;
+                }
+                Ok(())
+            }
+            Statement::Throw { value, .. } => {
+                let actual = self.expression_type(value)?;
+                if matches!(&actual, ExpressionType::Value(ty) if ty.is_exception())
+                    || actual == ExpressionType::Null
+                {
+                    Ok(())
+                } else {
                     Err(Diagnostic::new(
-                        "anonymous execution does not support returning a value",
+                        format!("`throw` requires an Exception, found {}", actual.name()),
                         value.span(),
                     ))
-                } else {
+                }
+            }
+            Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
+        }
+    }
+
+    fn check_catches(&mut self, catches: &[CatchClause]) -> Result<(), Diagnostic> {
+        let mut catches_everything = false;
+        let mut seen = Vec::new();
+        for catch in catches {
+            if !catch.exception_type.is_exception() {
+                return Err(Diagnostic::new(
+                    format!(
+                        "catch type must be an Exception, found {}",
+                        catch.exception_type.apex_name()
+                    ),
+                    catch.span,
+                ));
+            }
+            if catches_everything || seen.contains(&catch.exception_type) {
+                return Err(Diagnostic::new(
+                    format!("unreachable catch for {}", catch.exception_type.apex_name()),
+                    catch.span,
+                ));
+            }
+            catches_everything = catch.exception_type == TypeName::Exception;
+            seen.push(catch.exception_type.clone());
+
+            self.with_scope(|checker| {
+                checker
+                    .current_scope_mut()
+                    .insert(catch.name.canonical.clone(), catch.exception_type.clone());
+                checker.check_method_body(&catch.body)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn check_return(
+        &mut self,
+        value: Option<&Expression>,
+        return_span: Span,
+    ) -> Result<(), Diagnostic> {
+        let return_type = self.return_type.clone();
+        match (return_type, value) {
+            (None, None) | (Some(ReturnType::Void), None) => Ok(()),
+            (None, Some(value)) => Err(Diagnostic::new(
+                "anonymous execution does not support returning a value",
+                value.span(),
+            )),
+            (Some(ReturnType::Void), Some(value)) => Err(Diagnostic::new(
+                "void method cannot return a value",
+                value.span(),
+            )),
+            (Some(ReturnType::Value(expected)), None) => Err(Diagnostic::new(
+                format!("return requires a {} value", expected.apex_name()),
+                return_span,
+            )),
+            (Some(ReturnType::Value(expected)), Some(value)) => {
+                let actual = self.expression_type(value)?;
+                if is_assignable(&expected, &actual) {
                     Ok(())
+                } else {
+                    Err(Diagnostic::new(
+                        format!(
+                            "cannot return {} from a method returning {}",
+                            actual.name(),
+                            expected.apex_name()
+                        ),
+                        value.span(),
+                    ))
                 }
             }
         }
@@ -200,17 +389,29 @@ impl Checker {
             Expression::NewCollection {
                 ty, initializer, ..
             } => self.new_collection_type(ty, initializer),
+            Expression::NewException {
+                exception_type,
+                arguments,
+                ..
+            } => self.new_exception_type(exception_type, arguments),
             Expression::Index {
                 collection, index, ..
             } => self
                 .index_type(collection, index)
                 .map(ExpressionType::Value),
+            Expression::FunctionCall {
+                name,
+                arguments,
+                resolved_method,
+                ..
+            } => self.function_call_type(name, arguments, resolved_method),
             Expression::MethodCall {
                 receiver,
                 method,
                 arguments,
                 ..
             } => self.method_call_type(receiver, method, arguments),
+            Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
             Expression::Unary {
                 operator,
                 operand,
@@ -230,6 +431,125 @@ impl Checker {
                 operator_span,
                 ..
             } => self.binary_type(left, *operator, right, *operator_span),
+        }
+    }
+
+    fn new_exception_type(
+        &mut self,
+        exception_type: &TypeName,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        if !exception_type.is_exception() {
+            return Err(Diagnostic::new(
+                format!("{} is not an Exception type", exception_type.apex_name()),
+                arguments.first().map_or(Span::new(0, 0), Expression::span),
+            ));
+        }
+        if arguments.len() > 1 {
+            return Err(Diagnostic::new(
+                "exception constructor expects zero or one argument",
+                arguments[1].span(),
+            ));
+        }
+        if let Some(message) = arguments.first() {
+            let actual = self.expression_type(message)?;
+            require_assignable(&TypeName::String, &actual, message.span())?;
+        }
+        Ok(ExpressionType::Value(exception_type.clone()))
+    }
+
+    fn function_call_type(
+        &mut self,
+        name: &Identifier,
+        arguments: &[Expression],
+        resolved_method: &std::cell::Cell<Option<usize>>,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let argument_types = arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(overloads) = self.methods.get(&name.canonical) else {
+            return Err(Diagnostic::new(
+                format!("unknown method `{}`", name.spelling),
+                name.span,
+            ));
+        };
+
+        let applicable = overloads
+            .iter()
+            .filter(|overload| overload.parameter_types.len() == argument_types.len())
+            .filter(|overload| {
+                overload
+                    .parameter_types
+                    .iter()
+                    .zip(&argument_types)
+                    .all(|(expected, actual)| is_assignable(expected, actual))
+            })
+            .collect::<Vec<_>>();
+
+        if applicable.is_empty() {
+            return Err(Diagnostic::new(
+                format!(
+                    "no matching overload for method `{}` with argument types ({})",
+                    name.spelling,
+                    argument_types
+                        .iter()
+                        .map(ExpressionType::name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                name.span,
+            ));
+        }
+
+        let most_specific = applicable
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                !applicable
+                    .iter()
+                    .copied()
+                    .any(|other| other.id != candidate.id && method_more_specific(other, candidate))
+            })
+            .collect::<Vec<_>>();
+        let [best] = most_specific.as_slice() else {
+            return Err(Diagnostic::new(
+                format!("ambiguous overload for method `{}`", name.spelling),
+                name.span,
+            ));
+        };
+
+        resolved_method.set(Some(best.id));
+        Ok(match &best.return_type {
+            ReturnType::Void => ExpressionType::Void,
+            ReturnType::Value(ty) => ExpressionType::Value(ty.clone()),
+        })
+    }
+
+    fn cast_type(
+        &mut self,
+        target: &TypeName,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let actual = self.expression_type(expression)?;
+        let allowed = match &actual {
+            ExpressionType::Null => true,
+            ExpressionType::Value(source) => {
+                source == target
+                    || *source == TypeName::Object
+                    || *target == TypeName::Object
+                    || (*source == TypeName::Exception && target.is_exception())
+                    || (*target == TypeName::Exception && source.is_exception())
+            }
+            ExpressionType::Void => false,
+        };
+        if allowed {
+            Ok(ExpressionType::Value(target.clone()))
+        } else {
+            Err(Diagnostic::new(
+                format!("cannot cast {} to {}", actual.name(), target.apex_name()),
+                expression.span(),
+            ))
         }
     }
 
@@ -400,7 +720,31 @@ impl Checker {
                 self.map_method_type(receiver_type, key, value, method, arguments)
             }
             TypeName::String => self.string_instance_method_type(method, arguments),
-            TypeName::Boolean | TypeName::Integer => Err(unknown_method(receiver_type, method)),
+            ty if ty.is_exception() => {
+                self.exception_instance_method_type(receiver_type, method, arguments)
+            }
+            _ => Err(unknown_method(receiver_type, method)),
+        }
+    }
+
+    fn exception_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "getmessage" | "gettypename" | "getstacktracestring" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            _ => Err(unknown_method(receiver_type, method)),
         }
     }
 
@@ -1331,8 +1675,35 @@ impl ExpressionType {
 }
 
 fn is_assignable(expected: &TypeName, actual: &ExpressionType) -> bool {
-    matches!(actual, ExpressionType::Value(actual) if actual == expected)
-        || *actual == ExpressionType::Null
+    match actual {
+        ExpressionType::Value(actual) => {
+            actual == expected
+                || *expected == TypeName::Object
+                || (*expected == TypeName::Exception && actual.is_exception())
+        }
+        ExpressionType::Null => true,
+        ExpressionType::Void => false,
+    }
+}
+
+fn method_more_specific(left: &MethodSignature, right: &MethodSignature) -> bool {
+    let mut strictly_more_specific = false;
+    for (left, right) in left.parameter_types.iter().zip(&right.parameter_types) {
+        if left == right {
+            continue;
+        }
+        if type_more_specific(left, right) {
+            strictly_more_specific = true;
+        } else {
+            return false;
+        }
+    }
+    strictly_more_specific
+}
+
+fn type_more_specific(left: &TypeName, right: &TypeName) -> bool {
+    *right == TypeName::Object
+        || (*right == TypeName::Exception && left.is_exception() && *left != TypeName::Exception)
 }
 
 fn require_assignable(
@@ -1358,6 +1729,7 @@ fn is_statement_expression(expression: &Expression) -> bool {
     matches!(
         expression,
         Expression::Assignment { .. }
+            | Expression::FunctionCall { .. }
             | Expression::MethodCall { .. }
             | Expression::Unary {
                 operator: UnaryOperator::PrefixIncrement | UnaryOperator::PrefixDecrement,
@@ -1365,6 +1737,157 @@ fn is_statement_expression(expression: &Expression) -> bool {
             }
             | Expression::Postfix { .. }
     )
+}
+
+fn statement_definitely_returns_or_throws(statement: &Statement) -> bool {
+    let completions = statement_completions(statement);
+    !completions.normal
+        && !completions.breaks
+        && !completions.continues
+        && (completions.returns || completions.throws)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Completions {
+    normal: bool,
+    returns: bool,
+    throws: bool,
+    breaks: bool,
+    continues: bool,
+}
+
+impl Completions {
+    fn normal() -> Self {
+        Self {
+            normal: true,
+            ..Self::default()
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            normal: self.normal || other.normal,
+            returns: self.returns || other.returns,
+            throws: self.throws || other.throws,
+            breaks: self.breaks || other.breaks,
+            continues: self.continues || other.continues,
+        }
+    }
+
+    fn then(self, next: Self) -> Self {
+        Self {
+            normal: self.normal && next.normal,
+            returns: self.returns || (self.normal && next.returns),
+            throws: self.throws || (self.normal && next.throws),
+            breaks: self.breaks || (self.normal && next.breaks),
+            continues: self.continues || (self.normal && next.continues),
+        }
+    }
+
+    fn without_throw(self) -> Self {
+        Self {
+            throws: false,
+            ..self
+        }
+    }
+}
+
+fn statement_completions(statement: &Statement) -> Completions {
+    match statement {
+        Statement::Return { .. } => Completions {
+            returns: true,
+            ..Completions::default()
+        },
+        Statement::Throw { .. } => Completions {
+            throws: true,
+            ..Completions::default()
+        },
+        Statement::Break { .. } => Completions {
+            breaks: true,
+            ..Completions::default()
+        },
+        Statement::Continue { .. } => Completions {
+            continues: true,
+            ..Completions::default()
+        },
+        Statement::Block { statements, .. } => statements
+            .iter()
+            .fold(Completions::normal(), |current, statement| {
+                current.then(statement_completions(statement))
+            }),
+        Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => statement_completions(then_branch).union(
+            else_branch
+                .as_deref()
+                .map_or_else(Completions::normal, statement_completions),
+        ),
+        Statement::While { body, .. }
+        | Statement::For { body, .. }
+        | Statement::ForEach { body, .. } => {
+            let body = statement_completions(body);
+            Completions {
+                normal: true,
+                returns: body.returns,
+                throws: body.throws,
+                breaks: false,
+                continues: false,
+            }
+        }
+        Statement::DoWhile { body, .. } => {
+            let body = statement_completions(body);
+            Completions {
+                normal: body.normal || body.breaks || body.continues,
+                returns: body.returns,
+                throws: body.throws,
+                breaks: false,
+                continues: false,
+            }
+        }
+        Statement::Try {
+            try_block,
+            catches,
+            finally_block,
+            ..
+        } => {
+            let try_completions = statement_completions(try_block);
+            let mut pending = try_completions.without_throw();
+            if catches.is_empty() {
+                pending.throws = try_completions.throws;
+            } else {
+                for catch in catches {
+                    pending = pending.union(statement_completions(&catch.body));
+                }
+                if !catches
+                    .iter()
+                    .any(|catch| catch.exception_type == TypeName::Exception)
+                {
+                    pending.throws = true;
+                }
+            }
+
+            let Some(finally_block) = finally_block else {
+                return pending;
+            };
+            let finally = statement_completions(finally_block);
+            let mut result = Completions {
+                normal: false,
+                returns: finally.returns,
+                throws: finally.throws,
+                breaks: finally.breaks,
+                continues: finally.continues,
+            };
+            if finally.normal {
+                result = result.union(pending);
+            }
+            result
+        }
+        Statement::VariableDeclaration { .. } | Statement::Expression { .. } => {
+            Completions::normal()
+        }
+    }
 }
 
 fn invalid_binary_operands(
@@ -1671,5 +2194,155 @@ mod tests {
         let error = check_source("String String = 'value'; String converted = String.valueOf(1);")
             .unwrap_err();
         assert_eq!(error.message, "unknown method `valueOf` on String");
+    }
+
+    #[test]
+    fn collects_method_signatures_before_checking_bodies_and_resolves_recursion() {
+        check_source(
+            "Integer first(Integer value) { return second(value); } \
+             Integer second(Integer value) { \
+                 if (value <= 0) return 0; \
+                 return first(value - 1); \
+             } \
+             System.debug(first(2));",
+        )
+        .unwrap();
+
+        let error = check_source(
+            "Integer choose(Integer value) { return value; } \
+             String CHOOSE(Integer value) { return 'duplicate'; }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("duplicate method overload"));
+    }
+
+    #[test]
+    fn ranks_exact_object_and_null_overloads() {
+        check_source(
+            "String kind(String value) { return 'String'; } \
+             String kind(Object value) { return 'Object'; } \
+             String exact = kind('value'); Object boxed = 1; String broad = kind(boxed); \
+             String specificNull = kind(null);",
+        )
+        .unwrap();
+
+        check_source(
+            "String kind(Exception value) { return 'Exception'; } \
+             String kind(Object value) { return 'Object'; } \
+             NullPointerException error = new NullPointerException(); \
+             String specificException = kind(error);",
+        )
+        .unwrap();
+
+        let error = check_source(
+            "String choose(String value) { return 'String'; } \
+             String choose(Integer value) { return 'Integer'; } \
+             String result = choose(null);",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous overload"));
+
+        let error = check_source(
+            "String choose(String value) { return 'String'; } \
+             String choose(Exception value) { return 'Exception'; } \
+             String result = choose(null);",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous overload"));
+
+        let error = check_source(
+            "String choose(Object left, MathException right) { return 'first'; } \
+             String choose(Exception left, Object right) { return 'second'; } \
+             MathException error = new MathException(); \
+             String result = choose(error, error);",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous overload"));
+    }
+
+    #[test]
+    fn validates_method_return_types_and_definite_completion() {
+        check_source(
+            "Integer complete(Boolean branch) { \
+                 if (branch) return 1; else throw new MathException('failed'); \
+             } \
+             Integer once() { do { return 1; } while (false); } \
+             void done() { return; }",
+        )
+        .unwrap();
+
+        let error = check_source("Integer incomplete(Boolean branch) { if (branch) return 1; }")
+            .unwrap_err();
+        assert!(error.message.contains("every path"));
+
+        let error = check_source(
+            "Integer broken(Boolean stop) { \
+                 do { if (stop) break; return 1; } while (false); \
+             }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("every path"));
+
+        let error = check_source("void wrong() { return 1; }").unwrap_err();
+        assert_eq!(error.message, "void method cannot return a value");
+    }
+
+    #[test]
+    fn validates_exception_catches_accessors_and_casts() {
+        check_source(
+            "String recover(Object value) { \
+                 try { \
+                     MathException error = (MathException) value; \
+                     throw error; \
+                 } catch (MathException error) { \
+                     return error.getTypeName() + error.getMessage() \
+                         + error.getStackTraceString(); \
+                 } finally { System.debug('done'); } \
+             } \
+             Exception emptyMessage = new Exception(null); \
+             throw null;",
+        )
+        .unwrap();
+
+        let error = check_source(
+            "void fail() { \
+                 try { throw new MathException(); } \
+                 catch (Exception error) {} \
+                 catch (MathException specific) {} \
+             }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("unreachable catch"));
+
+        let error = check_source("void fail() { throw 'not an exception'; }").unwrap_err();
+        assert!(error.message.contains("requires an Exception"));
+
+        let error = check_source("try {} catch (String problem) {}").unwrap_err();
+        assert!(error.message.contains("catch type must be an Exception"));
+
+        let error = check_source("throw new Exception('first', 'second');").unwrap_err();
+        assert!(error.message.contains("zero or one argument"));
+
+        let error = check_source(
+            "MathException math = new MathException(); \
+             IllegalArgumentException unrelated = (IllegalArgumentException) math;",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("cannot cast"));
+    }
+
+    #[test]
+    fn method_local_names_do_not_resolve_anonymous_or_other_frame_locals() {
+        let error = check_source(
+            "Integer read() { return outside; } \
+             Integer outside = 1; System.debug(read());",
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "unknown variable `outside`");
+
+        let error =
+            check_source("Integer same(Integer value) { Integer VALUE = 2; return value; }")
+                .unwrap_err();
+        assert_eq!(error.message, "duplicate variable `VALUE`");
     }
 }

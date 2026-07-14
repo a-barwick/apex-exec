@@ -108,6 +108,11 @@ impl<'a> Lexer<'a> {
                     "break" => TokenKind::Break,
                     "continue" => TokenKind::Continue,
                     "return" => TokenKind::Return,
+                    "void" => TokenKind::Void,
+                    "try" => TokenKind::Try,
+                    "catch" => TokenKind::Catch,
+                    "finally" => TokenKind::Finally,
+                    "throw" => TokenKind::Throw,
                     "new" => TokenKind::New,
                     _ => TokenKind::Identifier(text.to_owned()),
                 }
@@ -290,5 +295,22 @@ mod tests {
         assert!(kinds.contains(&TokenKind::LeftBracket));
         assert!(kinds.contains(&TokenKind::RightBracket));
         assert!(kinds.contains(&TokenKind::Colon));
+    }
+
+    #[test]
+    fn tokenizes_exception_control_flow_case_insensitively() {
+        let source = "VoId fail() { TrY {} CaTcH (Exception error) {} FiNaLlY {} ThRoW error; }";
+        let kinds: Vec<TokenKind> = Lexer::new(source)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect();
+
+        assert!(kinds.contains(&TokenKind::Try));
+        assert!(kinds.contains(&TokenKind::Catch));
+        assert!(kinds.contains(&TokenKind::Finally));
+        assert!(kinds.contains(&TokenKind::Throw));
+        assert!(kinds.contains(&TokenKind::Void));
     }
 }

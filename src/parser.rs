@@ -1,11 +1,13 @@
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier, MapEntry,
-        PostfixOperator, Program, Statement, TypeName, UnaryOperator,
+        AssignmentTarget, BinaryOperator, CatchClause, CollectionInitializer, Expression,
+        Identifier, MapEntry, MethodDeclaration, Parameter, PostfixOperator, Program, ReturnType,
+        Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     token::{Token, TokenKind},
 };
+use std::cell::Cell;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -18,11 +20,52 @@ impl Parser {
     }
 
     pub fn parse_program(mut self) -> Result<Program, Diagnostic> {
+        let mut methods = Vec::new();
         let mut statements = Vec::new();
         while !self.check(&TokenKind::Eof) {
-            statements.push(self.parse_statement()?);
+            if self.is_method_declaration_start() {
+                methods.push(self.parse_method_declaration()?);
+            } else {
+                statements.push(self.parse_statement()?);
+            }
         }
-        Ok(Program { statements })
+        Ok(Program {
+            methods,
+            statements,
+        })
+    }
+
+    fn parse_method_declaration(&mut self) -> Result<MethodDeclaration, Diagnostic> {
+        let (return_type, start) = self.parse_return_type()?;
+        let name = self.expect_identifier("expected a method name")?;
+        self.expect_simple(TokenKind::LeftParen, "expected `(` after method name")?;
+
+        let mut parameters = Vec::new();
+        if !self.check(&TokenKind::RightParen) {
+            loop {
+                let (ty, type_span) = self.parse_type_name()?;
+                let name = self.expect_identifier("expected a parameter name")?;
+                let span = type_span.merge(name.span);
+                parameters.push(Parameter { ty, name, span });
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        self.expect_simple(
+            TokenKind::RightParen,
+            "expected `)` after method parameters",
+        )?;
+        let body = self.parse_block()?;
+        let span = start.merge(body.span());
+        Ok(MethodDeclaration {
+            return_type,
+            name,
+            parameters,
+            body,
+            span,
+        })
     }
 
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
@@ -34,6 +77,8 @@ impl Parser {
             TokenKind::For => self.parse_for(),
             TokenKind::Break => self.parse_break(),
             TokenKind::Continue => self.parse_continue(),
+            TokenKind::Try => self.parse_try(),
+            TokenKind::Throw => self.parse_throw(),
             TokenKind::Return => self.parse_return(),
             _ if self.is_declaration_start() => self.parse_variable_declaration(true),
             _ => self.parse_expression_statement(true),
@@ -222,6 +267,62 @@ impl Parser {
         let start = self.expect_simple(TokenKind::Continue, "expected `continue`")?;
         let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after `continue`")?;
         Ok(Statement::Continue {
+            span: start.span.merge(end.span),
+        })
+    }
+
+    fn parse_try(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect_simple(TokenKind::Try, "expected `try`")?;
+        let try_block = Box::new(self.parse_block()?);
+        let mut catches = Vec::new();
+
+        while self.check(&TokenKind::Catch) {
+            let catch_start = self.advance();
+            self.expect_simple(TokenKind::LeftParen, "expected `(` after `catch`")?;
+            let (exception_type, _) = self.parse_type_name()?;
+            let name = self.expect_identifier("expected a catch variable name")?;
+            self.expect_simple(TokenKind::RightParen, "expected `)` after catch variable")?;
+            let body = self.parse_block()?;
+            let span = catch_start.span.merge(body.span());
+            catches.push(CatchClause {
+                exception_type,
+                name,
+                body,
+                span,
+            });
+        }
+
+        let finally_block = if self.check(&TokenKind::Finally) {
+            self.advance();
+            Some(Box::new(self.parse_block()?))
+        } else {
+            None
+        };
+        if catches.is_empty() && finally_block.is_none() {
+            return Err(Diagnostic::new(
+                "expected at least one `catch` or a `finally` after try block",
+                self.current().span,
+            ));
+        }
+
+        let end = finally_block.as_deref().map_or_else(
+            || catches.last().expect("catch is present").body.span(),
+            Statement::span,
+        );
+        Ok(Statement::Try {
+            try_block,
+            catches,
+            finally_block,
+            span: start.span.merge(end),
+        })
+    }
+
+    fn parse_throw(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect_simple(TokenKind::Throw, "expected `throw`")?;
+        let value = self.parse_expression()?;
+        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after `throw`")?;
+        Ok(Statement::Throw {
+            value,
             span: start.span.merge(end.span),
         })
     }
@@ -443,10 +544,33 @@ impl Parser {
             TokenKind::IntegerLiteral(value) => Expression::IntegerLiteral(value, token.span),
             TokenKind::Null => Expression::NullLiteral(token.span),
             TokenKind::Identifier(spelling) => {
-                Expression::Variable(Identifier::new(spelling, token.span))
+                let name = Identifier::new(spelling, token.span);
+                self.advance();
+                if self.check(&TokenKind::LeftParen) {
+                    let (arguments, end) = self.parse_argument_list()?;
+                    return Ok(Expression::FunctionCall {
+                        name,
+                        arguments,
+                        resolved_method: Cell::new(None),
+                        span: token.span.merge(end),
+                    });
+                }
+                return Ok(Expression::Variable(name));
             }
             TokenKind::New => return self.parse_new_expression(),
             TokenKind::LeftParen => {
+                if self.is_cast_start() {
+                    let start = self.advance();
+                    let (ty, _) = self.parse_type_name()?;
+                    self.expect_simple(TokenKind::RightParen, "expected `)` after cast type")?;
+                    let expression = self.parse_unary()?;
+                    let span = start.span.merge(expression.span());
+                    return Ok(Expression::Cast {
+                        ty,
+                        expression: Box::new(expression),
+                        span,
+                    });
+                }
                 self.advance();
                 let expression = self.parse_expression()?;
                 self.expect_simple(TokenKind::RightParen, "expected `)` after expression")?;
@@ -461,6 +585,21 @@ impl Parser {
     fn parse_new_expression(&mut self) -> Result<Expression, Diagnostic> {
         let start = self.expect_simple(TokenKind::New, "expected `new`")?;
         let (mut ty, _) = self.parse_base_type_name()?;
+
+        if ty.is_exception() {
+            if !self.check(&TokenKind::LeftParen) {
+                return Err(Diagnostic::new(
+                    "expected `(` after exception type",
+                    self.current().span,
+                ));
+            }
+            let (arguments, end) = self.parse_argument_list()?;
+            return Ok(Expression::NewException {
+                exception_type: ty,
+                arguments,
+                span: start.span.merge(end),
+            });
+        }
 
         let (initializer, end) = if self.check(&TokenKind::LeftBracket) {
             self.advance();
@@ -575,12 +714,18 @@ impl Parser {
         Ok((ty, span))
     }
 
+    fn parse_return_type(&mut self) -> Result<(ReturnType, crate::span::Span), Diagnostic> {
+        if self.check(&TokenKind::Void) {
+            let token = self.advance();
+            return Ok((ReturnType::Void, token.span));
+        }
+        let (ty, span) = self.parse_type_name()?;
+        Ok((ReturnType::Value(ty), span))
+    }
+
     fn parse_base_type_name(&mut self) -> Result<(TypeName, crate::span::Span), Diagnostic> {
         let identifier = self.expect_identifier("expected a type name")?;
         match identifier.canonical.as_str() {
-            "string" => Ok((TypeName::String, identifier.span)),
-            "boolean" => Ok((TypeName::Boolean, identifier.span)),
-            "integer" => Ok((TypeName::Integer, identifier.span)),
             "list" | "set" => {
                 self.expect_simple(TokenKind::Less, "expected `<` after collection type name")?;
                 let (element, _) = self.parse_type_name()?;
@@ -607,6 +752,10 @@ impl Parser {
                     identifier.span.merge(end.span),
                 ))
             }
+            _ if TypeName::from_apex_name(&identifier.canonical).is_some() => Ok((
+                TypeName::from_apex_name(&identifier.canonical).expect("type presence was checked"),
+                identifier.span,
+            )),
             _ => Err(Diagnostic::new(
                 format!("unsupported type `{}`", identifier.spelling),
                 identifier.span,
@@ -617,6 +766,21 @@ impl Parser {
     fn is_declaration_start(&self) -> bool {
         self.type_end_at(self.cursor)
             .is_some_and(|end| matches!(self.token_at(end).kind, TokenKind::Identifier(_)))
+    }
+
+    fn is_method_declaration_start(&self) -> bool {
+        self.return_type_end_at(self.cursor).is_some_and(|end| {
+            matches!(self.token_at(end).kind, TokenKind::Identifier(_))
+                && matches!(self.token_at(end + 1).kind, TokenKind::LeftParen)
+        })
+    }
+
+    fn is_cast_start(&self) -> bool {
+        if !self.check(&TokenKind::LeftParen) {
+            return false;
+        }
+        self.type_end_at(self.cursor + 1)
+            .is_some_and(|end| matches!(self.token_at(end).kind, TokenKind::RightParen))
     }
 
     fn is_for_each_start(&self) -> bool {
@@ -633,7 +797,18 @@ impl Parser {
         let canonical = spelling.to_ascii_lowercase();
         let mut end = cursor + 1;
         match canonical.as_str() {
-            "string" | "boolean" | "integer" => {}
+            "string"
+            | "boolean"
+            | "integer"
+            | "object"
+            | "exception"
+            | "nullpointerexception"
+            | "listexception"
+            | "mathexception"
+            | "typeexception"
+            | "stringexception"
+            | "illegalargumentexception"
+            | "finalexception" => {}
             "list" | "set" => {
                 if !matches!(self.token_at(end).kind, TokenKind::Less) {
                     return None;
@@ -666,6 +841,14 @@ impl Parser {
             end += 2;
         }
         Some(end)
+    }
+
+    fn return_type_end_at(&self, cursor: usize) -> Option<usize> {
+        if matches!(&self.token_at(cursor).kind, TokenKind::Void) {
+            Some(cursor + 1)
+        } else {
+            self.type_end_at(cursor)
+        }
     }
 
     fn expect_identifier(&mut self, message: &str) -> Result<Identifier, Diagnostic> {
@@ -1038,5 +1221,214 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.message, "only one array suffix is supported");
+    }
+
+    #[test]
+    fn parses_methods_separately_from_executable_statements() {
+        let source = "Integer add(Integer left, Integer right) { return left + right; } \
+                      void report(String value) { System.debug(value); } \
+                      Integer total = add(1, 2);";
+        let program = parse(source);
+
+        assert_eq!(program.methods.len(), 2);
+        assert_eq!(program.statements.len(), 1);
+
+        let add = &program.methods[0];
+        assert_eq!(add.return_type, ReturnType::Value(TypeName::Integer));
+        assert_eq!(add.name.canonical, "add");
+        assert_eq!(add.parameters.len(), 2);
+        assert_eq!(add.parameters[0].ty, TypeName::Integer);
+        assert_eq!(add.parameters[0].name.canonical, "left");
+        assert!(matches!(
+            add.body,
+            Statement::Block {
+                ref statements,
+                ..
+            } if matches!(statements.as_slice(), [Statement::Return { value: Some(_), .. }])
+        ));
+
+        let report = &program.methods[1];
+        assert_eq!(report.return_type, ReturnType::Void);
+        assert_eq!(report.parameters[0].ty, TypeName::String);
+        assert_eq!(
+            &source[report.span.start..report.span.end],
+            "void report(String value) { System.debug(value); }"
+        );
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[0] else {
+            panic!("expected executable declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::FunctionCall {
+                name,
+                arguments,
+                resolved_method,
+                ..
+            } if name.canonical == "add"
+                && arguments.len() == 2
+                && resolved_method.get().is_none()
+        ));
+    }
+
+    #[test]
+    fn parses_function_calls_as_postfix_receivers() {
+        let program =
+            parse("List<String> make() { return new List<String>(); } make().add('value');");
+        let Statement::Expression { expression, .. } = &program.statements[0] else {
+            panic!("expected call statement");
+        };
+        assert!(matches!(
+            expression,
+            Expression::MethodCall { receiver, method, .. }
+                if method.canonical == "add"
+                    && matches!(receiver.as_ref(), Expression::FunctionCall { name, .. } if name.canonical == "make")
+        ));
+    }
+
+    #[test]
+    fn parses_exception_construction_throw_and_handlers() {
+        let source = "try { throw new IllegalArgumentException('bad input'); } \
+                      catch (IllegalArgumentException problem) { throw problem; } \
+                      catch (Exception ignored) {} \
+                      finally { System.debug('cleanup'); }";
+        let program = parse(source);
+        let Statement::Try {
+            try_block,
+            catches,
+            finally_block,
+            ..
+        } = &program.statements[0]
+        else {
+            panic!("expected try statement");
+        };
+
+        assert!(matches!(
+            try_block.as_ref(),
+            Statement::Block { statements, .. }
+                if matches!(
+                    statements.as_slice(),
+                    [Statement::Throw {
+                        value: Expression::NewException {
+                            exception_type: TypeName::IllegalArgumentException,
+                            arguments,
+                            ..
+                        },
+                        ..
+                    }] if matches!(arguments.as_slice(), [Expression::StringLiteral(value, _)] if value == "bad input")
+                )
+        ));
+        assert_eq!(catches.len(), 2);
+        assert_eq!(
+            catches[0].exception_type,
+            TypeName::IllegalArgumentException
+        );
+        assert_eq!(catches[0].name.canonical, "problem");
+        assert_eq!(catches[1].exception_type, TypeName::Exception);
+        assert!(finally_block.is_some());
+    }
+
+    #[test]
+    fn parses_try_finally_without_a_catch() {
+        let program = parse("try { System.debug('work'); } finally { System.debug('done'); }");
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Try {
+                catches,
+                finally_block: Some(_),
+                ..
+            } if catches.is_empty()
+        ));
+    }
+
+    #[test]
+    fn requires_a_catch_or_finally_after_try() {
+        let error = Parser::new(Lexer::new("try {}").tokenize().unwrap())
+            .parse_program()
+            .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "expected at least one `catch` or a `finally` after try block"
+        );
+    }
+
+    #[test]
+    fn preserves_non_exception_catch_types_for_semantic_validation() {
+        let program = parse("try {} catch (String problem) {}");
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Try { catches, .. }
+                if catches[0].exception_type == TypeName::String
+        ));
+    }
+
+    #[test]
+    fn preserves_exception_constructor_arguments_for_semantic_validation() {
+        let program = parse("throw new Exception('first', 'second');");
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Throw {
+                value: Expression::NewException { arguments, .. },
+                ..
+            } if arguments.len() == 2
+        ));
+    }
+
+    #[test]
+    fn distinguishes_casts_from_grouped_expressions() {
+        let program = parse(
+            "Object boxed = 1; Integer casted = (Integer) boxed; \
+             Integer grouped = (1 + 2) * 3;",
+        );
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[1] else {
+            panic!("expected cast declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::Cast {
+                ty: TypeName::Integer,
+                expression,
+                ..
+            } if matches!(expression.as_ref(), Expression::Variable(name) if name.canonical == "boxed")
+        ));
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[2] else {
+            panic!("expected grouped declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::Binary {
+                left,
+                operator: BinaryOperator::Multiply,
+                ..
+            } if matches!(left.as_ref(), Expression::Binary { operator: BinaryOperator::Add, .. })
+        ));
+    }
+
+    #[test]
+    fn supports_object_and_core_exception_type_names_case_insensitively() {
+        let program = parse(
+            "oBjEcT identity(oBjEcT value) { return value; } \
+             throw new nUlLpOiNtErExCePtIoN();",
+        );
+
+        assert_eq!(
+            program.methods[0].return_type,
+            ReturnType::Value(TypeName::Object)
+        );
+        assert_eq!(program.methods[0].parameters[0].ty, TypeName::Object);
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Throw {
+                value: Expression::NewException {
+                    exception_type: TypeName::NullPointerException,
+                    arguments,
+                    ..
+                },
+                ..
+            } if arguments.is_empty()
+        ));
     }
 }

@@ -8,10 +8,11 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first three milestones support primitive expressions, assignment, lexical
-scopes, common control flow, and typed `List`, `Set`, `Map`, and one-dimensional
-array syntax over `String`, `Boolean`, `Integer`, `null`, and nested collection
-types. Apex identifiers and built-in method names are case-insensitive.
+The first four milestones support primitive expressions, assignment, lexical
+scopes, common control flow, typed collections, single-file user-defined
+methods, recursion, overloads, casts, catchable core exceptions, `finally`, and
+source-mapped runtime call stacks. Apex identifiers and method names are
+case-insensitive.
 
 ```console
 $ cargo run -- run examples/hello.apex
@@ -26,6 +27,13 @@ The unchanged M3 collection acceptance program is also executable:
 cargo run -- run examples/collections.apex
 ```
 
+The M4 core sample combines recursion, overloads, runtime casts, typed catches,
+and `finally`:
+
+```bash
+cargo run -- run examples/methods-exceptions.apex
+```
+
 Compiler stages can be inspected independently:
 
 ```console
@@ -35,9 +43,10 @@ $ cargo run -- check examples/hello.apex
 $ cargo run -- run examples/hello.apex
 ```
 
-This is an early implementation. The available method calls are a fixed core
-standard-library subset; user-defined methods, exceptions, classes, SOQL,
-SOSL, and DML are not implemented yet.
+This is an early implementation. User-defined methods currently use an interim
+top-level single-file form, and the available standard-library and exception
+surfaces are deliberately curated. Classes, projects, SOQL, SOSL, and DML are
+not implemented yet.
 
 ## Project documentation
 

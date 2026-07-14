@@ -34,3 +34,4 @@ history.
 - [0002 — Canonicalize identifiers for case-insensitive lookup](0002-case-insensitive-identifiers.md)
 - [0003 — Isolate platform behavior behind host interfaces](0003-platform-host-boundary.md)
 - [0004 — Store collections by interpreter-owned identity](0004-arena-backed-collection-identity.md)
+- [0005 — Record checked calls and unify abrupt runtime flow](0005-checked-calls-and-runtime-unwinding.md)
