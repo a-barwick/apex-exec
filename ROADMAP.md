@@ -32,7 +32,7 @@ prints `Hello, world!` and all compiler stages can inspect the program.
 
 ## M2 — Expressions and control flow
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -67,7 +67,7 @@ operand types.
 
 ## M3 — Collections and core standard library
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

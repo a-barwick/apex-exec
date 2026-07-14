@@ -63,9 +63,27 @@ impl<'a> Lexer<'a> {
         let ch = self.bump().expect("lexer called before EOF");
         let kind = match ch {
             '.' => TokenKind::Dot,
+            '=' if self.take('=') => TokenKind::EqualEqual,
             '=' => TokenKind::Equal,
+            '!' if self.take('=') => TokenKind::BangEqual,
+            '!' => TokenKind::Bang,
+            '<' if self.take('=') => TokenKind::LessEqual,
+            '<' => TokenKind::Less,
+            '>' if self.take('=') => TokenKind::GreaterEqual,
+            '>' => TokenKind::Greater,
+            '+' if self.take('+') => TokenKind::PlusPlus,
+            '+' => TokenKind::Plus,
+            '-' if self.take('-') => TokenKind::MinusMinus,
+            '-' => TokenKind::Minus,
+            '*' => TokenKind::Star,
+            '/' => TokenKind::Slash,
+            '%' => TokenKind::Percent,
+            '&' if self.take('&') => TokenKind::AndAnd,
+            '|' if self.take('|') => TokenKind::OrOr,
             '(' => TokenKind::LeftParen,
             ')' => TokenKind::RightParen,
+            '{' => TokenKind::LeftBrace,
+            '}' => TokenKind::RightBrace,
             ';' => TokenKind::Semicolon,
             '\'' => return self.string_token(start),
             ch if is_identifier_start(ch) => {
@@ -76,6 +94,15 @@ impl<'a> Lexer<'a> {
                 match text.to_ascii_lowercase().as_str() {
                     "true" => TokenKind::BooleanLiteral(true),
                     "false" => TokenKind::BooleanLiteral(false),
+                    "null" => TokenKind::Null,
+                    "if" => TokenKind::If,
+                    "else" => TokenKind::Else,
+                    "for" => TokenKind::For,
+                    "while" => TokenKind::While,
+                    "do" => TokenKind::Do,
+                    "break" => TokenKind::Break,
+                    "continue" => TokenKind::Continue,
+                    "return" => TokenKind::Return,
                     _ => TokenKind::Identifier(text.to_owned()),
                 }
             }
@@ -151,6 +178,15 @@ impl<'a> Lexer<'a> {
         self.remaining().chars().next()
     }
 
+    fn take(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
     fn bump(&mut self) -> Option<char> {
         let ch = self.peek()?;
         self.cursor += ch.len_utf8();
@@ -164,4 +200,71 @@ fn is_identifier_start(ch: char) -> bool {
 
 fn is_identifier_continue(ch: char) -> bool {
     is_identifier_start(ch) || ch.is_ascii_digit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenizes_control_flow_and_operator_families_case_insensitively() {
+        let source = "IF (count++ <= 10 && !FALSE) { ConTinue; }";
+        let kinds: Vec<TokenKind> = Lexer::new(source)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect();
+
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::If,
+                TokenKind::LeftParen,
+                TokenKind::Identifier("count".to_owned()),
+                TokenKind::PlusPlus,
+                TokenKind::LessEqual,
+                TokenKind::IntegerLiteral(10),
+                TokenKind::AndAnd,
+                TokenKind::Bang,
+                TokenKind::BooleanLiteral(false),
+                TokenKind::RightParen,
+                TokenKind::LeftBrace,
+                TokenKind::Continue,
+                TokenKind::Semicolon,
+                TokenKind::RightBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn distinguishes_division_from_comments_and_preserves_token_spans() {
+        let source = "8 / 2 /* ignored / */ // ignored\nvalue--;";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+
+        assert_eq!(tokens[1].kind, TokenKind::Slash);
+        assert_eq!(&source[tokens[1].span.start..tokens[1].span.end], "/");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == TokenKind::MinusMinus)
+        );
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| token.kind == TokenKind::Slash)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn reports_the_full_unterminated_block_comment_span() {
+        let source = "Integer value = 1; /* never closed";
+        let error = Lexer::new(source).tokenize().unwrap_err();
+
+        assert_eq!(error.message, "unterminated block comment");
+        assert_eq!(&source[error.span.start..error.span.end], "/* never closed");
+    }
 }

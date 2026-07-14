@@ -2,7 +2,7 @@
 
 ## Status
 
-Straight-line primitive execution is implemented. Control flow, calls,
+Primitive expressions, lexical scopes, and control flow are implemented. Calls,
 exceptions, transactions, and platform effects are planned.
 
 ## Program execution
@@ -23,11 +23,20 @@ guarded defensively by the runtime.
 value to plain text and appends one output line. The CLI prints each line to
 stdout without Salesforce log metadata.
 
+## Expressions
+
+**Implemented.** Arithmetic uses checked `i64` operations and reports division,
+remainder, and overflow failures. `&&` and `||` short-circuit. Assignment is
+right-associative. Prefix and postfix increment/decrement mutate `Integer`
+variables while returning the Apex-shaped new or prior value respectively.
+
 ## Scope and control flow
 
-**Planned for M2.** Blocks introduce lexical scopes. Loop-local variables must
-not escape their declaring scope. `break` and `continue` target the nearest
-enclosing loop. `return` unwinds the current callable once methods exist.
+**Implemented.** Blocks introduce lexical scopes. Loop-local variables do not
+escape their declaring scope. `if`/`else`, traditional `for`, `while`, and
+`do`/`while` execute directly over checked Boolean conditions. `break` and
+`continue` target the nearest enclosing loop. A value-less `return` terminates
+anonymous execution; method return values are planned for M4.
 
 ## Exceptions
 

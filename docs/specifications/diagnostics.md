@@ -2,8 +2,9 @@
 
 ## Status
 
-Single-span lexer, parser, and semantic diagnostics are implemented. Structured
-categories, notes, multiple labels, recovery, and runtime stacks are planned.
+Single-span lexer, parser, semantic, and primitive runtime diagnostics are
+implemented. Structured categories, notes, multiple labels, recovery, and
+runtime stacks are planned.
 
 ## Requirements
 

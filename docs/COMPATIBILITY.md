@@ -25,16 +25,21 @@ conformance harness is a later milestone.
 | `Boolean` | Yes | Yes | Yes | Compatible | `true` and `false` are case-insensitive |
 | `Integer` | Yes | Yes | Yes | Simplified | Stored as Rust `i64`; Apex range/overflow pending |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
-| Assignment | Yes | Yes | Yes | Compatible | Primitive exact-type assignment only |
+| Assignment | Yes | Yes | Yes | Compatible | Exact primitive types or `null`; chained assignment is right-associative |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
 | Line/block comments | Yes | N/A | N/A | Compatible | Unterminated block comments are errors |
-| `System.debug(variable)` | Yes | Yes | Yes | Simplified | Plain stdout; variable arguments only |
-| Arithmetic and operators | No | No | No | Planned | M2 |
-| Nested blocks and scopes | No | No | No | Planned | M2 |
-| Conditional statements | No | No | No | Planned | M2 |
-| Loops and loop control | No | No | No | Planned | M2 |
-| `null` | No | No | No | Planned | M2 |
+| `System.debug(expression)` | Yes | Yes | Yes | Simplified | Plain stdout without Salesforce log metadata |
+| Integer arithmetic | Yes | Yes | Yes | Simplified | `+`, `-`, `*`, `/`, `%`, unary signs; checked `i64` runtime behavior |
+| Comparison and equality | Yes | Yes | Yes | Compatible | Integer ordering; same-type and null equality |
+| Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
+| String concatenation | Yes | Yes | Yes | Compatible | `+` converts supported primitive and null values to text |
+| Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables |
+| Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
+| Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
+| Loops and loop control | Yes | Yes | Yes | Compatible | Traditional `for`, `while`, `do`/`while`, `break`, and `continue` |
+| Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution |
+| `null` | Yes | Yes | Yes | Simplified | Assignable to supported primitives; selected runtime null behavior implemented |
 | `List<T>` | No | No | No | Planned | M3 |
 | `Set<T>` | No | No | No | Planned | M3 |
 | `Map<K,V>` | No | No | No | Planned | M3 |

@@ -2,8 +2,8 @@
 
 ## Status
 
-Primitive exact-type checking is implemented. Conversions, nullability,
-generics, classes, and overload resolution are planned.
+Primitive expression checking and null assignment are implemented. General
+conversions, generic types, classes, and overload resolution are planned.
 
 ## Names
 
@@ -24,8 +24,16 @@ case-insensitive.
 
 ### `Integer`
 
-**Implemented, simplified.** Values currently use Rust `i64`. Apex-compatible
-range, overflow, and arithmetic behavior are planned.
+**Implemented, simplified.** Values currently use Rust `i64`. Arithmetic is
+checked and produces a runtime diagnostic on overflow, but Apex-compatible
+range and overflow behavior are planned.
+
+### `null`
+
+**Implemented, simplified.** `null` can initialize or be assigned to each
+currently supported primitive type. Equality and string concatenation handle
+null values; operations requiring a concrete Integer or Boolean report a
+runtime diagnostic when a nullable variable contains `null`.
 
 ## Declarations
 
@@ -39,9 +47,19 @@ Uninitialized declarations are rejected in the current milestone.
 
 ## Assignment
 
-**Implemented, limited.** The initializer or assigned expression must currently
-have exactly the declared primitive type. Variables must be declared before
-use. Duplicate declarations in the same current environment are rejected.
+**Implemented.** The initializer or assigned expression must have the declared
+primitive type or be `null`. Variables must be declared before use. Duplicate
+declarations in the same lexical scope are rejected, while nested scopes may
+shadow an outer name.
+
+## Operators
+
+**Implemented for M2.** Integer arithmetic and ordering require Integer
+operands. Equality accepts matching primitive types or `null`. Boolean
+operators require Boolean operands and short-circuit at runtime. `+` performs
+Integer addition unless either operand is a String, in which case supported
+primitive and null values are converted for concatenation. Increment and
+decrement require a mutable Integer variable.
 
 ## Planned rules
 
