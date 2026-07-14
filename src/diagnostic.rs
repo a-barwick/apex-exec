@@ -2,9 +2,17 @@ use crate::span::Span;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StackFrame {
+    pub method: String,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub message: String,
     pub span: Span,
+    pub exception_type: Option<String>,
+    pub stack_trace: Vec<StackFrame>,
 }
 
 impl Diagnostic {
@@ -12,6 +20,30 @@ impl Diagnostic {
         Self {
             message: message.into(),
             span,
+            exception_type: None,
+            stack_trace: Vec::new(),
+        }
+    }
+
+    pub fn runtime_exception(
+        exception_type: impl Into<String>,
+        message: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            span,
+            exception_type: Some(exception_type.into()),
+            stack_trace: Vec::new(),
+        }
+    }
+
+    pub fn push_frame(&mut self, method: impl Into<String>, span: Span) {
+        if self.exception_type.is_some() {
+            self.stack_trace.push(StackFrame {
+                method: method.into(),
+                span,
+            });
         }
     }
 
@@ -33,9 +65,13 @@ impl Diagnostic {
             .max(1);
         let source_line = &source[line_start..line_end];
 
-        format!(
+        let heading = self.exception_type.as_ref().map_or_else(
+            || self.message.clone(),
+            |exception_type| format!("{exception_type}: {}", self.message),
+        );
+        let mut rendered = format!(
             "error: {}\n --> {}:{}:{}\n  |\n{} | {}\n  | {}{}",
-            self.message,
+            heading,
             file_name,
             line,
             column,
@@ -43,8 +79,33 @@ impl Diagnostic {
             source_line,
             " ".repeat(column - 1),
             "^".repeat(width),
-        )
+        );
+
+        if !self.stack_trace.is_empty() {
+            rendered.push_str("\nApex stack trace:");
+            for frame in &self.stack_trace {
+                let (line, column) = source_location(source, frame.span.start);
+                rendered.push_str(&format!(
+                    "\n  at {} ({}:{}:{})",
+                    frame.method, file_name, line, column
+                ));
+            }
+        }
+
+        rendered
     }
+}
+
+fn source_location(source: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(source.len());
+    let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line = source[..offset]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    let column = source[line_start..offset].chars().count() + 1;
+    (line, column)
 }
 
 impl fmt::Display for Diagnostic {
@@ -78,5 +139,23 @@ mod tests {
         let diagnostic = Diagnostic::new("example", Span::new(start, start + 5));
 
         assert!(diagnostic.render("unicode.apex", source).contains(":1:12"));
+    }
+
+    #[test]
+    fn renders_runtime_exception_types_and_source_mapped_frames() {
+        let source = "Integer fail() { return 1 / 0; }\nInteger value = fail();";
+        let origin = source.find('/').unwrap();
+        let call = source.rfind("fail").unwrap();
+        let mut diagnostic = Diagnostic::runtime_exception(
+            "MathException",
+            "division by zero",
+            Span::new(origin, origin + 1),
+        );
+        diagnostic.push_frame("fail", Span::new(call, call + 4));
+
+        let rendered = diagnostic.render("script.apex", source);
+        assert!(rendered.contains("error: MathException: division by zero"));
+        assert!(rendered.contains("Apex stack trace:"));
+        assert!(rendered.contains("at fail (script.apex:2:17)"));
     }
 }
