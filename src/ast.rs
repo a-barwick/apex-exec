@@ -17,10 +17,6 @@ pub enum Statement {
         expression: Expression,
         span: Span,
     },
-    Debug {
-        expression: Expression,
-        span: Span,
-    },
     Block {
         statements: Vec<Statement>,
         span: Span,
@@ -48,6 +44,13 @@ pub enum Statement {
         body: Box<Statement>,
         span: Span,
     },
+    ForEach {
+        element_type: TypeName,
+        name: Identifier,
+        iterable: Expression,
+        body: Box<Statement>,
+        span: Span,
+    },
     Break {
         span: Span,
     },
@@ -68,8 +71,24 @@ pub enum Expression {
     NullLiteral(Span),
     Variable(Identifier),
     Assignment {
-        target: Identifier,
+        target: AssignmentTarget,
         value: Box<Expression>,
+        span: Span,
+    },
+    NewCollection {
+        ty: TypeName,
+        initializer: CollectionInitializer,
+        span: Span,
+    },
+    Index {
+        collection: Box<Expression>,
+        index: Box<Expression>,
+        span: Span,
+    },
+    MethodCall {
+        receiver: Box<Expression>,
+        method: Identifier,
+        arguments: Vec<Expression>,
         span: Span,
     },
     Unary {
@@ -101,12 +120,49 @@ impl Expression {
             | Self::IntegerLiteral(_, span)
             | Self::NullLiteral(span)
             | Self::Assignment { span, .. }
+            | Self::NewCollection { span, .. }
+            | Self::Index { span, .. }
+            | Self::MethodCall { span, .. }
             | Self::Unary { span, .. }
             | Self::Postfix { span, .. }
             | Self::Binary { span, .. } => *span,
             Self::Variable(identifier) => identifier.span,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssignmentTarget {
+    Variable(Identifier),
+    Index {
+        collection: Box<Expression>,
+        index: Box<Expression>,
+        span: Span,
+    },
+}
+
+impl AssignmentTarget {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Variable(identifier) => identifier.span,
+            Self::Index { span, .. } => *span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollectionInitializer {
+    Arguments(Vec<Expression>),
+    Elements(Vec<Expression>),
+    MapEntries(Vec<MapEntry>),
+    SizedArray(Box<Expression>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapEntry {
+    pub key: Expression,
+    pub value: Expression,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,11 +215,14 @@ impl Identifier {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeName {
     String,
     Boolean,
     Integer,
+    List(Box<TypeName>),
+    Set(Box<TypeName>),
+    Map(Box<TypeName>, Box<TypeName>),
 }
 
 impl TypeName {
@@ -176,11 +235,16 @@ impl TypeName {
         }
     }
 
-    pub const fn apex_name(self) -> &'static str {
+    pub fn apex_name(&self) -> String {
         match self {
-            Self::String => "String",
-            Self::Boolean => "Boolean",
-            Self::Integer => "Integer",
+            Self::String => "String".to_owned(),
+            Self::Boolean => "Boolean".to_owned(),
+            Self::Integer => "Integer".to_owned(),
+            Self::List(element) => format!("List<{}>", element.apex_name()),
+            Self::Set(element) => format!("Set<{}>", element.apex_name()),
+            Self::Map(key, value) => {
+                format!("Map<{},{}>", key.apex_name(), value.apex_name())
+            }
         }
     }
 }
@@ -190,12 +254,12 @@ impl Statement {
         match self {
             Self::VariableDeclaration { span, .. }
             | Self::Expression { span, .. }
-            | Self::Debug { span, .. }
             | Self::Block { span, .. }
             | Self::If { span, .. }
             | Self::While { span, .. }
             | Self::DoWhile { span, .. }
             | Self::For { span, .. }
+            | Self::ForEach { span, .. }
             | Self::Break { span }
             | Self::Continue { span }
             | Self::Return { span, .. } => *span,

@@ -221,7 +221,7 @@ fn rejects_invalid_increment_and_statement_expressions() {
     let error = check("1 + 2;").unwrap_err();
     assert_eq!(
         error.message,
-        "only assignment and increment/decrement expressions may be statements"
+        "only assignment, method-call, and increment/decrement expressions may be statements"
     );
 }
 

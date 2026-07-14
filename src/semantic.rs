@@ -1,6 +1,7 @@
 use crate::{
     ast::{
-        BinaryOperator, Expression, PostfixOperator, Program, Statement, TypeName, UnaryOperator,
+        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier,
+        PostfixOperator, Program, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -46,21 +47,18 @@ impl Checker {
                     ));
                 }
                 let initializer_type = self.expression_type(initializer)?;
-                self.require_assignable(*ty, initializer_type, initializer.span())?;
-                self.current_scope_mut().insert(name.canonical.clone(), *ty);
+                require_assignable(ty, &initializer_type, initializer.span())?;
+                self.current_scope_mut()
+                    .insert(name.canonical.clone(), ty.clone());
                 Ok(())
             }
             Statement::Expression { expression, .. } => {
                 if !is_statement_expression(expression) {
                     return Err(Diagnostic::new(
-                        "only assignment and increment/decrement expressions may be statements",
+                        "only assignment, method-call, and increment/decrement expressions may be statements",
                         expression.span(),
                     ));
                 }
-                self.expression_type(expression)?;
-                Ok(())
-            }
-            Statement::Debug { expression, .. } => {
                 self.expression_type(expression)?;
                 Ok(())
             }
@@ -116,6 +114,39 @@ impl Checker {
                     Ok(())
                 })
             }),
+            Statement::ForEach {
+                element_type,
+                name,
+                iterable,
+                body,
+                ..
+            } => {
+                let iterable_type = self.expression_type(iterable)?;
+                let actual_element_type = match iterable_type {
+                    ExpressionType::Value(TypeName::List(element))
+                    | ExpressionType::Value(TypeName::Set(element)) => *element,
+                    other => {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "enhanced for-loop requires List or Set, found {}",
+                                other.name()
+                            ),
+                            iterable.span(),
+                        ));
+                    }
+                };
+                require_assignable(
+                    element_type,
+                    &ExpressionType::Value(actual_element_type),
+                    iterable.span(),
+                )?;
+                self.with_scope(|checker| {
+                    checker
+                        .current_scope_mut()
+                        .insert(name.canonical.clone(), element_type.clone());
+                    checker.with_loop(|checker| checker.check_statement(body))
+                })
+            }
             Statement::Break { span } => {
                 if self.loop_depth == 0 {
                     Err(Diagnostic::new(
@@ -151,34 +182,35 @@ impl Checker {
 
     fn expression_type(&mut self, expression: &Expression) -> Result<ExpressionType, Diagnostic> {
         match expression {
-            Expression::StringLiteral(..) => Ok(ExpressionType::Primitive(TypeName::String)),
-            Expression::BooleanLiteral(..) => Ok(ExpressionType::Primitive(TypeName::Boolean)),
-            Expression::IntegerLiteral(..) => Ok(ExpressionType::Primitive(TypeName::Integer)),
+            Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
+            Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
+            Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
             Expression::NullLiteral(..) => Ok(ExpressionType::Null),
             Expression::Variable(identifier) => self
                 .lookup(&identifier.canonical)
-                .map(ExpressionType::Primitive)
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown variable `{}`", identifier.spelling),
-                        identifier.span,
-                    )
-                }),
-            Expression::Assignment {
-                target,
-                value,
-                span: _,
-            } => {
-                let expected = self.lookup(&target.canonical).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown variable `{}`", target.spelling),
-                        target.span,
-                    )
-                })?;
+                .cloned()
+                .map(ExpressionType::Value)
+                .ok_or_else(|| unknown_variable(identifier)),
+            Expression::Assignment { target, value, .. } => {
+                let expected = self.assignment_target_type(target)?;
                 let actual = self.expression_type(value)?;
-                self.require_assignable(expected, actual, value.span())?;
-                Ok(ExpressionType::Primitive(expected))
+                require_assignable(&expected, &actual, value.span())?;
+                Ok(ExpressionType::Value(expected))
             }
+            Expression::NewCollection {
+                ty, initializer, ..
+            } => self.new_collection_type(ty, initializer),
+            Expression::Index {
+                collection, index, ..
+            } => self
+                .index_type(collection, index)
+                .map(ExpressionType::Value),
+            Expression::MethodCall {
+                receiver,
+                method,
+                arguments,
+                ..
+            } => self.method_call_type(receiver, method, arguments),
             Expression::Unary {
                 operator,
                 operand,
@@ -201,6 +233,870 @@ impl Checker {
         }
     }
 
+    fn new_collection_type(
+        &mut self,
+        ty: &TypeName,
+        initializer: &CollectionInitializer,
+    ) -> Result<ExpressionType, Diagnostic> {
+        match initializer {
+            CollectionInitializer::Arguments(arguments) => {
+                self.check_collection_constructor(ty, arguments)?;
+            }
+            CollectionInitializer::Elements(elements) => {
+                let element_type = match ty {
+                    TypeName::List(element) | TypeName::Set(element) => element.as_ref(),
+                    _ => {
+                        return Err(Diagnostic::new(
+                            format!("{} does not support an element initializer", ty.apex_name()),
+                            elements.first().map_or(Span::new(0, 0), Expression::span),
+                        ));
+                    }
+                };
+                for element in elements {
+                    let actual = self.expression_type(element)?;
+                    require_assignable(element_type, &actual, element.span())?;
+                }
+            }
+            CollectionInitializer::MapEntries(entries) => {
+                let TypeName::Map(key_type, value_type) = ty else {
+                    return Err(Diagnostic::new(
+                        format!("{} does not support a map initializer", ty.apex_name()),
+                        entries.first().map_or(Span::new(0, 0), |entry| entry.span),
+                    ));
+                };
+                for entry in entries {
+                    let actual_key = self.expression_type(&entry.key)?;
+                    require_assignable(key_type, &actual_key, entry.key.span())?;
+                    let actual_value = self.expression_type(&entry.value)?;
+                    require_assignable(value_type, &actual_value, entry.value.span())?;
+                }
+            }
+            CollectionInitializer::SizedArray(size) => {
+                if !matches!(ty, TypeName::List(_)) {
+                    return Err(Diagnostic::new(
+                        format!("{} cannot be allocated with an array size", ty.apex_name()),
+                        size.span(),
+                    ));
+                }
+                self.require_operand(size, &TypeName::Integer, size.span())?;
+            }
+        }
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn check_collection_constructor(
+        &mut self,
+        ty: &TypeName,
+        arguments: &[Expression],
+    ) -> Result<(), Diagnostic> {
+        match ty {
+            TypeName::List(element) | TypeName::Set(element) => {
+                require_arity(ty, "constructor", arguments.len(), &[0, 1], arguments)?;
+                if let Some(argument) = arguments.first() {
+                    self.require_list_or_set_argument(ty, "constructor", 0, argument, element)?;
+                }
+                Ok(())
+            }
+            TypeName::Map(..) => {
+                require_arity(ty, "constructor", arguments.len(), &[0, 1], arguments)?;
+                if let Some(argument) = arguments.first() {
+                    self.require_argument(ty, "constructor", 0, argument, ty)?;
+                }
+                Ok(())
+            }
+            _ => Err(Diagnostic::new(
+                format!("{} is not constructible in this milestone", ty.apex_name()),
+                arguments.first().map_or(Span::new(0, 0), Expression::span),
+            )),
+        }
+    }
+
+    fn assignment_target_type(
+        &mut self,
+        target: &AssignmentTarget,
+    ) -> Result<TypeName, Diagnostic> {
+        match target {
+            AssignmentTarget::Variable(identifier) => self
+                .lookup(&identifier.canonical)
+                .cloned()
+                .ok_or_else(|| unknown_variable(identifier)),
+            AssignmentTarget::Index {
+                collection, index, ..
+            } => self.index_type(collection, index),
+        }
+    }
+
+    fn index_type(
+        &mut self,
+        collection: &Expression,
+        index: &Expression,
+    ) -> Result<TypeName, Diagnostic> {
+        let collection_type = self.expression_type(collection)?;
+        self.require_operand(index, &TypeName::Integer, index.span())?;
+        match collection_type {
+            ExpressionType::Value(TypeName::List(element)) => Ok(*element),
+            other => Err(Diagnostic::new(
+                format!("cannot index {}", other.name()),
+                collection.span(),
+            )),
+        }
+    }
+
+    fn method_call_type(
+        &mut self,
+        receiver: &Expression,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        let result = if let Expression::Variable(identifier) = receiver {
+            if let Some(receiver_type) = self.lookup(&identifier.canonical).cloned() {
+                self.instance_method_type(&receiver_type, method, arguments)
+            } else {
+                match identifier.canonical.as_str() {
+                    "string" => self.static_string_method_type(method, arguments),
+                    "math" => self.static_math_method_type(method, arguments),
+                    "system" => self.static_system_method_type(method, arguments),
+                    _ => Err(unknown_variable(identifier)),
+                }
+            }
+        } else {
+            match self.expression_type(receiver)? {
+                ExpressionType::Value(receiver_type) => {
+                    self.instance_method_type(&receiver_type, method, arguments)
+                }
+                other => Err(Diagnostic::new(
+                    format!(
+                        "cannot call method `{}` on {}",
+                        method.spelling,
+                        other.name()
+                    ),
+                    method.span,
+                )),
+            }
+        };
+
+        result.map_err(|mut error| {
+            if error.span == Span::new(0, 0) {
+                error.span = method.span;
+            }
+            error
+        })
+    }
+
+    fn instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match receiver_type {
+            TypeName::List(element) => {
+                self.list_method_type(receiver_type, element, method, arguments)
+            }
+            TypeName::Set(element) => {
+                self.set_method_type(receiver_type, element, method, arguments)
+            }
+            TypeName::Map(key, value) => {
+                self.map_method_type(receiver_type, key, value, method, arguments)
+            }
+            TypeName::String => self.string_instance_method_type(method, arguments),
+            TypeName::Boolean | TypeName::Integer => Err(unknown_method(receiver_type, method)),
+        }
+    }
+
+    fn list_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        element: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "add" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1, 2],
+                    arguments,
+                )?;
+                if arguments.len() == 2 {
+                    self.require_argument(
+                        receiver_type,
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        &TypeName::Integer,
+                    )?;
+                    self.require_argument(
+                        receiver_type,
+                        &method.spelling,
+                        1,
+                        &arguments[1],
+                        element,
+                    )?;
+                } else {
+                    self.require_argument(
+                        receiver_type,
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        element,
+                    )?;
+                }
+                Ok(ExpressionType::Void)
+            }
+            "addall" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_list_or_set_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    element,
+                )?;
+                Ok(ExpressionType::Void)
+            }
+            "clear" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Void)
+            }
+            "clone" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(receiver_type.clone()))
+            }
+            "contains" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "get" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Integer,
+                )?;
+                Ok(ExpressionType::Value(element.clone()))
+            }
+            "indexof" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            "isempty" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "remove" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Integer,
+                )?;
+                Ok(ExpressionType::Value(element.clone()))
+            }
+            "set" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                self.require_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Integer,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 1, &arguments[1], element)?;
+                Ok(ExpressionType::Void)
+            }
+            "size" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            "sort" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                if !matches!(element, TypeName::String | TypeName::Integer) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "method `sort` requires List<String> or List<Integer>, found {}",
+                            receiver_type.apex_name()
+                        ),
+                        method.span,
+                    ));
+                }
+                Ok(ExpressionType::Void)
+            }
+            _ => Err(unknown_method(receiver_type, method)),
+        }
+    }
+
+    fn set_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        element: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "add" | "contains" | "remove" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "addall" | "containsall" | "removeall" | "retainall" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_list_or_set_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    element,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "clear" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Void)
+            }
+            "clone" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(receiver_type.clone()))
+            }
+            "isempty" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "size" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            _ => Err(unknown_method(receiver_type, method)),
+        }
+    }
+
+    fn map_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        key: &TypeName,
+        value: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "clear" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Void)
+            }
+            "clone" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(receiver_type.clone()))
+            }
+            "containskey" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "get" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
+                Ok(ExpressionType::Value(value.clone()))
+            }
+            "isempty" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "keyset" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Set(Box::new(key.clone()))))
+            }
+            "put" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
+                self.require_argument(receiver_type, &method.spelling, 1, &arguments[1], value)?;
+                Ok(ExpressionType::Value(value.clone()))
+            }
+            "putall" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    receiver_type,
+                )?;
+                Ok(ExpressionType::Void)
+            }
+            "remove" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
+                Ok(ExpressionType::Value(value.clone()))
+            }
+            "size" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            "values" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::List(Box::new(
+                    value.clone(),
+                ))))
+            }
+            _ => Err(unknown_method(receiver_type, method)),
+        }
+    }
+
+    fn static_string_method_type(
+        &mut self,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "valueof" => {
+                require_static_arity("String", method, arguments.len(), &[1], arguments)?;
+                self.require_non_void_argument("String", &method.spelling, 0, &arguments[0])?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            "join" => {
+                require_static_arity("String", method, arguments.len(), &[2], arguments)?;
+                self.require_list_or_set_argument(
+                    &TypeName::String,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                self.require_argument(
+                    &TypeName::String,
+                    &method.spelling,
+                    1,
+                    &arguments[1],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            "isblank" | "isnotblank" | "isempty" | "isnotempty" => {
+                require_static_arity("String", method, arguments.len(), &[1], arguments)?;
+                self.require_argument(
+                    &TypeName::String,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            _ => Err(unknown_static_method("String", method)),
+        }
+    }
+
+    fn string_instance_method_type(
+        &mut self,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        let receiver_type = TypeName::String;
+        match method.canonical.as_str() {
+            "length" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            "contains" | "startswith" | "endswith" | "equals" | "equalsignorecase" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    &receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+            "indexof" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    &receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
+            "substring" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1, 2],
+                    arguments,
+                )?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.require_argument(
+                        &receiver_type,
+                        &method.spelling,
+                        index,
+                        argument,
+                        &TypeName::Integer,
+                    )?;
+                }
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            "trim" | "tolowercase" | "touppercase" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            "replace" => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.require_argument(
+                        &receiver_type,
+                        &method.spelling,
+                        index,
+                        argument,
+                        &TypeName::String,
+                    )?;
+                }
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            _ => Err(unknown_method(&receiver_type, method)),
+        }
+    }
+
+    fn static_math_method_type(
+        &mut self,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        let arity = match method.canonical.as_str() {
+            "abs" => 1,
+            "max" | "min" | "mod" => 2,
+            _ => return Err(unknown_static_method("Math", method)),
+        };
+        require_static_arity("Math", method, arguments.len(), &[arity], arguments)?;
+        for (index, argument) in arguments.iter().enumerate() {
+            self.require_named_argument(
+                "Math",
+                &method.spelling,
+                index,
+                argument,
+                &TypeName::Integer,
+            )?;
+        }
+        Ok(ExpressionType::Value(TypeName::Integer))
+    }
+
+    fn static_system_method_type(
+        &mut self,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        match method.canonical.as_str() {
+            "debug" => {
+                require_static_arity("System", method, arguments.len(), &[1], arguments)?;
+                self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
+                Ok(ExpressionType::Void)
+            }
+            _ => Err(unknown_static_method("System", method)),
+        }
+    }
+
+    fn require_argument(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &str,
+        position: usize,
+        argument: &Expression,
+        expected: &TypeName,
+    ) -> Result<(), Diagnostic> {
+        self.require_named_argument(
+            &receiver_type.apex_name(),
+            method,
+            position,
+            argument,
+            expected,
+        )
+    }
+
+    fn require_named_argument(
+        &mut self,
+        owner: &str,
+        method: &str,
+        position: usize,
+        argument: &Expression,
+        expected: &TypeName,
+    ) -> Result<(), Diagnostic> {
+        let actual = self.expression_type(argument)?;
+        if is_assignable(expected, &actual) {
+            Ok(())
+        } else {
+            Err(argument_type_error(
+                owner,
+                method,
+                position,
+                &expected.apex_name(),
+                &actual,
+                argument.span(),
+            ))
+        }
+    }
+
+    fn require_list_or_set_argument(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &str,
+        position: usize,
+        argument: &Expression,
+        expected_element: &TypeName,
+    ) -> Result<(), Diagnostic> {
+        let actual = self.expression_type(argument)?;
+        let is_compatible = match &actual {
+            ExpressionType::Value(TypeName::List(element))
+            | ExpressionType::Value(TypeName::Set(element)) => element.as_ref() == expected_element,
+            ExpressionType::Null => true,
+            ExpressionType::Value(_) | ExpressionType::Void => false,
+        };
+        if is_compatible {
+            Ok(())
+        } else {
+            Err(argument_type_error(
+                &receiver_type.apex_name(),
+                method,
+                position,
+                &format!(
+                    "List<{}> or Set<{}>",
+                    expected_element.apex_name(),
+                    expected_element.apex_name()
+                ),
+                &actual,
+                argument.span(),
+            ))
+        }
+    }
+
+    fn require_non_void_argument(
+        &mut self,
+        owner: &str,
+        method: &str,
+        position: usize,
+        argument: &Expression,
+    ) -> Result<(), Diagnostic> {
+        let actual = self.expression_type(argument)?;
+        if actual != ExpressionType::Void {
+            Ok(())
+        } else {
+            Err(argument_type_error(
+                owner,
+                method,
+                position,
+                "a value",
+                &actual,
+                argument.span(),
+            ))
+        }
+    }
+
     fn unary_type(
         &mut self,
         operator: UnaryOperator,
@@ -209,12 +1105,12 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         match operator {
             UnaryOperator::Positive | UnaryOperator::Negate => {
-                self.require_operand(operand, TypeName::Integer, operator_span)?;
-                Ok(ExpressionType::Primitive(TypeName::Integer))
+                self.require_operand(operand, &TypeName::Integer, operator_span)?;
+                Ok(ExpressionType::Value(TypeName::Integer))
             }
             UnaryOperator::Not => {
-                self.require_operand(operand, TypeName::Boolean, operator_span)?;
-                Ok(ExpressionType::Primitive(TypeName::Boolean))
+                self.require_operand(operand, &TypeName::Boolean, operator_span)?;
+                Ok(ExpressionType::Value(TypeName::Boolean))
             }
             UnaryOperator::PrefixIncrement | UnaryOperator::PrefixDecrement => {
                 self.require_mutable_integer(operand, operator_span)
@@ -242,19 +1138,21 @@ impl Checker {
         let right_type = self.expression_type(right)?;
         match operator {
             BinaryOperator::Add => {
-                if left_type == ExpressionType::Primitive(TypeName::Integer)
-                    && right_type == ExpressionType::Primitive(TypeName::Integer)
+                if left_type == ExpressionType::Value(TypeName::Integer)
+                    && right_type == ExpressionType::Value(TypeName::Integer)
                 {
-                    Ok(ExpressionType::Primitive(TypeName::Integer))
-                } else if left_type == ExpressionType::Primitive(TypeName::String)
-                    || right_type == ExpressionType::Primitive(TypeName::String)
+                    Ok(ExpressionType::Value(TypeName::Integer))
+                } else if (left_type == ExpressionType::Value(TypeName::String)
+                    || right_type == ExpressionType::Value(TypeName::String))
+                    && left_type != ExpressionType::Void
+                    && right_type != ExpressionType::Void
                 {
-                    Ok(ExpressionType::Primitive(TypeName::String))
+                    Ok(ExpressionType::Value(TypeName::String))
                 } else {
                     Err(invalid_binary_operands(
                         operator,
-                        left_type,
-                        right_type,
+                        &left_type,
+                        &right_type,
                         operator_span,
                     ))
                 }
@@ -267,8 +1165,8 @@ impl Checker {
             | BinaryOperator::LessEqual
             | BinaryOperator::Greater
             | BinaryOperator::GreaterEqual => {
-                if left_type == ExpressionType::Primitive(TypeName::Integer)
-                    && right_type == ExpressionType::Primitive(TypeName::Integer)
+                if left_type == ExpressionType::Value(TypeName::Integer)
+                    && right_type == ExpressionType::Value(TypeName::Integer)
                 {
                     if matches!(
                         operator,
@@ -277,44 +1175,48 @@ impl Checker {
                             | BinaryOperator::Greater
                             | BinaryOperator::GreaterEqual
                     ) {
-                        Ok(ExpressionType::Primitive(TypeName::Boolean))
+                        Ok(ExpressionType::Value(TypeName::Boolean))
                     } else {
-                        Ok(ExpressionType::Primitive(TypeName::Integer))
+                        Ok(ExpressionType::Value(TypeName::Integer))
                     }
                 } else {
                     Err(invalid_binary_operands(
                         operator,
-                        left_type,
-                        right_type,
+                        &left_type,
+                        &right_type,
                         operator_span,
                     ))
                 }
             }
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                if left_type == right_type
-                    || left_type == ExpressionType::Null
-                    || right_type == ExpressionType::Null
-                {
-                    Ok(ExpressionType::Primitive(TypeName::Boolean))
+                let comparable = match (&left_type, &right_type) {
+                    (ExpressionType::Value(left), ExpressionType::Value(right)) => left == right,
+                    (ExpressionType::Null, ExpressionType::Value(_))
+                    | (ExpressionType::Value(_), ExpressionType::Null)
+                    | (ExpressionType::Null, ExpressionType::Null) => true,
+                    (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
+                };
+                if comparable {
+                    Ok(ExpressionType::Value(TypeName::Boolean))
                 } else {
                     Err(invalid_binary_operands(
                         operator,
-                        left_type,
-                        right_type,
+                        &left_type,
+                        &right_type,
                         operator_span,
                     ))
                 }
             }
             BinaryOperator::And | BinaryOperator::Or => {
-                if left_type == ExpressionType::Primitive(TypeName::Boolean)
-                    && right_type == ExpressionType::Primitive(TypeName::Boolean)
+                if left_type == ExpressionType::Value(TypeName::Boolean)
+                    && right_type == ExpressionType::Value(TypeName::Boolean)
                 {
-                    Ok(ExpressionType::Primitive(TypeName::Boolean))
+                    Ok(ExpressionType::Value(TypeName::Boolean))
                 } else {
                     Err(invalid_binary_operands(
                         operator,
-                        left_type,
-                        right_type,
+                        &left_type,
+                        &right_type,
                         operator_span,
                     ))
                 }
@@ -323,17 +1225,17 @@ impl Checker {
     }
 
     fn require_boolean(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
-        self.require_operand(expression, TypeName::Boolean, expression.span())
+        self.require_operand(expression, &TypeName::Boolean, expression.span())
     }
 
     fn require_operand(
         &mut self,
         expression: &Expression,
-        expected: TypeName,
+        expected: &TypeName,
         error_span: Span,
     ) -> Result<(), Diagnostic> {
         let actual = self.expression_type(expression)?;
-        if actual == ExpressionType::Primitive(expected) {
+        if actual == ExpressionType::Value(expected.clone()) {
             Ok(())
         } else {
             Err(Diagnostic::new(
@@ -348,18 +1250,21 @@ impl Checker {
         operand: &Expression,
         operator_span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
-        let Expression::Variable(identifier) = operand else {
-            return Err(Diagnostic::new(
-                "increment/decrement operand must be a variable",
-                operator_span,
-            ));
+        let actual = match operand {
+            Expression::Variable(identifier) => self
+                .lookup(&identifier.canonical)
+                .cloned()
+                .ok_or_else(|| unknown_variable(identifier))?,
+            Expression::Index {
+                collection, index, ..
+            } => self.index_type(collection, index)?,
+            _ => {
+                return Err(Diagnostic::new(
+                    "increment/decrement operand must be a variable",
+                    operator_span,
+                ));
+            }
         };
-        let actual = self.lookup(&identifier.canonical).ok_or_else(|| {
-            Diagnostic::new(
-                format!("unknown variable `{}`", identifier.spelling),
-                identifier.span,
-            )
-        })?;
         if actual != TypeName::Integer {
             return Err(Diagnostic::new(
                 format!(
@@ -369,34 +1274,14 @@ impl Checker {
                 operator_span,
             ));
         }
-        Ok(ExpressionType::Primitive(TypeName::Integer))
+        Ok(ExpressionType::Value(TypeName::Integer))
     }
 
-    fn require_assignable(
-        &self,
-        expected: TypeName,
-        actual: ExpressionType,
-        span: Span,
-    ) -> Result<(), Diagnostic> {
-        if actual == ExpressionType::Primitive(expected) || actual == ExpressionType::Null {
-            Ok(())
-        } else {
-            Err(Diagnostic::new(
-                format!(
-                    "cannot assign {} to {}",
-                    actual.name(),
-                    expected.apex_name()
-                ),
-                span,
-            ))
-        }
-    }
-
-    fn lookup(&self, canonical: &str) -> Option<TypeName> {
+    fn lookup(&self, canonical: &str) -> Option<&TypeName> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(canonical).copied())
+            .find_map(|scope| scope.get(canonical))
     }
 
     fn current_scope(&self) -> &HashMap<String, TypeName> {
@@ -428,18 +1313,44 @@ impl Checker {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ExpressionType {
-    Primitive(TypeName),
+    Value(TypeName),
     Null,
+    Void,
 }
 
 impl ExpressionType {
-    const fn name(self) -> &'static str {
+    fn name(&self) -> String {
         match self {
-            Self::Primitive(ty) => ty.apex_name(),
-            Self::Null => "null",
+            Self::Value(ty) => ty.apex_name(),
+            Self::Null => "null".to_owned(),
+            Self::Void => "void".to_owned(),
         }
+    }
+}
+
+fn is_assignable(expected: &TypeName, actual: &ExpressionType) -> bool {
+    matches!(actual, ExpressionType::Value(actual) if actual == expected)
+        || *actual == ExpressionType::Null
+}
+
+fn require_assignable(
+    expected: &TypeName,
+    actual: &ExpressionType,
+    span: Span,
+) -> Result<(), Diagnostic> {
+    if is_assignable(expected, actual) {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            format!(
+                "cannot assign {} to {}",
+                actual.name(),
+                expected.apex_name()
+            ),
+            span,
+        ))
     }
 }
 
@@ -447,6 +1358,7 @@ fn is_statement_expression(expression: &Expression) -> bool {
     matches!(
         expression,
         Expression::Assignment { .. }
+            | Expression::MethodCall { .. }
             | Expression::Unary {
                 operator: UnaryOperator::PrefixIncrement | UnaryOperator::PrefixDecrement,
                 ..
@@ -457,8 +1369,8 @@ fn is_statement_expression(expression: &Expression) -> bool {
 
 fn invalid_binary_operands(
     operator: BinaryOperator,
-    left: ExpressionType,
-    right: ExpressionType,
+    left: &ExpressionType,
+    right: &ExpressionType,
     span: Span,
 ) -> Diagnostic {
     Diagnostic::new(
@@ -488,6 +1400,106 @@ fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
         BinaryOperator::And => "&&",
         BinaryOperator::Or => "||",
     }
+}
+
+fn unknown_variable(identifier: &Identifier) -> Diagnostic {
+    Diagnostic::new(
+        format!("unknown variable `{}`", identifier.spelling),
+        identifier.span,
+    )
+}
+
+fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> Diagnostic {
+    Diagnostic::new(
+        format!(
+            "unknown method `{}` on {}",
+            method.spelling,
+            receiver_type.apex_name()
+        ),
+        method.span,
+    )
+}
+
+fn unknown_static_method(owner: &str, method: &Identifier) -> Diagnostic {
+    Diagnostic::new(
+        format!("unknown static method `{}` on {}", method.spelling, owner),
+        method.span,
+    )
+}
+
+fn require_arity(
+    receiver_type: &TypeName,
+    method: &str,
+    actual: usize,
+    expected: &[usize],
+    arguments: &[Expression],
+) -> Result<(), Diagnostic> {
+    require_arity_named(
+        &receiver_type.apex_name(),
+        method,
+        actual,
+        expected,
+        arguments,
+    )
+}
+
+fn require_static_arity(
+    owner: &str,
+    method: &Identifier,
+    actual: usize,
+    expected: &[usize],
+    arguments: &[Expression],
+) -> Result<(), Diagnostic> {
+    require_arity_named(owner, &method.spelling, actual, expected, arguments).map_err(
+        |mut error| {
+            if arguments.is_empty() {
+                error.span = method.span;
+            }
+            error
+        },
+    )
+}
+
+fn require_arity_named(
+    owner: &str,
+    method: &str,
+    actual: usize,
+    expected: &[usize],
+    arguments: &[Expression],
+) -> Result<(), Diagnostic> {
+    if expected.contains(&actual) {
+        return Ok(());
+    }
+    let expected = expected
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Err(Diagnostic::new(
+        format!("method `{method}` on {owner} expects {expected} arguments, found {actual}"),
+        arguments.first().map_or(Span::new(0, 0), Expression::span),
+    ))
+}
+
+fn argument_type_error(
+    owner: &str,
+    method: &str,
+    position: usize,
+    expected: &str,
+    actual: &ExpressionType,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::new(
+        format!(
+            "argument {} to `{}` on {} expects {}, found {}",
+            position + 1,
+            method,
+            owner,
+            expected,
+            actual.name()
+        ),
+        span,
+    )
 }
 
 #[cfg(test)]
@@ -530,5 +1542,134 @@ mod tests {
 
         let error = check_source("{ break; }").unwrap_err();
         assert_eq!(error.message, "`break` is only valid inside a loop");
+    }
+
+    #[test]
+    fn checks_collection_construction_indexing_and_generic_invariance() {
+        check_source(
+            "List<String> values = new List<String>{'a', null}; \
+             Set<String> unique = new Set<String>(values); \
+             Map<String, List<String>> grouped = new Map<String, List<String>>{ \
+                 'all' => values \
+             }; \
+             String first = values[0]; \
+             values[0] = 'b'; \
+             Integer[] numbers = new Integer[2]; \
+             numbers[0]++;",
+        )
+        .unwrap();
+
+        let error = check_source("List<String> values = new List<String>{1};").unwrap_err();
+        assert_eq!(error.message, "cannot assign Integer to String");
+
+        let error = check_source(
+            "List<Integer> values = new List<Integer>(); String value = values['zero'];",
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "expected Integer, found String");
+    }
+
+    #[test]
+    fn checks_enhanced_for_types_scope_and_loop_control() {
+        check_source(
+            "Set<String> values = new Set<String>{'a'}; \
+             for (String value : values) { if (value == 'a') continue; }",
+        )
+        .unwrap();
+
+        let error = check_source(
+            "List<String> values = new List<String>(); \
+             for (Integer value : values) {}",
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "cannot assign String to Integer");
+
+        let error = check_source(
+            "Map<String, String> values = new Map<String, String>(); \
+             for (String value : values) {}",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "enhanced for-loop requires List or Set, found Map<String,String>"
+        );
+    }
+
+    #[test]
+    fn checks_collection_method_signatures_and_return_types() {
+        check_source(
+            "List<String> values = new List<String>{'b'}; \
+             values.add('c'); values.add(0, 'a'); values.addAll(new Set<String>{'d'}); \
+             Boolean hasA = values.contains('a'); Integer position = values.indexOf('a'); \
+             String first = values.get(0); String removed = values.remove(0); \
+             values.set(0, 'z'); Integer count = values.size(); Boolean listEmpty = values.isEmpty(); \
+             values.sort(); List<String> copy = values.clone(); copy.clear(); \
+             Set<String> unique = new Set<String>(values); \
+             Boolean changed = unique.add('q'); changed = unique.addAll(values); \
+             changed = unique.containsAll(values); changed = unique.removeAll(values); \
+             changed = unique.retainAll(copy); changed = unique.remove('q'); \
+             Boolean setEmpty = unique.isEmpty(); Integer setSize = unique.size(); \
+             Set<String> uniqueCopy = unique.clone(); uniqueCopy.clear(); \
+             Map<String, String> labels = new Map<String, String>{'a' => 'A'}; \
+             String prior = labels.put('b', 'B'); String found = labels.get('a'); \
+             Boolean hasKey = labels.containsKey('a'); Set<String> keys = labels.keySet(); \
+             String removedLabel = labels.remove('b'); Boolean mapEmpty = labels.isEmpty(); \
+             Integer mapSize = labels.size(); List<String> labelValues = labels.values(); \
+             Map<String, String> labelsCopy = labels.clone(); \
+             Map<String, String> constructedCopy = new Map<String, String>(labelsCopy); \
+             labels.putAll(constructedCopy); labels.clear();",
+        )
+        .unwrap();
+
+        let error =
+            check_source("List<String> values = new List<String>(); values.add(1);").unwrap_err();
+        assert_eq!(
+            error.message,
+            "argument 1 to `add` on List<String> expects String, found Integer"
+        );
+
+        let error =
+            check_source("Set<String> values = new Set<String>(); values.add();").unwrap_err();
+        assert_eq!(
+            error.message,
+            "method `add` on Set<String> expects 1 arguments, found 0"
+        );
+    }
+
+    #[test]
+    fn checks_string_math_and_system_signatures() {
+        check_source(
+            "List<String> values = new List<String>{String.valueOf(1)}; \
+             String joined = String.join(values, ','); \
+             String joinedSet = String.join(new Set<String>(values), ','); \
+             Boolean blank = String.isBlank(null); Boolean notBlank = String.isNotBlank(joined); \
+             Boolean empty = String.isEmpty(''); Boolean notEmpty = String.isNotEmpty(joined); \
+             Integer length = joined.length(); Boolean contains = joined.contains('1'); \
+             Boolean starts = joined.startsWith('1'); Boolean ends = joined.endsWith('1'); \
+             Boolean exact = joined.equals('1'); Boolean same = joined.equalsIgnoreCase('1'); \
+             Integer index = joined.indexOf('1'); \
+             String piece = joined.substring(0, 1).trim().toUpperCase().toLowerCase(); \
+             String replaced = joined.replace('1', 'one'); \
+             Integer absolute = Math.abs(-1); Integer maximum = Math.max(1, 2); \
+             Integer minimum = Math.min(1, 2); Integer remainder = Math.mod(5, 2); \
+             System.debug(String.join(values, ''));",
+        )
+        .unwrap();
+
+        let error = check_source("String value = Math.abs('wrong');").unwrap_err();
+        assert_eq!(
+            error.message,
+            "argument 1 to `abs` on Math expects Integer, found String"
+        );
+
+        let error = check_source("Boolean value = System.debug('no');").unwrap_err();
+        assert_eq!(error.message, "cannot assign void to Boolean");
+    }
+
+    #[test]
+    fn method_receivers_resolve_variables_before_static_types() {
+        let error = check_source("String String = 'value'; String converted = String.valueOf(1);")
+            .unwrap_err();
+        assert_eq!(error.message, "unknown method `valueOf` on String");
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     ast::{
-        BinaryOperator, Expression, Identifier, PostfixOperator, Program, Statement, TypeName,
-        UnaryOperator,
+        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier, MapEntry,
+        PostfixOperator, Program, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     token::{Token, TokenKind},
@@ -36,7 +36,6 @@ impl Parser {
             TokenKind::Continue => self.parse_continue(),
             TokenKind::Return => self.parse_return(),
             _ if self.is_declaration_start() => self.parse_variable_declaration(true),
-            _ if self.is_debug_start() => self.parse_debug(),
             _ => self.parse_expression_statement(true),
         }
     }
@@ -45,9 +44,7 @@ impl Parser {
         &mut self,
         consume_semicolon: bool,
     ) -> Result<Statement, Diagnostic> {
-        let type_identifier = self.expect_identifier("expected a primitive type")?;
-        let ty = TypeName::from_apex_name(&type_identifier.spelling)
-            .expect("declaration start checked before parsing");
+        let (ty, type_span) = self.parse_type_name()?;
         let name = self.expect_identifier("expected a variable name")?;
         self.expect_simple(TokenKind::Equal, "expected `=` and an explicit initializer")?;
         let initializer = self.parse_expression()?;
@@ -61,7 +58,7 @@ impl Parser {
             ty,
             name,
             initializer,
-            span: type_identifier.span.merge(end),
+            span: type_span.merge(end),
         })
     }
 
@@ -80,26 +77,6 @@ impl Parser {
         Ok(Statement::Expression {
             expression,
             span: start.merge(end),
-        })
-    }
-
-    fn parse_debug(&mut self) -> Result<Statement, Diagnostic> {
-        let system = self.expect_identifier("expected `System`")?;
-        self.expect_simple(TokenKind::Dot, "expected `.` after `System`")?;
-        let method = self.expect_identifier("expected `debug` after `System.`")?;
-        if method.canonical != "debug" {
-            return Err(Diagnostic::new(
-                format!("unsupported System method `{}`", method.spelling),
-                method.span,
-            ));
-        }
-        self.expect_simple(TokenKind::LeftParen, "expected `(` after `System.debug`")?;
-        let expression = self.parse_expression()?;
-        self.expect_simple(TokenKind::RightParen, "expected `)` after debug expression")?;
-        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after System.debug")?;
-        Ok(Statement::Debug {
-            expression,
-            span: system.span.merge(end.span),
         })
     }
 
@@ -175,6 +152,26 @@ impl Parser {
     fn parse_for(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect_simple(TokenKind::For, "expected `for`")?;
         self.expect_simple(TokenKind::LeftParen, "expected `(` after `for`")?;
+
+        if self.is_for_each_start() {
+            let (element_type, _) = self.parse_type_name()?;
+            let name = self.expect_identifier("expected an iteration variable")?;
+            self.expect_simple(TokenKind::Colon, "expected `:` after enhanced for variable")?;
+            let iterable = self.parse_expression()?;
+            self.expect_simple(
+                TokenKind::RightParen,
+                "expected `)` after enhanced for iterable",
+            )?;
+            let body = Box::new(self.parse_statement()?);
+            let span = start.span.merge(body.span());
+            return Ok(Statement::ForEach {
+                element_type,
+                name,
+                iterable,
+                body,
+                span,
+            });
+        }
 
         let initializer = if self.check(&TokenKind::Semicolon) {
             self.advance();
@@ -255,16 +252,25 @@ impl Parser {
 
         let equals = self.advance();
         let value = self.parse_assignment()?;
-        if let Expression::Variable(target) = expression {
-            let span = target.span.merge(value.span());
-            Ok(Expression::Assignment {
-                target,
-                value: Box::new(value),
+        let target = match expression {
+            Expression::Variable(identifier) => AssignmentTarget::Variable(identifier),
+            Expression::Index {
+                collection,
+                index,
                 span,
-            })
-        } else {
-            Err(Diagnostic::new("invalid assignment target", equals.span))
-        }
+            } => AssignmentTarget::Index {
+                collection,
+                index,
+                span,
+            },
+            _ => return Err(Diagnostic::new("invalid assignment target", equals.span)),
+        };
+        let span = target.span().merge(value.span());
+        Ok(Expression::Assignment {
+            target,
+            value: Box::new(value),
+            span,
+        })
     }
 
     fn parse_or(&mut self) -> Result<Expression, Diagnostic> {
@@ -375,19 +381,56 @@ impl Parser {
     fn parse_postfix(&mut self) -> Result<Expression, Diagnostic> {
         let mut expression = self.parse_primary()?;
         loop {
-            let operator = match self.current().kind {
-                TokenKind::PlusPlus => PostfixOperator::Increment,
-                TokenKind::MinusMinus => PostfixOperator::Decrement,
+            match self.current().kind {
+                TokenKind::LeftBracket => {
+                    self.advance();
+                    let index = self.parse_expression()?;
+                    let end = self.expect_simple(
+                        TokenKind::RightBracket,
+                        "expected `]` after index expression",
+                    )?;
+                    let span = expression.span().merge(end.span);
+                    expression = Expression::Index {
+                        collection: Box::new(expression),
+                        index: Box::new(index),
+                        span,
+                    };
+                }
+                TokenKind::Dot => {
+                    self.advance();
+                    let method = self.expect_identifier("expected a method name after `.`")?;
+                    if !self.check(&TokenKind::LeftParen) {
+                        return Err(Diagnostic::new(
+                            "expected `(` after method name",
+                            self.current().span,
+                        ));
+                    }
+                    let (arguments, end) = self.parse_argument_list()?;
+                    let span = expression.span().merge(end);
+                    expression = Expression::MethodCall {
+                        receiver: Box::new(expression),
+                        method,
+                        arguments,
+                        span,
+                    };
+                }
+                TokenKind::PlusPlus | TokenKind::MinusMinus => {
+                    let operator = if self.check(&TokenKind::PlusPlus) {
+                        PostfixOperator::Increment
+                    } else {
+                        PostfixOperator::Decrement
+                    };
+                    let token = self.advance();
+                    let span = expression.span().merge(token.span);
+                    expression = Expression::Postfix {
+                        operand: Box::new(expression),
+                        operator,
+                        operator_span: token.span,
+                        span,
+                    };
+                }
                 _ => break,
-            };
-            let token = self.advance();
-            let span = expression.span().merge(token.span);
-            expression = Expression::Postfix {
-                operand: Box::new(expression),
-                operator,
-                operator_span: token.span,
-                span,
-            };
+            }
         }
         Ok(expression)
     }
@@ -402,6 +445,7 @@ impl Parser {
             TokenKind::Identifier(spelling) => {
                 Expression::Variable(Identifier::new(spelling, token.span))
             }
+            TokenKind::New => return self.parse_new_expression(),
             TokenKind::LeftParen => {
                 self.advance();
                 let expression = self.parse_expression()?;
@@ -414,18 +458,214 @@ impl Parser {
         Ok(expression)
     }
 
-    fn is_declaration_start(&self) -> bool {
-        matches!(
-            &self.current().kind,
-            TokenKind::Identifier(spelling) if TypeName::from_apex_name(spelling).is_some()
-        ) && matches!(self.peek(1).kind, TokenKind::Identifier(_))
+    fn parse_new_expression(&mut self) -> Result<Expression, Diagnostic> {
+        let start = self.expect_simple(TokenKind::New, "expected `new`")?;
+        let (mut ty, _) = self.parse_base_type_name()?;
+
+        let (initializer, end) = if self.check(&TokenKind::LeftBracket) {
+            self.advance();
+            if self.check(&TokenKind::RightBracket) {
+                self.advance();
+                ty = TypeName::List(Box::new(ty));
+                if !self.check(&TokenKind::LeftBrace) {
+                    return Err(Diagnostic::new(
+                        "expected an array initializer after `[]`",
+                        self.current().span,
+                    ));
+                }
+                self.parse_collection_initializer(&ty)?
+            } else {
+                let size = self.parse_expression()?;
+                let end =
+                    self.expect_simple(TokenKind::RightBracket, "expected `]` after array size")?;
+                ty = TypeName::List(Box::new(ty));
+                (CollectionInitializer::SizedArray(Box::new(size)), end.span)
+            }
+        } else if self.check(&TokenKind::LeftParen) {
+            let (arguments, end) = self.parse_argument_list()?;
+            (CollectionInitializer::Arguments(arguments), end)
+        } else if self.check(&TokenKind::LeftBrace) {
+            self.parse_collection_initializer(&ty)?
+        } else {
+            return Err(Diagnostic::new(
+                "expected constructor arguments, collection initializer, or array size",
+                self.current().span,
+            ));
+        };
+
+        Ok(Expression::NewCollection {
+            ty,
+            initializer,
+            span: start.span.merge(end),
+        })
     }
 
-    fn is_debug_start(&self) -> bool {
-        matches!(
-            &self.current().kind,
-            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("system")
-        ) && matches!(self.peek(1).kind, TokenKind::Dot)
+    fn parse_collection_initializer(
+        &mut self,
+        ty: &TypeName,
+    ) -> Result<(CollectionInitializer, crate::span::Span), Diagnostic> {
+        self.expect_simple(TokenKind::LeftBrace, "expected `{`")?;
+        if matches!(ty, TypeName::Map(..)) {
+            let mut entries = Vec::new();
+            if !self.check(&TokenKind::RightBrace) {
+                loop {
+                    let key = self.parse_expression()?;
+                    self.expect_simple(TokenKind::FatArrow, "expected `=>` after map key")?;
+                    let value = self.parse_expression()?;
+                    let span = key.span().merge(value.span());
+                    entries.push(MapEntry { key, value, span });
+                    if !self.check(&TokenKind::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            let end =
+                self.expect_simple(TokenKind::RightBrace, "expected `}` after map initializer")?;
+            Ok((CollectionInitializer::MapEntries(entries), end.span))
+        } else {
+            let mut elements = Vec::new();
+            if !self.check(&TokenKind::RightBrace) {
+                loop {
+                    elements.push(self.parse_expression()?);
+                    if !self.check(&TokenKind::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            let end = self.expect_simple(
+                TokenKind::RightBrace,
+                "expected `}` after collection initializer",
+            )?;
+            Ok((CollectionInitializer::Elements(elements), end.span))
+        }
+    }
+
+    fn parse_argument_list(&mut self) -> Result<(Vec<Expression>, crate::span::Span), Diagnostic> {
+        self.expect_simple(TokenKind::LeftParen, "expected `(`")?;
+        let mut arguments = Vec::new();
+        if !self.check(&TokenKind::RightParen) {
+            loop {
+                arguments.push(self.parse_expression()?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        let end = self.expect_simple(TokenKind::RightParen, "expected `)` after arguments")?;
+        Ok((arguments, end.span))
+    }
+
+    fn parse_type_name(&mut self) -> Result<(TypeName, crate::span::Span), Diagnostic> {
+        let (mut ty, mut span) = self.parse_base_type_name()?;
+        if self.check(&TokenKind::LeftBracket) {
+            self.advance();
+            let end = self.expect_simple(TokenKind::RightBracket, "expected `]` in array type")?;
+            ty = TypeName::List(Box::new(ty));
+            span = span.merge(end.span);
+            if self.check(&TokenKind::LeftBracket) {
+                return Err(Diagnostic::new(
+                    "only one array suffix is supported",
+                    self.current().span,
+                ));
+            }
+        }
+        Ok((ty, span))
+    }
+
+    fn parse_base_type_name(&mut self) -> Result<(TypeName, crate::span::Span), Diagnostic> {
+        let identifier = self.expect_identifier("expected a type name")?;
+        match identifier.canonical.as_str() {
+            "string" => Ok((TypeName::String, identifier.span)),
+            "boolean" => Ok((TypeName::Boolean, identifier.span)),
+            "integer" => Ok((TypeName::Integer, identifier.span)),
+            "list" | "set" => {
+                self.expect_simple(TokenKind::Less, "expected `<` after collection type name")?;
+                let (element, _) = self.parse_type_name()?;
+                let end = self.expect_simple(
+                    TokenKind::Greater,
+                    "expected `>` after collection element type",
+                )?;
+                let ty = if identifier.canonical == "list" {
+                    TypeName::List(Box::new(element))
+                } else {
+                    TypeName::Set(Box::new(element))
+                };
+                Ok((ty, identifier.span.merge(end.span)))
+            }
+            "map" => {
+                self.expect_simple(TokenKind::Less, "expected `<` after `Map`")?;
+                let (key, _) = self.parse_type_name()?;
+                self.expect_simple(TokenKind::Comma, "expected `,` after map key type")?;
+                let (value, _) = self.parse_type_name()?;
+                let end =
+                    self.expect_simple(TokenKind::Greater, "expected `>` after map value type")?;
+                Ok((
+                    TypeName::Map(Box::new(key), Box::new(value)),
+                    identifier.span.merge(end.span),
+                ))
+            }
+            _ => Err(Diagnostic::new(
+                format!("unsupported type `{}`", identifier.spelling),
+                identifier.span,
+            )),
+        }
+    }
+
+    fn is_declaration_start(&self) -> bool {
+        self.type_end_at(self.cursor)
+            .is_some_and(|end| matches!(self.token_at(end).kind, TokenKind::Identifier(_)))
+    }
+
+    fn is_for_each_start(&self) -> bool {
+        self.type_end_at(self.cursor).is_some_and(|end| {
+            matches!(self.token_at(end).kind, TokenKind::Identifier(_))
+                && matches!(self.token_at(end + 1).kind, TokenKind::Colon)
+        })
+    }
+
+    fn type_end_at(&self, cursor: usize) -> Option<usize> {
+        let TokenKind::Identifier(spelling) = &self.token_at(cursor).kind else {
+            return None;
+        };
+        let canonical = spelling.to_ascii_lowercase();
+        let mut end = cursor + 1;
+        match canonical.as_str() {
+            "string" | "boolean" | "integer" => {}
+            "list" | "set" => {
+                if !matches!(self.token_at(end).kind, TokenKind::Less) {
+                    return None;
+                }
+                end = self.type_end_at(end + 1)?;
+                if !matches!(self.token_at(end).kind, TokenKind::Greater) {
+                    return None;
+                }
+                end += 1;
+            }
+            "map" => {
+                if !matches!(self.token_at(end).kind, TokenKind::Less) {
+                    return None;
+                }
+                end = self.type_end_at(end + 1)?;
+                if !matches!(self.token_at(end).kind, TokenKind::Comma) {
+                    return None;
+                }
+                end = self.type_end_at(end + 1)?;
+                if !matches!(self.token_at(end).kind, TokenKind::Greater) {
+                    return None;
+                }
+                end += 1;
+            }
+            _ => return None,
+        }
+        while matches!(self.token_at(end).kind, TokenKind::LeftBracket)
+            && matches!(self.token_at(end + 1).kind, TokenKind::RightBracket)
+        {
+            end += 2;
+        }
+        Some(end)
     }
 
     fn expect_identifier(&mut self, message: &str) -> Result<Identifier, Diagnostic> {
@@ -455,7 +695,11 @@ impl Parser {
     }
 
     fn peek(&self, offset: usize) -> &Token {
-        &self.tokens[(self.cursor + offset).min(self.tokens.len() - 1)]
+        self.token_at(self.cursor + offset)
+    }
+
+    fn token_at(&self, index: usize) -> &Token {
+        &self.tokens[index.min(self.tokens.len() - 1)]
     }
 
     fn advance(&mut self) -> Token {
@@ -513,11 +757,17 @@ mod tests {
         let Expression::Assignment { target, value, .. } = expression else {
             panic!("expected outer assignment");
         };
+        let AssignmentTarget::Variable(target) = target else {
+            panic!("expected variable assignment target");
+        };
 
         assert_eq!(target.canonical, "left");
         assert!(matches!(
             value.as_ref(),
-            Expression::Assignment { target, .. } if target.canonical == "right"
+            Expression::Assignment {
+                target: AssignmentTarget::Variable(target),
+                ..
+            } if target.canonical == "right"
         ));
     }
 
@@ -562,5 +812,231 @@ mod tests {
         assert!(condition.is_none());
         assert!(update.is_none());
         assert!(matches!(body.as_ref(), Statement::Block { .. }));
+    }
+
+    #[test]
+    fn parses_nested_generic_types_and_canonicalizes_array_syntax() {
+        let program = parse(
+            "Map<String, List<Set<Integer>>> grouped = new Map<String, List<Set<Integer>>>(); \
+             Integer[] numbers = new Integer[3];",
+        );
+
+        let Statement::VariableDeclaration {
+            ty, initializer, ..
+        } = &program.statements[0]
+        else {
+            panic!("expected map declaration");
+        };
+        assert_eq!(
+            ty,
+            &TypeName::Map(
+                Box::new(TypeName::String),
+                Box::new(TypeName::List(Box::new(TypeName::Set(Box::new(
+                    TypeName::Integer
+                )))))
+            )
+        );
+        assert!(matches!(
+            initializer,
+            Expression::NewCollection {
+                initializer: CollectionInitializer::Arguments(arguments),
+                ..
+            } if arguments.is_empty()
+        ));
+
+        let Statement::VariableDeclaration {
+            ty, initializer, ..
+        } = &program.statements[1]
+        else {
+            panic!("expected array declaration");
+        };
+        assert_eq!(ty, &TypeName::List(Box::new(TypeName::Integer)));
+        assert!(matches!(
+            initializer,
+            Expression::NewCollection {
+                ty: TypeName::List(element),
+                initializer: CollectionInitializer::SizedArray(size),
+                ..
+            } if element.as_ref() == &TypeName::Integer
+                && matches!(size.as_ref(), Expression::IntegerLiteral(3, _))
+        ));
+    }
+
+    #[test]
+    fn parses_element_and_map_collection_initializers() {
+        let program = parse(
+            "List<String> names = new List<String>{'Ada', 'Grace'}; \
+             Map<String, Integer> counts = new Map<String, Integer>{'one' => 1, 'two' => 2}; \
+             Set<String> copied = new Set<String>(names); \
+             String[] aliases = new String[]{'one', 'two'};",
+        );
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[0] else {
+            panic!("expected list declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::NewCollection {
+                initializer: CollectionInitializer::Elements(elements),
+                ..
+            } if elements.len() == 2
+        ));
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[1] else {
+            panic!("expected map declaration");
+        };
+        let Expression::NewCollection {
+            initializer: CollectionInitializer::MapEntries(entries),
+            ..
+        } = initializer
+        else {
+            panic!("expected map entries");
+        };
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(
+            &entries[0].key,
+            Expression::StringLiteral(value, _) if value == "one"
+        ));
+        assert!(matches!(
+            &entries[0].value,
+            Expression::IntegerLiteral(1, _)
+        ));
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[2] else {
+            panic!("expected set declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::NewCollection {
+                initializer: CollectionInitializer::Arguments(arguments),
+                ..
+            } if matches!(arguments.as_slice(), [Expression::Variable(name)] if name.canonical == "names")
+        ));
+
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[3] else {
+            panic!("expected array literal declaration");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::NewCollection {
+                ty: TypeName::List(element),
+                initializer: CollectionInitializer::Elements(elements),
+                ..
+            } if element.as_ref() == &TypeName::String && elements.len() == 2
+        ));
+    }
+
+    #[test]
+    fn parses_index_assignment_and_chained_method_calls() {
+        let program = parse(
+            "List<String> values = new List<String>{'zero'}; \
+             values[0] = String.VaLuEOf(1); \
+             values.add(values[0]); \
+             System.debug(String.join(values, ''));",
+        );
+
+        let Statement::Expression { expression, .. } = &program.statements[1] else {
+            panic!("expected index assignment");
+        };
+        assert!(matches!(
+            expression,
+            Expression::Assignment {
+                target: AssignmentTarget::Index { .. },
+                value,
+                ..
+            } if matches!(
+                value.as_ref(),
+                Expression::MethodCall { method, arguments, .. }
+                    if method.spelling == "VaLuEOf"
+                        && method.canonical == "valueof"
+                        && arguments.len() == 1
+            )
+        ));
+
+        let Statement::Expression { expression, .. } = &program.statements[2] else {
+            panic!("expected add call");
+        };
+        assert!(matches!(
+            expression,
+            Expression::MethodCall { method, arguments, .. }
+                if method.canonical == "add"
+                    && matches!(arguments.as_slice(), [Expression::Index { .. }])
+        ));
+
+        let Statement::Expression { expression, .. } = &program.statements[3] else {
+            panic!("System.debug should be an ordinary expression statement");
+        };
+        assert!(matches!(
+            expression,
+            Expression::MethodCall { method, arguments, .. }
+                if method.canonical == "debug"
+                    && matches!(arguments.as_slice(), [Expression::MethodCall { method, .. }] if method.canonical == "join")
+        ));
+    }
+
+    #[test]
+    fn distinguishes_enhanced_and_traditional_for_statements() {
+        let program = parse(
+            "List<String> values = new List<String>(); \
+             for (String value : values) System.debug(value); \
+             for (Integer index = 0; index < 1; index++) {}",
+        );
+
+        assert!(matches!(
+            &program.statements[1],
+            Statement::ForEach {
+                element_type: TypeName::String,
+                name,
+                iterable: Expression::Variable(iterable),
+                ..
+            } if name.canonical == "value" && iterable.canonical == "values"
+        ));
+        assert!(matches!(&program.statements[2], Statement::For { .. }));
+    }
+
+    #[test]
+    fn collection_postfix_nodes_preserve_full_source_spans() {
+        let source = "List<String> values = new List<String>{'zero'}; values[0].toUpperCase();";
+        let program = parse(source);
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[0] else {
+            panic!("expected declaration");
+        };
+        assert_eq!(
+            &source[initializer.span().start..initializer.span().end],
+            "new List<String>{'zero'}"
+        );
+
+        let Statement::Expression { expression, .. } = &program.statements[1] else {
+            panic!("expected method call");
+        };
+        let Expression::MethodCall {
+            receiver, method, ..
+        } = expression
+        else {
+            panic!("expected method call expression");
+        };
+        assert_eq!(
+            &source[expression.span().start..expression.span().end],
+            "values[0].toUpperCase()"
+        );
+        assert_eq!(
+            &source[receiver.span().start..receiver.span().end],
+            "values[0]"
+        );
+        assert_eq!(&source[method.span.start..method.span.end], "toUpperCase");
+        assert_eq!(method.canonical, "touppercase");
+    }
+
+    #[test]
+    fn rejects_more_than_one_array_suffix_explicitly() {
+        let error = Parser::new(
+            Lexer::new("Integer[][] values = new Integer[1];")
+                .tokenize()
+                .unwrap(),
+        )
+        .parse_program()
+        .unwrap_err();
+
+        assert_eq!(error.message, "only one array suffix is supported");
     }
 }
