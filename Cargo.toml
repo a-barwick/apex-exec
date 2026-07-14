@@ -1,0 +1,7 @@
+[package]
+name = "apex-exec"
+version = "0.1.0"
+edition = "2024"
+description = "A local Apex compiler and execution runtime"
+
+[dependencies]
