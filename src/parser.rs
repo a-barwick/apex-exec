@@ -279,16 +279,7 @@ impl Parser {
         while self.check(&TokenKind::Catch) {
             let catch_start = self.advance();
             self.expect_simple(TokenKind::LeftParen, "expected `(` after `catch`")?;
-            let (exception_type, type_span) = self.parse_type_name()?;
-            if !exception_type.is_exception() {
-                return Err(Diagnostic::new(
-                    format!(
-                        "catch type must be an exception type, found `{}`",
-                        exception_type.apex_name()
-                    ),
-                    type_span,
-                ));
-            }
+            let (exception_type, _) = self.parse_type_name()?;
             let name = self.expect_identifier("expected a catch variable name")?;
             self.expect_simple(TokenKind::RightParen, "expected `)` after catch variable")?;
             let body = self.parse_block()?;
@@ -603,15 +594,9 @@ impl Parser {
                 ));
             }
             let (arguments, end) = self.parse_argument_list()?;
-            if arguments.len() > 1 {
-                return Err(Diagnostic::new(
-                    "exception constructor expects zero or one argument",
-                    arguments[1].span(),
-                ));
-            }
             return Ok(Expression::NewException {
                 exception_type: ty,
-                message: arguments.into_iter().next().map(Box::new),
+                arguments,
                 span: start.span.merge(end),
             });
         }
@@ -730,10 +715,7 @@ impl Parser {
     }
 
     fn parse_return_type(&mut self) -> Result<(ReturnType, crate::span::Span), Diagnostic> {
-        if matches!(
-            &self.current().kind,
-            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("void")
-        ) {
+        if self.check(&TokenKind::Void) {
             let token = self.advance();
             return Ok((ReturnType::Void, token.span));
         }
@@ -825,7 +807,8 @@ impl Parser {
             | "mathexception"
             | "typeexception"
             | "stringexception"
-            | "illegalargumentexception" => {}
+            | "illegalargumentexception"
+            | "finalexception" => {}
             "list" | "set" => {
                 if !matches!(self.token_at(end).kind, TokenKind::Less) {
                     return None;
@@ -861,10 +844,7 @@ impl Parser {
     }
 
     fn return_type_end_at(&self, cursor: usize) -> Option<usize> {
-        if matches!(
-            &self.token_at(cursor).kind,
-            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("void")
-        ) {
+        if matches!(&self.token_at(cursor).kind, TokenKind::Void) {
             Some(cursor + 1)
         } else {
             self.type_end_at(cursor)
@@ -1331,11 +1311,11 @@ mod tests {
                     [Statement::Throw {
                         value: Expression::NewException {
                             exception_type: TypeName::IllegalArgumentException,
-                            message: Some(message),
+                            arguments,
                             ..
                         },
                         ..
-                    }] if matches!(message.as_ref(), Expression::StringLiteral(value, _) if value == "bad input")
+                    }] if matches!(arguments.as_slice(), [Expression::StringLiteral(value, _)] if value == "bad input")
                 )
         ));
         assert_eq!(catches.len(), 2);
@@ -1374,35 +1354,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_exception_catch_types() {
-        let error = Parser::new(
-            Lexer::new("try {} catch (String problem) {}")
-                .tokenize()
-                .unwrap(),
-        )
-        .parse_program()
-        .unwrap_err();
-
-        assert_eq!(
-            error.message,
-            "catch type must be an exception type, found `String`"
-        );
+    fn preserves_non_exception_catch_types_for_semantic_validation() {
+        let program = parse("try {} catch (String problem) {}");
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Try { catches, .. }
+                if catches[0].exception_type == TypeName::String
+        ));
     }
 
     #[test]
-    fn exception_construction_accepts_at_most_one_argument() {
-        let error = Parser::new(
-            Lexer::new("throw new Exception('first', 'second');")
-                .tokenize()
-                .unwrap(),
-        )
-        .parse_program()
-        .unwrap_err();
-
-        assert_eq!(
-            error.message,
-            "exception constructor expects zero or one argument"
-        );
+    fn preserves_exception_constructor_arguments_for_semantic_validation() {
+        let program = parse("throw new Exception('first', 'second');");
+        assert!(matches!(
+            &program.statements[0],
+            Statement::Throw {
+                value: Expression::NewException { arguments, .. },
+                ..
+            } if arguments.len() == 2
+        ));
     }
 
     #[test]
@@ -1454,11 +1424,11 @@ mod tests {
             Statement::Throw {
                 value: Expression::NewException {
                     exception_type: TypeName::NullPointerException,
-                    message: None,
+                    arguments,
                     ..
                 },
                 ..
-            }
+            } if arguments.is_empty()
         ));
     }
 }

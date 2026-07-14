@@ -68,8 +68,12 @@ fn overload_resolution_prefers_an_exact_type_over_object() {
             return 'Object overload';
         }
 
-        String identify(Exception value) {
+        String identifyError(Exception value) {
             return 'Exception overload';
+        }
+
+        String identifyError(Object value) {
+            return 'Object overload';
         }
 
         Object boxedString = 'text';
@@ -77,7 +81,7 @@ fn overload_resolution_prefers_an_exact_type_over_object() {
         System.debug(identify(boxedString));
         System.debug(identify(42));
         System.debug(identify(null));
-        System.debug(identify(new IllegalArgumentException()));
+        System.debug(identifyError(new IllegalArgumentException()));
     "#;
 
     assert_eq!(
@@ -107,6 +111,21 @@ fn overload_resolution_rejects_an_ambiguous_null_argument() {
     "#;
 
     assert_check_error_contains(source, &["ambiguous", "identify"]);
+
+    let unrelated_null = r#"
+        String identify(String value) { return 'String'; }
+        String identify(Exception value) { return 'Exception'; }
+        System.debug(identify(null));
+    "#;
+    assert_check_error_contains(unrelated_null, &["ambiguous", "identify"]);
+
+    let crossing = r#"
+        String identify(Object left, MathException right) { return 'first'; }
+        String identify(Exception left, Object right) { return 'second'; }
+        MathException error = new MathException();
+        System.debug(identify(error, error));
+    "#;
+    assert_check_error_contains(crossing, &["ambiguous", "identify"]);
 }
 
 #[test]
@@ -137,10 +156,17 @@ fn typed_and_void_methods_return_to_their_callers() {
             return;
         }
 
+        Integer mandatoryDoReturn() {
+            do {
+                return 7;
+            } while (false);
+        }
+
         emit(String.valueOf(twice(4)));
+        emit(String.valueOf(mandatoryDoReturn()));
     "#;
 
-    assert_eq!(execute(source).unwrap(), ["8"]);
+    assert_eq!(execute(source).unwrap(), ["8", "7"]);
 }
 
 #[test]
@@ -154,6 +180,7 @@ fn checker_rejects_invalid_and_missing_method_returns() {
         "Integer incomplete(Boolean branch) { if (branch) { return 1; } }",
         &["return"],
     );
+    assert_check_error_contains("void emit(Integer void) {}", &["parameter name"]);
 }
 
 #[test]
@@ -174,6 +201,44 @@ fn try_catch_and_finally_preserve_exception_messages_and_order() {
     "#;
 
     assert_eq!(execute(source).unwrap(), ["bad input", "finally", "caught"]);
+}
+
+#[test]
+fn generic_catches_preserve_dynamic_type_and_rethrow_state() {
+    let source = r#"
+        void reroute() {
+            try {
+                Integer impossible = 1 / 0;
+            } catch (ListException wrongType) {
+                System.debug('unreachable');
+            } catch (Exception error) {
+                System.debug(error.getTypeName());
+                throw error;
+            } finally {
+                System.debug('inner finally');
+            }
+        }
+
+        try {
+            reroute();
+        } catch (Exception error) {
+            System.debug(error.getMessage());
+            System.debug(error.getStackTraceString().contains('reroute'));
+        } finally {
+            System.debug('outer finally');
+        }
+    "#;
+
+    assert_eq!(
+        execute(source).unwrap(),
+        [
+            "MathException",
+            "inner finally",
+            "division by zero",
+            "true",
+            "outer finally"
+        ]
+    );
 }
 
 #[test]
@@ -250,6 +315,16 @@ fn explicit_core_exception_construction_preserves_type_and_message() {
     );
     assert_eq!(error.message, "bad input");
     assert_eq!(error.stack_trace[0].method, "fail");
+
+    assert_eq!(
+        execute("Exception empty = new Exception(null); System.debug(empty.getMessage());")
+            .unwrap(),
+        [""]
+    );
+    assert_check_error_contains(
+        "throw new Exception('first', 'second');",
+        &["zero or one", "argument"],
+    );
 }
 
 #[test]
@@ -261,11 +336,51 @@ fn null_dereferences_are_promoted_to_null_pointer_exception() {
 }
 
 #[test]
+fn nullable_primitive_operations_are_catchable_null_pointer_exceptions() {
+    let source = r#"
+        try {
+            Boolean flag = null;
+            if (flag) System.debug('unreachable');
+        } catch (NullPointerException error) {
+            System.debug(error.getTypeName());
+        }
+
+        try {
+            Integer number = null;
+            Integer result = +number;
+        } catch (NullPointerException error) {
+            System.debug(error.getTypeName());
+        }
+    "#;
+
+    assert_eq!(
+        execute(source).unwrap(),
+        ["NullPointerException", "NullPointerException"]
+    );
+}
+
+#[test]
 fn list_bounds_failures_are_promoted_to_list_exception() {
     assert_runtime_exception(
         "List<Integer> values = new List<Integer>{1}; System.debug(values[1]);",
         "ListException",
     );
+}
+
+#[test]
+fn mutation_during_iteration_is_a_catchable_final_exception() {
+    let source = r#"
+        List<Integer> values = new List<Integer>{1, 2};
+        try {
+            for (Integer value : values) {
+                values.add(3);
+            }
+        } catch (FinalException error) {
+            System.debug(error.getTypeName());
+        }
+    "#;
+
+    assert_eq!(execute(source).unwrap(), ["FinalException"]);
 }
 
 #[test]
@@ -285,6 +400,12 @@ fn object_downcasts_succeed_or_raise_type_exception() {
     assert_runtime_exception(
         "Object boxed = 42; String text = (String) boxed;",
         "TypeException",
+    );
+
+    assert_check_error_contains(
+        "MathException math = new MathException(); \
+         IllegalArgumentException unrelated = (IllegalArgumentException) math;",
+        &["cannot cast", "MathException", "IllegalArgumentException"],
     );
 }
 
@@ -324,4 +445,40 @@ fn unhandled_runtime_exceptions_include_source_mapped_method_frames() {
         assert!(frame.span.start < frame.span.end);
         assert!(frame.span.end <= source.len());
     }
+
+    let division = source.find("/").unwrap();
+    let explode_call = source.find("explode(denominator)").unwrap();
+    let middle_call = source.find("middle(0)").unwrap();
+    assert_eq!(error.stack_trace[0].span, Span::new(division, division + 1));
+    assert_eq!(
+        error.stack_trace[1].span,
+        Span::new(explode_call, explode_call + "explode(denominator)".len())
+    );
+    assert_eq!(
+        error.stack_trace[2].span,
+        Span::new(middle_call, middle_call + "middle(0)".len())
+    );
+
+    let rendered = error.render("stack.apex", source);
+    assert!(rendered.contains("at explode (stack.apex:3:"));
+    assert!(rendered.contains("at middle (stack.apex:7:"));
+    assert!(rendered.contains("at outer (stack.apex:11:"));
+}
+
+#[test]
+fn caught_exceptions_retain_their_originating_method_frame() {
+    let source = r#"
+        String caughtStack() {
+            try {
+                Integer impossible = 1 / 0;
+                return 'unreachable';
+            } catch (MathException error) {
+                return error.getStackTraceString();
+            }
+        }
+
+        System.debug(caughtStack().contains('caughtStack'));
+    "#;
+
+    assert_eq!(execute(source).unwrap(), ["true"]);
 }

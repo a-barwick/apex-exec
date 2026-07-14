@@ -391,9 +391,9 @@ impl Checker {
             } => self.new_collection_type(ty, initializer),
             Expression::NewException {
                 exception_type,
-                message,
+                arguments,
                 ..
-            } => self.new_exception_type(exception_type, message.as_deref()),
+            } => self.new_exception_type(exception_type, arguments),
             Expression::Index {
                 collection, index, ..
             } => self
@@ -437,16 +437,23 @@ impl Checker {
     fn new_exception_type(
         &mut self,
         exception_type: &TypeName,
-        message: Option<&Expression>,
+        arguments: &[Expression],
     ) -> Result<ExpressionType, Diagnostic> {
         if !exception_type.is_exception() {
             return Err(Diagnostic::new(
                 format!("{} is not an Exception type", exception_type.apex_name()),
-                message.map_or(Span::new(0, 0), Expression::span),
+                arguments.first().map_or(Span::new(0, 0), Expression::span),
             ));
         }
-        if let Some(message) = message {
-            self.require_operand(message, &TypeName::String, message.span())?;
+        if arguments.len() > 1 {
+            return Err(Diagnostic::new(
+                "exception constructor expects zero or one argument",
+                arguments[1].span(),
+            ));
+        }
+        if let Some(message) = arguments.first() {
+            let actual = self.expression_type(message)?;
+            require_assignable(&TypeName::String, &actual, message.span())?;
         }
         Ok(ExpressionType::Value(exception_type.clone()))
     }
@@ -468,22 +475,19 @@ impl Checker {
             ));
         };
 
-        let mut matches = overloads
+        let applicable = overloads
             .iter()
             .filter(|overload| overload.parameter_types.len() == argument_types.len())
-            .filter_map(|overload| {
+            .filter(|overload| {
                 overload
                     .parameter_types
                     .iter()
                     .zip(&argument_types)
-                    .map(|(expected, actual)| conversion_rank(expected, actual))
-                    .try_fold(0_u32, |total, rank| rank.map(|rank| total + rank))
-                    .map(|rank| (rank, overload))
+                    .all(|(expected, actual)| is_assignable(expected, actual))
             })
             .collect::<Vec<_>>();
-        matches.sort_by_key(|(rank, _)| *rank);
 
-        let Some((best_rank, best)) = matches.first().copied() else {
+        if applicable.is_empty() {
             return Err(Diagnostic::new(
                 format!(
                     "no matching overload for method `{}` with argument types ({})",
@@ -496,13 +500,24 @@ impl Checker {
                 ),
                 name.span,
             ));
-        };
-        if matches.get(1).is_some_and(|(rank, _)| *rank == best_rank) {
+        }
+
+        let most_specific = applicable
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                !applicable
+                    .iter()
+                    .copied()
+                    .any(|other| other.id != candidate.id && method_more_specific(other, candidate))
+            })
+            .collect::<Vec<_>>();
+        let [best] = most_specific.as_slice() else {
             return Err(Diagnostic::new(
                 format!("ambiguous overload for method `{}`", name.spelling),
                 name.span,
             ));
-        }
+        };
 
         resolved_method.set(Some(best.id));
         Ok(match &best.return_type {
@@ -523,7 +538,8 @@ impl Checker {
                 source == target
                     || *source == TypeName::Object
                     || *target == TypeName::Object
-                    || (source.is_exception() && target.is_exception())
+                    || (*source == TypeName::Exception && target.is_exception())
+                    || (*target == TypeName::Exception && source.is_exception())
             }
             ExpressionType::Void => false,
         };
@@ -1670,20 +1686,24 @@ fn is_assignable(expected: &TypeName, actual: &ExpressionType) -> bool {
     }
 }
 
-fn conversion_rank(expected: &TypeName, actual: &ExpressionType) -> Option<u32> {
-    match actual {
-        ExpressionType::Value(actual) if actual == expected => Some(0),
-        ExpressionType::Value(actual)
-            if *expected == TypeName::Exception && actual.is_exception() =>
-        {
-            Some(1)
+fn method_more_specific(left: &MethodSignature, right: &MethodSignature) -> bool {
+    let mut strictly_more_specific = false;
+    for (left, right) in left.parameter_types.iter().zip(&right.parameter_types) {
+        if left == right {
+            continue;
         }
-        ExpressionType::Value(_) if *expected == TypeName::Object => Some(2),
-        ExpressionType::Null if *expected == TypeName::Object => Some(2),
-        ExpressionType::Null if *expected == TypeName::Exception => Some(1),
-        ExpressionType::Null => Some(0),
-        ExpressionType::Value(_) | ExpressionType::Void => None,
+        if type_more_specific(left, right) {
+            strictly_more_specific = true;
+        } else {
+            return false;
+        }
     }
+    strictly_more_specific
+}
+
+fn type_more_specific(left: &TypeName, right: &TypeName) -> bool {
+    *right == TypeName::Object
+        || (*right == TypeName::Exception && left.is_exception() && *left != TypeName::Exception)
 }
 
 fn require_assignable(
@@ -1720,29 +1740,111 @@ fn is_statement_expression(expression: &Expression) -> bool {
 }
 
 fn statement_definitely_returns_or_throws(statement: &Statement) -> bool {
-    match statement {
-        Statement::Return { .. } | Statement::Throw { .. } => true,
-        Statement::Block { statements, .. } => {
-            for statement in statements {
-                if matches!(
-                    statement,
-                    Statement::Break { .. } | Statement::Continue { .. }
-                ) {
-                    return false;
-                }
-                if statement_definitely_returns_or_throws(statement) {
-                    return true;
-                }
-            }
-            false
+    let completions = statement_completions(statement);
+    !completions.normal
+        && !completions.breaks
+        && !completions.continues
+        && (completions.returns || completions.throws)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Completions {
+    normal: bool,
+    returns: bool,
+    throws: bool,
+    breaks: bool,
+    continues: bool,
+}
+
+impl Completions {
+    fn normal() -> Self {
+        Self {
+            normal: true,
+            ..Self::default()
         }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            normal: self.normal || other.normal,
+            returns: self.returns || other.returns,
+            throws: self.throws || other.throws,
+            breaks: self.breaks || other.breaks,
+            continues: self.continues || other.continues,
+        }
+    }
+
+    fn then(self, next: Self) -> Self {
+        Self {
+            normal: self.normal && next.normal,
+            returns: self.returns || (self.normal && next.returns),
+            throws: self.throws || (self.normal && next.throws),
+            breaks: self.breaks || (self.normal && next.breaks),
+            continues: self.continues || (self.normal && next.continues),
+        }
+    }
+
+    fn without_throw(self) -> Self {
+        Self {
+            throws: false,
+            ..self
+        }
+    }
+}
+
+fn statement_completions(statement: &Statement) -> Completions {
+    match statement {
+        Statement::Return { .. } => Completions {
+            returns: true,
+            ..Completions::default()
+        },
+        Statement::Throw { .. } => Completions {
+            throws: true,
+            ..Completions::default()
+        },
+        Statement::Break { .. } => Completions {
+            breaks: true,
+            ..Completions::default()
+        },
+        Statement::Continue { .. } => Completions {
+            continues: true,
+            ..Completions::default()
+        },
+        Statement::Block { statements, .. } => statements
+            .iter()
+            .fold(Completions::normal(), |current, statement| {
+                current.then(statement_completions(statement))
+            }),
         Statement::If {
             then_branch,
-            else_branch: Some(else_branch),
+            else_branch,
             ..
-        } => {
-            statement_definitely_returns_or_throws(then_branch)
-                && statement_definitely_returns_or_throws(else_branch)
+        } => statement_completions(then_branch).union(
+            else_branch
+                .as_deref()
+                .map_or_else(Completions::normal, statement_completions),
+        ),
+        Statement::While { body, .. }
+        | Statement::For { body, .. }
+        | Statement::ForEach { body, .. } => {
+            let body = statement_completions(body);
+            Completions {
+                normal: true,
+                returns: body.returns,
+                throws: body.throws,
+                breaks: false,
+                continues: false,
+            }
+        }
+        Statement::DoWhile { body, .. } => {
+            let body = statement_completions(body);
+            Completions {
+                normal: body.normal || body.breaks || body.continues,
+                returns: body.returns,
+                throws: body.throws,
+                breaks: false,
+                continues: false,
+            }
         }
         Statement::Try {
             try_block,
@@ -1750,25 +1852,41 @@ fn statement_definitely_returns_or_throws(statement: &Statement) -> bool {
             finally_block,
             ..
         } => {
-            finally_block
-                .as_deref()
-                .is_some_and(statement_definitely_returns_or_throws)
-                || (statement_definitely_returns_or_throws(try_block)
-                    && catches
-                        .iter()
-                        .all(|catch| statement_definitely_returns_or_throws(&catch.body)))
+            let try_completions = statement_completions(try_block);
+            let mut pending = try_completions.without_throw();
+            if catches.is_empty() {
+                pending.throws = try_completions.throws;
+            } else {
+                for catch in catches {
+                    pending = pending.union(statement_completions(&catch.body));
+                }
+                if !catches
+                    .iter()
+                    .any(|catch| catch.exception_type == TypeName::Exception)
+                {
+                    pending.throws = true;
+                }
+            }
+
+            let Some(finally_block) = finally_block else {
+                return pending;
+            };
+            let finally = statement_completions(finally_block);
+            let mut result = Completions {
+                normal: false,
+                returns: finally.returns,
+                throws: finally.throws,
+                breaks: finally.breaks,
+                continues: finally.continues,
+            };
+            if finally.normal {
+                result = result.union(pending);
+            }
+            result
         }
-        Statement::VariableDeclaration { .. }
-        | Statement::Expression { .. }
-        | Statement::If {
-            else_branch: None, ..
+        Statement::VariableDeclaration { .. } | Statement::Expression { .. } => {
+            Completions::normal()
         }
-        | Statement::While { .. }
-        | Statement::DoWhile { .. }
-        | Statement::For { .. }
-        | Statement::ForEach { .. }
-        | Statement::Break { .. }
-        | Statement::Continue { .. } => false,
     }
 }
 
@@ -2123,6 +2241,23 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("ambiguous overload"));
+
+        let error = check_source(
+            "String choose(String value) { return 'String'; } \
+             String choose(Exception value) { return 'Exception'; } \
+             String result = choose(null);",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous overload"));
+
+        let error = check_source(
+            "String choose(Object left, MathException right) { return 'first'; } \
+             String choose(Exception left, Object right) { return 'second'; } \
+             MathException error = new MathException(); \
+             String result = choose(error, error);",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous overload"));
     }
 
     #[test]
@@ -2131,12 +2266,21 @@ mod tests {
             "Integer complete(Boolean branch) { \
                  if (branch) return 1; else throw new MathException('failed'); \
              } \
+             Integer once() { do { return 1; } while (false); } \
              void done() { return; }",
         )
         .unwrap();
 
         let error = check_source("Integer incomplete(Boolean branch) { if (branch) return 1; }")
             .unwrap_err();
+        assert!(error.message.contains("every path"));
+
+        let error = check_source(
+            "Integer broken(Boolean stop) { \
+                 do { if (stop) break; return 1; } while (false); \
+             }",
+        )
+        .unwrap_err();
         assert!(error.message.contains("every path"));
 
         let error = check_source("void wrong() { return 1; }").unwrap_err();
@@ -2155,6 +2299,7 @@ mod tests {
                          + error.getStackTraceString(); \
                  } finally { System.debug('done'); } \
              } \
+             Exception emptyMessage = new Exception(null); \
              throw null;",
         )
         .unwrap();
@@ -2171,6 +2316,19 @@ mod tests {
 
         let error = check_source("void fail() { throw 'not an exception'; }").unwrap_err();
         assert!(error.message.contains("requires an Exception"));
+
+        let error = check_source("try {} catch (String problem) {}").unwrap_err();
+        assert!(error.message.contains("catch type must be an Exception"));
+
+        let error = check_source("throw new Exception('first', 'second');").unwrap_err();
+        assert!(error.message.contains("zero or one argument"));
+
+        let error = check_source(
+            "MathException math = new MathException(); \
+             IllegalArgumentException unrelated = (IllegalArgumentException) math;",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("cannot cast"));
     }
 
     #[test]

@@ -108,6 +108,7 @@ impl<'a> Lexer<'a> {
                     "break" => TokenKind::Break,
                     "continue" => TokenKind::Continue,
                     "return" => TokenKind::Return,
+                    "void" => TokenKind::Void,
                     "try" => TokenKind::Try,
                     "catch" => TokenKind::Catch,
                     "finally" => TokenKind::Finally,
@@ -298,7 +299,7 @@ mod tests {
 
     #[test]
     fn tokenizes_exception_control_flow_case_insensitively() {
-        let source = "TrY {} CaTcH (Exception error) {} FiNaLlY {} ThRoW error;";
+        let source = "VoId fail() { TrY {} CaTcH (Exception error) {} FiNaLlY {} ThRoW error; }";
         let kinds: Vec<TokenKind> = Lexer::new(source)
             .tokenize()
             .unwrap()
@@ -310,5 +311,6 @@ mod tests {
         assert!(kinds.contains(&TokenKind::Catch));
         assert!(kinds.contains(&TokenKind::Finally));
         assert!(kinds.contains(&TokenKind::Throw));
+        assert!(kinds.contains(&TokenKind::Void));
     }
 }

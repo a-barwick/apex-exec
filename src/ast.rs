@@ -133,7 +133,7 @@ pub enum Expression {
     },
     NewException {
         exception_type: TypeName,
-        message: Option<Box<Expression>>,
+        arguments: Vec<Expression>,
         span: Span,
     },
     Index {
@@ -298,6 +298,7 @@ pub enum TypeName {
     TypeException,
     StringException,
     IllegalArgumentException,
+    FinalException,
     List(Box<TypeName>),
     Set(Box<TypeName>),
     Map(Box<TypeName>, Box<TypeName>),
@@ -317,6 +318,7 @@ impl TypeName {
             "typeexception" => Some(Self::TypeException),
             "stringexception" => Some(Self::StringException),
             "illegalargumentexception" => Some(Self::IllegalArgumentException),
+            "finalexception" => Some(Self::FinalException),
             _ => None,
         }
     }
@@ -331,6 +333,7 @@ impl TypeName {
                 | Self::TypeException
                 | Self::StringException
                 | Self::IllegalArgumentException
+                | Self::FinalException
         )
     }
 
@@ -347,6 +350,7 @@ impl TypeName {
             Self::TypeException => "TypeException".to_owned(),
             Self::StringException => "StringException".to_owned(),
             Self::IllegalArgumentException => "IllegalArgumentException".to_owned(),
+            Self::FinalException => "FinalException".to_owned(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
             Self::Map(key, value) => {
@@ -390,6 +394,7 @@ mod tests {
             "TypeException",
             "StringException",
             "IllegalArgumentException",
+            "FinalException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");

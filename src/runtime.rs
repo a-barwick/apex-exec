@@ -60,6 +60,12 @@ struct EvaluatedArgument {
     span: Span,
 }
 
+#[derive(Clone, Debug)]
+struct ActiveCall {
+    method: String,
+    call_span: Span,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticReceiver {
     String,
@@ -86,6 +92,7 @@ pub struct Interpreter {
     collections: Vec<Collection>,
     output: Vec<String>,
     methods: Vec<MethodDeclaration>,
+    call_stack: Vec<ActiveCall>,
 }
 
 impl Interpreter {
@@ -95,6 +102,7 @@ impl Interpreter {
             collections: Vec::new(),
             output: Vec::new(),
             methods: Vec::new(),
+            call_stack: Vec::new(),
         }
     }
 
@@ -256,7 +264,8 @@ impl Interpreter {
     ) -> Result<Flow, Diagnostic> {
         let mut outcome = self.execute_statement(try_block);
 
-        if let Err(exception) = outcome {
+        if let Err(mut exception) = outcome {
+            self.attach_stack_if_missing(&mut exception);
             if exception.exception_type.is_some()
                 && let Some(catch) = catches
                     .iter()
@@ -433,9 +442,9 @@ impl Interpreter {
             } => self.evaluate_new_collection(ty, initializer, *span),
             Expression::NewException {
                 exception_type,
-                message,
+                arguments,
                 span,
-            } => self.evaluate_new_exception(exception_type, message.as_deref(), *span),
+            } => self.evaluate_new_exception(exception_type, arguments, *span),
             Expression::FunctionCall {
                 name,
                 arguments,
@@ -491,11 +500,12 @@ impl Interpreter {
     fn evaluate_new_exception(
         &mut self,
         exception_type: &TypeName,
-        message: Option<&Expression>,
+        arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let message = match message {
-            Some(message) => match self.evaluate(message)? {
+        let message = match arguments {
+            [] => String::new(),
+            [message] => match self.evaluate(message)? {
                 Value::String(message) => message,
                 Value::Null(_) => String::new(),
                 _ => {
@@ -505,7 +515,12 @@ impl Interpreter {
                     ));
                 }
             },
-            None => String::new(),
+            _ => {
+                return Err(Diagnostic::new(
+                    "invalid exception constructor arity escaped semantic validation",
+                    span,
+                ));
+            }
         };
         if !exception_type.is_exception() {
             return Err(Diagnostic::new(
@@ -544,7 +559,15 @@ impl Interpreter {
         }
 
         let caller_scopes = std::mem::replace(&mut self.scopes, vec![method_scope]);
-        let outcome = self.execute_statement(&method.body);
+        self.call_stack.push(ActiveCall {
+            method: method.name.spelling.clone(),
+            call_span: span,
+        });
+        let mut outcome = self.execute_statement(&method.body);
+        if let Err(exception) = &mut outcome {
+            self.attach_stack_if_missing(exception);
+        }
+        self.call_stack.pop();
         self.scopes = caller_scopes;
 
         match outcome {
@@ -565,10 +588,7 @@ impl Interpreter {
                 "loop control escaped method semantic validation",
                 method.name.span,
             )),
-            Err(mut exception) => {
-                exception.push_frame(method.name.spelling.clone(), span);
-                Err(exception)
-            }
+            Err(exception) => Err(exception),
         }
     }
 
@@ -2005,20 +2025,24 @@ impl Interpreter {
     fn evaluate_boolean(&mut self, expression: &Expression) -> Result<bool, Diagnostic> {
         match self.evaluate(expression)? {
             Value::Boolean(value) => Ok(value),
-            _ => Err(Diagnostic::new(
-                "expected Boolean value at runtime",
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "expected non-null Boolean value at runtime",
                 expression.span(),
             )),
+            _ => Err(invalid_runtime_operands(expression.span())),
         }
     }
 
     fn evaluate_integer(&mut self, expression: &Expression) -> Result<i64, Diagnostic> {
         match self.evaluate(expression)? {
             Value::Integer(value) => Ok(value),
-            _ => Err(Diagnostic::new(
-                "expected Integer value at runtime",
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "expected non-null Integer value at runtime",
                 expression.span(),
             )),
+            _ => Err(invalid_runtime_operands(expression.span())),
         }
     }
 
@@ -2139,7 +2163,7 @@ impl Interpreter {
             Ok(())
         } else {
             Err(runtime_exception(
-                "ListException",
+                "FinalException",
                 "cannot modify a collection while it is being iterated",
                 span,
             ))
@@ -2370,6 +2394,24 @@ impl Interpreter {
                 value_type,
                 ..
             } => TypeName::Map(Box::new(key_type.clone()), Box::new(value_type.clone())),
+        }
+    }
+
+    fn attach_stack_if_missing(&self, exception: &mut Diagnostic) {
+        if exception.exception_type.is_none()
+            || !exception.stack_trace.is_empty()
+            || self.call_stack.is_empty()
+        {
+            return;
+        }
+
+        for index in (0..self.call_stack.len()).rev() {
+            let span = if index + 1 == self.call_stack.len() {
+                exception.span
+            } else {
+                self.call_stack[index + 1].call_span
+            };
+            exception.push_frame(self.call_stack[index].method.clone(), span);
         }
     }
 }
