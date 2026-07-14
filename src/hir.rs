@@ -10,6 +10,8 @@ pub struct Program {
     ast: ast::Program,
     expression_types: HashMap<Span, ExpressionType>,
     calls: HashMap<Span, CallTarget>,
+    references: HashMap<Span, ReferenceTarget>,
+    members: HashMap<Span, MemberTarget>,
 }
 
 impl Program {
@@ -17,11 +19,15 @@ impl Program {
         ast: ast::Program,
         expression_types: HashMap<Span, ExpressionType>,
         calls: HashMap<Span, CallTarget>,
+        references: HashMap<Span, ReferenceTarget>,
+        members: HashMap<Span, MemberTarget>,
     ) -> Self {
         Self {
             ast,
             expression_types,
             calls,
+            references,
+            members,
         }
     }
 
@@ -35,6 +41,14 @@ impl Program {
 
     pub fn call_target(&self, span: Span) -> Option<CallTarget> {
         self.calls.get(&span).copied()
+    }
+
+    pub fn reference_target(&self, span: Span) -> Option<ReferenceTarget> {
+        self.references.get(&span).copied()
+    }
+
+    pub fn member_target(&self, span: Span) -> Option<MemberTarget> {
+        self.members.get(&span).copied()
     }
 }
 
@@ -70,6 +84,34 @@ impl ExpressionType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallTarget {
     TopLevelMethod(usize),
+    StaticMethod(ClassMemberId),
+    InstanceMethod(ClassMemberId),
+    SuperMethod(ClassMemberId),
+    Constructor {
+        class_id: usize,
+        member_id: Option<usize>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ClassMemberId {
+    pub class_id: usize,
+    pub member_id: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceTarget {
+    Local,
+    This,
+    Super(usize),
+    InstanceMember(ClassMemberId),
+    StaticMember(ClassMemberId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberTarget {
+    Instance(ClassMemberId),
+    Static(ClassMemberId),
 }
 
 #[cfg(test)]

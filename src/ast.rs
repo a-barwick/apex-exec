@@ -1,17 +1,102 @@
 use crate::span::Span;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
+    pub classes: Vec<ClassDeclaration>,
     pub methods: Vec<MethodDeclaration>,
     pub statements: Vec<Statement>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MethodDeclaration {
-    pub return_type: ReturnType,
+pub struct ClassDeclaration {
+    pub kind: ClassKind,
+    pub modifiers: Vec<Modifier>,
+    pub name: Identifier,
+    pub superclass: Option<NamedType>,
+    pub interfaces: Vec<NamedType>,
+    pub members: Vec<ClassMember>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClassKind {
+    Class,
+    Interface,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Modifier {
+    Public,
+    Private,
+    Protected,
+    Global,
+    Static,
+    Virtual,
+    Abstract,
+    Override,
+    Final,
+    WithSharing,
+    WithoutSharing,
+    InheritedSharing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClassMember {
+    Field(FieldDeclaration),
+    Property(PropertyDeclaration),
+    Constructor(ConstructorDeclaration),
+    Method(MethodDeclaration),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldDeclaration {
+    pub modifiers: Vec<Modifier>,
+    pub ty: TypeName,
+    pub name: Identifier,
+    pub initializer: Option<Expression>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropertyDeclaration {
+    pub modifiers: Vec<Modifier>,
+    pub ty: TypeName,
+    pub name: Identifier,
+    pub accessors: Vec<PropertyAccessor>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropertyAccessor {
+    pub kind: AccessorKind,
+    pub modifier: Option<Modifier>,
+    pub body: Option<Statement>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessorKind {
+    Get,
+    Set,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstructorDeclaration {
+    pub modifiers: Vec<Modifier>,
     pub name: Identifier,
     pub parameters: Vec<Parameter>,
     pub body: Statement,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MethodDeclaration {
+    pub modifiers: Vec<Modifier>,
+    pub return_type: ReturnType,
+    pub name: Identifier,
+    pub parameters: Vec<Parameter>,
+    pub body: Option<Statement>,
     pub span: Span,
 }
 
@@ -135,6 +220,11 @@ pub enum Expression {
         arguments: Vec<Expression>,
         span: Span,
     },
+    NewObject {
+        ty: TypeName,
+        arguments: Vec<Expression>,
+        span: Span,
+    },
     Index {
         collection: Box<Expression>,
         index: Box<Expression>,
@@ -149,6 +239,11 @@ pub enum Expression {
         receiver: Box<Expression>,
         method: Identifier,
         arguments: Vec<Expression>,
+        span: Span,
+    },
+    MemberAccess {
+        receiver: Box<Expression>,
+        member: Identifier,
         span: Span,
     },
     Cast {
@@ -187,9 +282,11 @@ impl Expression {
             | Self::Assignment { span, .. }
             | Self::NewCollection { span, .. }
             | Self::NewException { span, .. }
+            | Self::NewObject { span, .. }
             | Self::Index { span, .. }
             | Self::FunctionCall { span, .. }
             | Self::MethodCall { span, .. }
+            | Self::MemberAccess { span, .. }
             | Self::Cast { span, .. }
             | Self::Unary { span, .. }
             | Self::Postfix { span, .. }
@@ -207,13 +304,18 @@ pub enum AssignmentTarget {
         index: Box<Expression>,
         span: Span,
     },
+    Member {
+        receiver: Box<Expression>,
+        member: Identifier,
+        span: Span,
+    },
 }
 
 impl AssignmentTarget {
     pub fn span(&self) -> Span {
         match self {
             Self::Variable(identifier) => identifier.span,
-            Self::Index { span, .. } => *span,
+            Self::Index { span, .. } | Self::Member { span, .. } => *span,
         }
     }
 }
@@ -297,6 +399,7 @@ pub enum TypeName {
     StringException,
     IllegalArgumentException,
     FinalException,
+    Custom(NamedType),
     List(Box<TypeName>),
     Set(Box<TypeName>),
     Map(Box<TypeName>, Box<TypeName>),
@@ -349,12 +452,45 @@ impl TypeName {
             Self::StringException => "StringException".to_owned(),
             Self::IllegalArgumentException => "IllegalArgumentException".to_owned(),
             Self::FinalException => "FinalException".to_owned(),
+            Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
             Self::Map(key, value) => {
                 format!("Map<{},{}>", key.apex_name(), value.apex_name())
             }
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NamedType {
+    pub spelling: String,
+    pub canonical: String,
+    pub span: Span,
+}
+
+impl NamedType {
+    pub fn new(spelling: String, span: Span) -> Self {
+        let canonical = spelling.to_ascii_lowercase();
+        Self {
+            spelling,
+            canonical,
+            span,
+        }
+    }
+}
+
+impl PartialEq for NamedType {
+    fn eq(&self, other: &Self) -> bool {
+        self.canonical == other.canonical
+    }
+}
+
+impl Eq for NamedType {}
+
+impl Hash for NamedType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.canonical.hash(state);
     }
 }
 
