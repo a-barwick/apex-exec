@@ -8,7 +8,29 @@ use crate::{
     hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
     span::Span,
 };
-use std::{cmp::Ordering, collections::HashMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BranchHits {
+    pub true_hits: usize,
+    pub false_hits: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExecutionTrace {
+    pub executed_statements: BTreeSet<Span>,
+    pub branches: BTreeMap<Span, BranchHits>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TestExecution {
+    pub output: Vec<String>,
+    pub diagnostic: Option<Diagnostic>,
+    pub trace: ExecutionTrace,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CollectionId(usize);
@@ -110,6 +132,7 @@ pub struct Interpreter {
     classes: Vec<ClassDeclaration>,
     current_receiver: Option<ObjectId>,
     current_declaring_class: Option<usize>,
+    trace: ExecutionTrace,
 }
 
 impl Interpreter {
@@ -126,6 +149,7 @@ impl Interpreter {
             classes: Vec::new(),
             current_receiver: None,
             current_declaring_class: None,
+            trace: ExecutionTrace::default(),
         }
     }
 
@@ -212,6 +236,42 @@ impl Interpreter {
         Ok(self.output)
     }
 
+    pub(crate) fn run_test(
+        mut self,
+        program: &Program,
+        setup_methods: &[ClassMemberId],
+        test_method: ClassMemberId,
+    ) -> TestExecution {
+        let result = self.prepare(program).and_then(|_| {
+            for setup_method in setup_methods {
+                let span = self.class_method_span(*setup_method)?;
+                self.evaluate_class_method(*setup_method, None, &[], span, false)?;
+            }
+            let span = self.class_method_span(test_method)?;
+            self.evaluate_class_method(test_method, None, &[], span, false)?;
+            Ok(())
+        });
+        TestExecution {
+            output: self.output,
+            diagnostic: result.err(),
+            trace: self.trace,
+        }
+    }
+
+    fn class_method_span(&self, target: ClassMemberId) -> Result<Span, Diagnostic> {
+        match self
+            .classes
+            .get(target.class_id)
+            .and_then(|class| class.members.get(target.member_id))
+        {
+            Some(ClassMember::Method(method)) => Ok(method.name.span),
+            _ => Err(Diagnostic::new(
+                "test method target is invalid",
+                Span::new(0, 0),
+            )),
+        }
+    }
+
     fn prepare(&mut self, program: &Program) -> Result<(), Diagnostic> {
         self.methods = program.methods.clone();
         self.program = Some(program.clone());
@@ -280,6 +340,7 @@ impl Interpreter {
     }
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
+        self.trace.executed_statements.insert(statement.span());
         match statement {
             Statement::VariableDeclaration {
                 ty,
@@ -308,7 +369,9 @@ impl Interpreter {
                 else_branch,
                 ..
             } => {
-                if self.evaluate_boolean(condition)? {
+                let outcome = self.evaluate_boolean(condition)?;
+                self.record_branch(condition.span(), outcome);
+                if outcome {
                     self.execute_statement(then_branch)
                 } else if let Some(else_branch) = else_branch {
                     self.execute_statement(else_branch)
@@ -319,7 +382,12 @@ impl Interpreter {
             Statement::While {
                 condition, body, ..
             } => {
-                while self.evaluate_boolean(condition)? {
+                loop {
+                    let outcome = self.evaluate_boolean(condition)?;
+                    self.record_branch(condition.span(), outcome);
+                    if !outcome {
+                        break;
+                    }
                     match self.execute_statement(body)? {
                         Flow::Normal | Flow::Continue => {}
                         Flow::Break => break,
@@ -337,7 +405,9 @@ impl Interpreter {
                         Flow::Break => break,
                         flow @ Flow::Return(_) => return Ok(flow),
                     }
-                    if !self.evaluate_boolean(condition)? {
+                    let outcome = self.evaluate_boolean(condition)?;
+                    self.record_branch(condition.span(), outcome);
+                    if !outcome {
                         break;
                     }
                 }
@@ -471,10 +541,12 @@ impl Interpreter {
                 }
             }
             loop {
-                if let Some(condition) = condition
-                    && !self.evaluate_boolean(condition)?
-                {
-                    break;
+                if let Some(condition) = condition {
+                    let outcome = self.evaluate_boolean(condition)?;
+                    self.record_branch(condition.span(), outcome);
+                    if !outcome {
+                        break;
+                    }
                 }
                 match self.execute_statement(body)? {
                     Flow::Normal | Flow::Continue => {}
@@ -492,6 +564,15 @@ impl Interpreter {
         })();
         self.scopes.pop();
         result
+    }
+
+    fn record_branch(&mut self, span: Span, outcome: bool) {
+        let hits = self.trace.branches.entry(span).or_default();
+        if outcome {
+            hits.true_hits += 1;
+        } else {
+            hits.false_hits += 1;
+        }
     }
 
     fn execute_for_each(
