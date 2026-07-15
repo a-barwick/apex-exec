@@ -134,7 +134,7 @@ The milestone introduces the typed HIR boundary described in
 
 ## M6 — Apex test runner
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -154,7 +154,7 @@ This is the first major enterprise-value checkpoint.
 
 ## M7 — SObject schema and SQLite
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

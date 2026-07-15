@@ -15,6 +15,7 @@ cargo run -- run examples/hello.apex
 cargo run -- run examples/control-flow.apex
 cargo run -- check examples/milestone5-project
 cargo run -- invoke examples/milestone5-project Entry.run
+cargo run -- test examples/milestone6-project --jobs 2
 ```
 
 Inspect individual compiler phases:

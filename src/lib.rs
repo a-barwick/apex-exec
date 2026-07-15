@@ -7,6 +7,7 @@ pub mod project;
 pub mod runtime;
 pub mod semantic;
 pub mod span;
+pub mod test_runner;
 pub mod token;
 
 use ast::Program;

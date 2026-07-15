@@ -68,6 +68,14 @@ impl Compilation {
             .invoke_static(&self.program, class, method)
             .map_err(|diagnostic| self.source_map.project_error(diagnostic))
     }
+
+    pub(crate) fn render_diagnostic(&self, diagnostic: &Diagnostic) -> String {
+        self.source_map.render_diagnostic(diagnostic)
+    }
+
+    pub(crate) fn source_location(&self, span: Span) -> Option<(PathBuf, usize)> {
+        self.source_map.location(span.start)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -84,17 +92,41 @@ struct SourceEntry {
 }
 
 impl SourceMap {
+    fn render_diagnostic(&self, diagnostic: &Diagnostic) -> String {
+        let Some(entry) = self.entry_for_offset(diagnostic.span.start) else {
+            return diagnostic.to_string();
+        };
+        let mut local = diagnostic.clone();
+        local.span = local_span(local.span, entry.start);
+        let frames = std::mem::take(&mut local.stack_trace);
+        let mut rendered = local.render(&entry.path.display().to_string(), &entry.source);
+        if !frames.is_empty() {
+            rendered.push_str("\nApex stack trace:");
+            for frame in frames {
+                if let Some(frame_entry) = self.entry_for_offset(frame.span.start) {
+                    let offset = frame.span.start.saturating_sub(frame_entry.start);
+                    let (line, column) = source_line_column(&frame_entry.source, offset);
+                    rendered.push_str(&format!(
+                        "\n  at {} ({}:{}:{})",
+                        frame.method,
+                        frame_entry.path.display(),
+                        line,
+                        column
+                    ));
+                } else {
+                    rendered.push_str(&format!("\n  at {}", frame.method));
+                }
+            }
+        }
+        rendered
+    }
+
     fn project_error(&self, mut diagnostic: Diagnostic) -> ProjectError {
-        let entry = self.entries.iter().find(|entry| {
-            diagnostic.span.start >= entry.start && diagnostic.span.start <= entry.end
-        });
+        let entry = self.entry_for_offset(diagnostic.span.start);
         let Some(entry) = entry else {
             return ProjectError::diagnostic(None, String::new(), diagnostic);
         };
-        diagnostic.span = Span::new(
-            diagnostic.span.start.saturating_sub(entry.start),
-            diagnostic.span.end.saturating_sub(entry.start),
-        );
+        diagnostic.span = local_span(diagnostic.span, entry.start);
         for frame in &mut diagnostic.stack_trace {
             if frame.span.start >= entry.start && frame.span.start <= entry.end {
                 frame.span = Span::new(
@@ -105,6 +137,42 @@ impl SourceMap {
         }
         ProjectError::diagnostic(Some(entry.path.clone()), entry.source.clone(), diagnostic)
     }
+
+    fn location(&self, offset: usize) -> Option<(PathBuf, usize)> {
+        let entry = self.entry_for_offset(offset)?;
+        let local = offset.saturating_sub(entry.start).min(entry.source.len());
+        let line = entry.source[..local]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1;
+        Some((entry.path.clone(), line))
+    }
+
+    fn entry_for_offset(&self, offset: usize) -> Option<&SourceEntry> {
+        self.entries
+            .iter()
+            .find(|entry| offset >= entry.start && offset <= entry.end)
+    }
+}
+
+fn local_span(span: Span, entry_start: usize) -> Span {
+    Span::new(
+        span.start.saturating_sub(entry_start),
+        span.end.saturating_sub(entry_start),
+    )
+}
+
+fn source_line_column(source: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(source.len());
+    let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line = source[..offset]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    let column = source[line_start..offset].chars().count() + 1;
+    (line, column)
 }
 
 #[derive(Clone, Debug)]
@@ -823,6 +891,9 @@ fn shift_program(program: &mut AstProgram, offset: usize) {
 }
 
 fn shift_class(class: &mut ClassDeclaration, offset: usize) {
+    for annotation in &mut class.annotations {
+        shift_span(&mut annotation.span, offset);
+    }
     shift_identifier(&mut class.name, offset);
     if let Some(parent) = &mut class.superclass {
         shift_named_type(parent, offset);
@@ -868,6 +939,9 @@ fn shift_class(class: &mut ClassDeclaration, offset: usize) {
 }
 
 fn shift_method(method: &mut MethodDeclaration, offset: usize) {
+    for annotation in &mut method.annotations {
+        shift_span(&mut annotation.span, offset);
+    }
     if let ReturnType::Value(ty) = &mut method.return_type {
         shift_type(ty, offset);
     }
