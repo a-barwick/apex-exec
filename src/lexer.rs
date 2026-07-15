@@ -81,6 +81,7 @@ impl<'a> Lexer<'a> {
             '*' => TokenKind::Star,
             '/' => TokenKind::Slash,
             '%' => TokenKind::Percent,
+            '@' => TokenKind::At,
             '&' if self.take('&') => TokenKind::AndAnd,
             '|' if self.take('|') => TokenKind::OrOr,
             '(' => TokenKind::LeftParen,

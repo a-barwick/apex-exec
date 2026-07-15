@@ -1,12 +1,13 @@
 use crate::{
     ast::{
-        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassKind,
-        ClassMember, CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration,
-        Identifier, MapEntry, MethodDeclaration, Modifier, NamedType, Parameter, PostfixOperator,
-        Program, PropertyAccessor, PropertyDeclaration, ReturnType, Statement, TypeName,
-        UnaryOperator,
+        AccessorKind, Annotation, AnnotationKind, AssignmentTarget, BinaryOperator, CatchClause,
+        ClassDeclaration, ClassKind, ClassMember, CollectionInitializer, ConstructorDeclaration,
+        Expression, FieldDeclaration, Identifier, MapEntry, MethodDeclaration, Modifier, NamedType,
+        Parameter, PostfixOperator, Program, PropertyAccessor, PropertyDeclaration, ReturnType,
+        Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
+    span::Span,
     token::{Token, TokenKind},
 };
 
@@ -41,6 +42,7 @@ impl Parser {
     }
 
     fn parse_class_declaration(&mut self) -> Result<ClassDeclaration, Diagnostic> {
+        let annotations = self.parse_annotations()?;
         let modifiers = self.parse_modifiers()?;
         let start = self.current().span;
         let kind = if self.check(&TokenKind::Class) {
@@ -75,6 +77,7 @@ impl Parser {
         }
         let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after type body")?;
         Ok(ClassDeclaration {
+            annotations,
             kind,
             modifiers,
             name,
@@ -86,11 +89,18 @@ impl Parser {
     }
 
     fn parse_class_member(&mut self, class_name: &Identifier) -> Result<ClassMember, Diagnostic> {
+        let annotations = self.parse_annotations()?;
         let modifiers = self.parse_modifiers()?;
         if matches!(&self.current().kind, TokenKind::Identifier(spelling)
             if spelling.eq_ignore_ascii_case(&class_name.spelling))
             && matches!(self.peek(1).kind, TokenKind::LeftParen)
         {
+            if let Some(annotation) = annotations.first() {
+                return Err(Diagnostic::new(
+                    "annotations are not supported on constructors",
+                    annotation.span,
+                ));
+            }
             let name = self.expect_identifier("expected constructor name")?;
             let parameters = self.parse_parameters()?;
             let body = self.parse_block()?;
@@ -116,6 +126,7 @@ impl Parser {
                 (Some(body), end)
             };
             return Ok(ClassMember::Method(MethodDeclaration {
+                annotations,
                 modifiers,
                 return_type,
                 name,
@@ -131,6 +142,12 @@ impl Parser {
                 start,
             ));
         };
+        if let Some(annotation) = annotations.first() {
+            return Err(Diagnostic::new(
+                "annotations are only supported on classes and methods",
+                annotation.span,
+            ));
+        }
         if self.check(&TokenKind::LeftBrace) {
             return self
                 .parse_property(modifiers, ty, name, start)
@@ -217,6 +234,7 @@ impl Parser {
         let body = self.parse_block()?;
         let span = start.merge(body.span());
         Ok(MethodDeclaration {
+            annotations: Vec::new(),
             modifiers: Vec::new(),
             return_type,
             name,
@@ -1012,6 +1030,71 @@ impl Parser {
         Ok(modifiers)
     }
 
+    fn parse_annotations(&mut self) -> Result<Vec<Annotation>, Diagnostic> {
+        let mut annotations = Vec::new();
+        while self.check(&TokenKind::At) {
+            let start = self.advance().span;
+            let name = self.expect_identifier("expected an annotation name after `@`")?;
+            let kind = match name.canonical.as_str() {
+                "istest" => {
+                    let see_all_data = if self.check(&TokenKind::LeftParen) {
+                        self.advance();
+                        let argument = self
+                            .expect_identifier("expected `SeeAllData` in `@IsTest` annotation")?;
+                        if argument.canonical != "seealldata" {
+                            return Err(Diagnostic::new(
+                                "only `SeeAllData` is supported in `@IsTest`",
+                                argument.span,
+                            ));
+                        }
+                        self.expect_simple(TokenKind::Equal, "expected `=` after `SeeAllData`")?;
+                        let value = match self.current().kind {
+                            TokenKind::BooleanLiteral(value) => {
+                                self.advance();
+                                value
+                            }
+                            _ => {
+                                return Err(Diagnostic::new(
+                                    "`SeeAllData` requires a Boolean literal",
+                                    self.current().span,
+                                ));
+                            }
+                        };
+                        self.expect_simple(
+                            TokenKind::RightParen,
+                            "expected `)` after `@IsTest` arguments",
+                        )?;
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    AnnotationKind::IsTest { see_all_data }
+                }
+                "testsetup" => {
+                    if self.check(&TokenKind::LeftParen) {
+                        return Err(Diagnostic::new(
+                            "`@TestSetup` does not accept arguments",
+                            self.current().span,
+                        ));
+                    }
+                    AnnotationKind::TestSetup
+                }
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!("unsupported annotation `@{}`", name.spelling),
+                        name.span,
+                    ));
+                }
+            };
+            let end = self.peek(0).span.start;
+            annotations.push(Annotation {
+                kind,
+                span: Span::new(start.start, end),
+            });
+        }
+        Ok(annotations)
+    }
+
     fn parse_modifier(&mut self) -> Result<Modifier, Diagnostic> {
         let token = self.advance();
         match token.kind {
@@ -1056,7 +1139,7 @@ impl Parser {
     }
 
     fn is_class_declaration_start(&self) -> bool {
-        let mut cursor = self.cursor;
+        let mut cursor = self.annotation_prefix_end_at(self.cursor);
         loop {
             match self.token_at(cursor).kind {
                 TokenKind::Public
@@ -1083,6 +1166,36 @@ impl Parser {
             self.token_at(cursor).kind,
             TokenKind::Class | TokenKind::Interface
         )
+    }
+
+    fn annotation_prefix_end_at(&self, mut cursor: usize) -> usize {
+        while matches!(self.token_at(cursor).kind, TokenKind::At) {
+            cursor += 1;
+            if !matches!(self.token_at(cursor).kind, TokenKind::Identifier(_)) {
+                return cursor;
+            }
+            cursor += 1;
+            if matches!(self.token_at(cursor).kind, TokenKind::LeftParen) {
+                let mut depth = 0usize;
+                loop {
+                    match self.token_at(cursor).kind {
+                        TokenKind::LeftParen => depth += 1,
+                        TokenKind::RightParen => {
+                            depth -= 1;
+                            cursor += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            continue;
+                        }
+                        TokenKind::Eof => return cursor,
+                        _ => {}
+                    }
+                    cursor += 1;
+                }
+            }
+        }
+        cursor
     }
 
     fn is_cast_start(&self) -> bool {
@@ -1118,7 +1231,8 @@ impl Parser {
             | "typeexception"
             | "stringexception"
             | "illegalargumentexception"
-            | "finalexception" => {}
+            | "finalexception"
+            | "assertexception" => {}
             "list" | "set" => {
                 if !matches!(self.token_at(end).kind, TokenKind::Less) {
                     return None;

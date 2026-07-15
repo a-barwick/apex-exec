@@ -1,9 +1,9 @@
 use crate::{
     ast::{
-        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassKind,
-        ClassMember, CollectionInitializer, ConstructorDeclaration, Expression, Identifier,
-        MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement, TypeName,
-        UnaryOperator,
+        AccessorKind, AnnotationKind, AssignmentTarget, BinaryOperator, CatchClause,
+        ClassDeclaration, ClassKind, ClassMember, CollectionInitializer, ConstructorDeclaration,
+        Expression, Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType,
+        Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget},
@@ -126,15 +126,15 @@ impl Checker {
 
     fn validate_class_hierarchy(&self) -> Result<(), Diagnostic> {
         for (class_id, class) in self.classes.iter().enumerate() {
+            self.validate_test_class(class)?;
             validate_modifier_set(&class.modifiers, class.name.span, "type")?;
+            let mut rejected = vec![Modifier::Protected, Modifier::Static, Modifier::Override];
+            if !class_is_test(class) {
+                rejected.push(Modifier::Private);
+            }
             reject_modifiers(
                 &class.modifiers,
-                &[
-                    Modifier::Private,
-                    Modifier::Protected,
-                    Modifier::Static,
-                    Modifier::Override,
-                ],
+                &rejected,
                 class.name.span,
                 "top-level type",
             )?;
@@ -223,6 +223,42 @@ impl Checker {
                     .as_ref()
                     .and_then(|name| self.class_ids.get(&name.canonical).copied());
             }
+        }
+        Ok(())
+    }
+
+    fn validate_test_class(&self, class: &ClassDeclaration) -> Result<(), Diagnostic> {
+        let mut saw_is_test = false;
+        for annotation in &class.annotations {
+            match annotation.kind {
+                AnnotationKind::IsTest { see_all_data } => {
+                    if saw_is_test {
+                        return Err(Diagnostic::new(
+                            "duplicate `@IsTest` annotation on class",
+                            annotation.span,
+                        ));
+                    }
+                    saw_is_test = true;
+                    if see_all_data == Some(true) {
+                        return Err(Diagnostic::new(
+                            "`@IsTest(SeeAllData=true)` is unsupported without an org data host",
+                            annotation.span,
+                        ));
+                    }
+                }
+                AnnotationKind::TestSetup => {
+                    return Err(Diagnostic::new(
+                        "`@TestSetup` is only valid on methods",
+                        annotation.span,
+                    ));
+                }
+            }
+        }
+        if saw_is_test && class.kind != ClassKind::Class {
+            return Err(Diagnostic::new(
+                "`@IsTest` is only valid on classes",
+                class.name.span,
+            ));
         }
         Ok(())
     }
@@ -384,6 +420,7 @@ impl Checker {
                     }
                 }
                 ClassMember::Method(method) => {
+                    self.validate_test_method(class, method)?;
                     validate_modifier_set(&method.modifiers, method.name.span, "method")?;
                     if method.modifiers.contains(&Modifier::Static) {
                         reject_modifiers(
@@ -448,6 +485,55 @@ impl Checker {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_test_method(
+        &self,
+        class: &ClassDeclaration,
+        method: &MethodDeclaration,
+    ) -> Result<(), Diagnostic> {
+        let mut test_kind = None;
+        for annotation in &method.annotations {
+            let kind_name = match annotation.kind {
+                AnnotationKind::IsTest { see_all_data } => {
+                    if see_all_data == Some(true) {
+                        return Err(Diagnostic::new(
+                            "`@IsTest(SeeAllData=true)` is unsupported without an org data host",
+                            annotation.span,
+                        ));
+                    }
+                    "@IsTest"
+                }
+                AnnotationKind::TestSetup => "@TestSetup",
+            };
+            if test_kind.is_some() {
+                return Err(Diagnostic::new(
+                    "test methods may have only one test annotation",
+                    annotation.span,
+                ));
+            }
+            test_kind = Some(kind_name);
+        }
+        let Some(kind_name) = test_kind else {
+            return Ok(());
+        };
+        if !class_is_test(class) {
+            return Err(Diagnostic::new(
+                format!("`{kind_name}` methods require an `@IsTest` class"),
+                method.name.span,
+            ));
+        }
+        if !method.modifiers.contains(&Modifier::Static)
+            || method.return_type != ReturnType::Void
+            || !method.parameters.is_empty()
+            || method.body.is_none()
+        {
+            return Err(Diagnostic::new(
+                format!("`{kind_name}` method must be static void with no parameters and a body"),
+                method.name.span,
+            ));
         }
         Ok(())
     }
@@ -2751,6 +2837,29 @@ impl Checker {
                 self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
                 Ok(ExpressionType::Void)
             }
+            "assert" => {
+                require_static_arity("System", method, arguments.len(), &[1, 2], arguments)?;
+                self.require_named_argument(
+                    "System",
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Boolean,
+                )?;
+                if let Some(message) = arguments.get(1) {
+                    self.require_non_void_argument("System", &method.spelling, 1, message)?;
+                }
+                Ok(ExpressionType::Void)
+            }
+            "assertequals" | "assertnotequals" => {
+                require_static_arity("System", method, arguments.len(), &[2, 3], arguments)?;
+                self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
+                self.require_non_void_argument("System", &method.spelling, 1, &arguments[1])?;
+                if let Some(message) = arguments.get(2) {
+                    self.require_non_void_argument("System", &method.spelling, 2, message)?;
+                }
+                Ok(ExpressionType::Void)
+            }
             _ => Err(unknown_static_method("System", method)),
         }
     }
@@ -3111,6 +3220,13 @@ fn validate_modifier_set(
         ));
     }
     Ok(())
+}
+
+fn class_is_test(class: &ClassDeclaration) -> bool {
+    class
+        .annotations
+        .iter()
+        .any(|annotation| annotation.kind.is_test())
 }
 
 fn reject_modifiers(

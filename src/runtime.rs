@@ -1894,6 +1894,53 @@ impl Interpreter {
                 self.output.push(self.display_value(&argument.value));
                 Ok(Value::Void)
             }
+            "assert" => {
+                let ([condition] | [condition, _]) = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                if expect_boolean(&condition.value, condition.span)? {
+                    return Ok(Value::Void);
+                }
+                let message = arguments
+                    .get(1)
+                    .map(|message| self.display_value(&message.value));
+                Err(runtime_exception(
+                    "AssertException",
+                    assertion_failure_message(message.as_deref(), "condition is false"),
+                    condition.span,
+                ))
+            }
+            "assertequals" | "assertnotequals" => {
+                let ([expected, actual] | [expected, actual, _]) = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let equal = self.values_equal(&expected.value, &actual.value);
+                let passed = if method.canonical == "assertequals" {
+                    equal
+                } else {
+                    !equal
+                };
+                if passed {
+                    return Ok(Value::Void);
+                }
+                let detail = if method.canonical == "assertequals" {
+                    format!(
+                        "expected {}, actual {}",
+                        self.display_value(&expected.value),
+                        self.display_value(&actual.value)
+                    )
+                } else {
+                    format!("did not expect {}", self.display_value(&actual.value))
+                };
+                let message = arguments
+                    .get(2)
+                    .map(|message| self.display_value(&message.value));
+                Err(runtime_exception(
+                    "AssertException",
+                    assertion_failure_message(message.as_deref(), &detail),
+                    actual.span,
+                ))
+            }
             _ => Err(unsupported_method("System", method)),
         }
     }
@@ -3349,6 +3396,13 @@ fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Spa
     Diagnostic::runtime_exception(exception_type, message, span)
 }
 
+fn assertion_failure_message(message: Option<&str>, detail: &str) -> String {
+    match message {
+        Some(message) => format!("Assertion Failed: {message} ({detail})"),
+        None => format!("Assertion Failed: {detail}"),
+    }
+}
+
 fn exception_matches(exception: &Diagnostic, catch_type: &TypeName) -> bool {
     let Some(exception_type) = exception.exception_type.as_deref() else {
         return false;
@@ -3404,6 +3458,18 @@ fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
         Value::Null(_) => Err(runtime_exception(
             "NullPointerException",
             "expected non-null Integer at runtime",
+            span,
+        )),
+        _ => Err(invalid_runtime_operands(span)),
+    }
+}
+
+fn expect_boolean(value: &Value, span: Span) -> Result<bool, Diagnostic> {
+    match value {
+        Value::Boolean(value) => Ok(*value),
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
+            "expected non-null Boolean at runtime",
             span,
         )),
         _ => Err(invalid_runtime_operands(span)),

@@ -10,6 +10,7 @@ pub struct Program {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassDeclaration {
+    pub annotations: Vec<Annotation>,
     pub kind: ClassKind,
     pub modifiers: Vec<Modifier>,
     pub name: Identifier,
@@ -92,12 +93,35 @@ pub struct ConstructorDeclaration {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MethodDeclaration {
+    pub annotations: Vec<Annotation>,
     pub modifiers: Vec<Modifier>,
     pub return_type: ReturnType,
     pub name: Identifier,
     pub parameters: Vec<Parameter>,
     pub body: Option<Statement>,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Annotation {
+    pub kind: AnnotationKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnnotationKind {
+    IsTest { see_all_data: Option<bool> },
+    TestSetup,
+}
+
+impl AnnotationKind {
+    pub fn is_test(self) -> bool {
+        matches!(self, Self::IsTest { .. })
+    }
+
+    pub fn is_test_setup(self) -> bool {
+        matches!(self, Self::TestSetup)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -399,6 +423,7 @@ pub enum TypeName {
     StringException,
     IllegalArgumentException,
     FinalException,
+    AssertException,
     Custom(NamedType),
     List(Box<TypeName>),
     Set(Box<TypeName>),
@@ -420,6 +445,7 @@ impl TypeName {
             "stringexception" => Some(Self::StringException),
             "illegalargumentexception" => Some(Self::IllegalArgumentException),
             "finalexception" => Some(Self::FinalException),
+            "assertexception" => Some(Self::AssertException),
             _ => None,
         }
     }
@@ -435,6 +461,7 @@ impl TypeName {
                 | Self::StringException
                 | Self::IllegalArgumentException
                 | Self::FinalException
+                | Self::AssertException
         )
     }
 
@@ -452,6 +479,7 @@ impl TypeName {
             Self::StringException => "StringException".to_owned(),
             Self::IllegalArgumentException => "IllegalArgumentException".to_owned(),
             Self::FinalException => "FinalException".to_owned(),
+            Self::AssertException => "AssertException".to_owned(),
             Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
@@ -529,6 +557,7 @@ mod tests {
             "StringException",
             "IllegalArgumentException",
             "FinalException",
+            "AssertException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");

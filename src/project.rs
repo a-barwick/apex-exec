@@ -823,6 +823,9 @@ fn shift_program(program: &mut AstProgram, offset: usize) {
 }
 
 fn shift_class(class: &mut ClassDeclaration, offset: usize) {
+    for annotation in &mut class.annotations {
+        shift_span(&mut annotation.span, offset);
+    }
     shift_identifier(&mut class.name, offset);
     if let Some(parent) = &mut class.superclass {
         shift_named_type(parent, offset);
@@ -868,6 +871,9 @@ fn shift_class(class: &mut ClassDeclaration, offset: usize) {
 }
 
 fn shift_method(method: &mut MethodDeclaration, offset: usize) {
+    for annotation in &mut method.annotations {
+        shift_span(&mut annotation.span, offset);
+    }
     if let ReturnType::Value(ty) = &mut method.return_type {
         shift_type(ty, offset);
     }
