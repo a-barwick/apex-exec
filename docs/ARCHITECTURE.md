@@ -16,6 +16,9 @@ Semantic checker ─► checked HIR (syntax plus typed resolution side tables)
     │
     ▼
 Tree-walking interpreter ─► values, objects, and debug output
+    │
+    ▼
+Isolated test runner ─► deterministic results, JUnit, and coverage
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -26,6 +29,7 @@ The public library entry points in `src/lib.rs` deliberately expose each phase:
 - `execute`
 - `project::discover`
 - `project::compile` / `ProjectCompiler::compile`
+- `test_runner::run`
 
 M5 keeps parsed syntax immutable and introduces a checked HIR program. Semantic
 analysis records expression types and selected top-level, constructor, static,
@@ -42,6 +46,19 @@ linking.
 
 The CLI is a thin adapter over those functions.
 
+M6 discovers tests from checked annotation metadata and executes each test in
+its own interpreter. Setup methods share that test's interpreter and run before
+the test method. Independent interpreters make static fields, object and
+collection arenas, output, call stacks, and coverage state safe to execute in a
+bounded worker pool. Results are sorted by case-insensitive qualified test name
+after execution so parallel scheduling is never observable in reports.
+
+The interpreter records executed statement spans and true/false conditional
+outcomes. The test runner maps those observations through the project source
+map, excludes `@IsTest` classes from the production denominator, and owns
+console/JUnit rendering. Test policy and report formats do not leak into parser,
+semantic, or ordinary execution entry points.
+
 ## Current modules
 
 | Module | Responsibility |
@@ -55,6 +72,7 @@ The CLI is a thin adapter over those functions.
 | `semantic` | Name lookup and primitive type validation |
 | `runtime` | AST execution, environments, and values |
 | `project` | SFDX discovery, source-unit caching, dependency graphs, and source mapping |
+| `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 
@@ -208,6 +226,7 @@ Project-scale performance will later rely on:
 - Incremental parsing and semantic analysis
 - Cached typed IR
 - Isolated parallel test execution
+- Per-file statement-line and conditional-outcome coverage aggregation
 - Content-addressed CI artifacts
 
 These optimizations must preserve deterministic results and source diagnostics.

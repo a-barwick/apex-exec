@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M6 — Apex test runner
+M7 — SObject schema and SQLite
 
 ## Completed
 
@@ -72,29 +72,46 @@ M6 — Apex test runner
 - A three-file SFDX service-layer example that compiles and runs locally
 - A pinned seven-file, 14,740-line open-source Apex North Star corpus with
   executable lexer/parser milestone indicators
+- Case-insensitive `@IsTest` and `@TestSetup` annotations with checked test and
+  setup method signatures; unsupported annotations and org-backed
+  `SeeAllData=true` are rejected explicitly
+- Catchable `AssertException` behavior for `System.assert`,
+  `System.assertEquals`, and `System.assertNotEquals`
+- Project test discovery, class/method/glob filtering, deterministic result
+  ordering, and independent interpreter state per test
+- Setup execution before each isolated test and bounded parallel execution with
+  a configurable worker count
+- Expected runtime and assertion failures captured as test results without
+  stopping the remaining suite
+- Console and JUnit test reports plus production line and conditional-branch
+  coverage
+- A two-file SFDX test project that passes through `apex-exec test`, including
+  parallel execution, setup isolation, assertions, and full sample coverage
 
 ## Immediate target
 
-Implement M6 Apex test discovery and execution on the checked class/project
-runtime established in M5.
+Implement M7 SObject schema and SQLite on the isolated project/test runtime
+established in M6.
 
 Recommended implementation order:
 
-1. Parse `@isTest` and test-related annotations without weakening unsupported
-   annotation diagnostics.
-2. Discover test classes, test methods, and setup methods in compiled projects.
-3. Add deterministic assertions, expected failures, filtering, and per-test
-   runtime isolation.
-4. Produce useful console and JUnit results with line/branch coverage.
-5. Add safe parallel execution after isolation is executable and measured.
+1. Import custom object and field metadata from ordinary SFDX projects.
+2. Normalize metadata independently from physical storage and generate a local
+   SQLite schema.
+3. Add typed and dynamic SObject values, Salesforce-shaped IDs, and field
+   access.
+4. Add isolated transactions, savepoints, rollback, and fast test reset.
+5. Add executable schema/data fixtures without coupling semantic analysis to
+   SQLite.
 
 ## North Star indicators
 
-At M5 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M6 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
-stopping at unsupported `instanceof` syntax. The other first blockers are
-annotations, ternary syntax, and compound bitwise operators. These
+stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
+other first lexer blockers forward to safe navigation, null coalescing,
+ternary syntax, and bitwise operators. These
 are syntax-progress indicators, not semantic, execution, or Salesforce
 compatibility percentages.
 
@@ -131,13 +148,21 @@ compatibility percentages.
 - Parsed source units and unchanged complete builds are cached. A changed unit
   computes dependency invalidation and reuses unchanged parsed ASTs, while the
   cross-file semantic link currently reruns project-wide.
-- Nested types, enums, annotations, explicit superclass-constructor calls,
-  custom exception classes, and Salesforce-exact object string formatting are
-  not implemented.
+- Nested types, enums, annotations other than `@IsTest`/`@TestSetup`, explicit
+  superclass-constructor calls, custom exception classes, and Salesforce-exact
+  object string formatting are not implemented.
 - Sharing modifiers are parsed for structural progress but rejected during
   checking because sharing/security semantics remain deferred.
-- SOQL, SOSL, DML, SObjects, and Apex test annotations/running are not
-  implemented.
+- Test setup methods run before every isolated test interpreter. This provides
+  deterministic state today; Salesforce's one-time setup transaction followed
+  by database snapshots requires the M7 data host.
+- Test discovery supports annotation-based static void methods only. Legacy
+  `testMethod`, the newer `Assert` class, `Test.startTest`/`stopTest`, and
+  org-backed `SeeAllData=true` remain unsupported.
+- Coverage counts executable production statement lines and both outcomes of
+  `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
+  claim of Salesforce-exact coverage accounting.
+- SOQL, SOSL, DML, and SObjects are not implemented.
 
 ## Handoff checklist
 
