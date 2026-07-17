@@ -12,6 +12,31 @@ impl RecordId {
         Self(value.into())
     }
 
+    pub fn parse(value: impl Into<String>) -> Result<Self, RecordIdError> {
+        let value = value.into();
+        validate_record_id(&value)?;
+        Ok(Self(value))
+    }
+
+    pub fn generate(key_prefix: &str, sequence: u64) -> Result<Self, RecordIdError> {
+        if key_prefix.len() != 3 || !key_prefix.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return Err(RecordIdError::InvalidKeyPrefix(key_prefix.to_owned()));
+        }
+        const ALPHABET: &[u8; 62] =
+            b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        let mut value = sequence;
+        let mut body = [b'0'; 12];
+        for byte in body.iter_mut().rev() {
+            *byte = ALPHABET[(value % 62) as usize];
+            value /= 62;
+        }
+        let mut id15 = String::with_capacity(15);
+        id15.push_str(key_prefix);
+        id15.push_str(std::str::from_utf8(&body).expect("ID alphabet is ASCII"));
+        let suffix = checksum_suffix(&id15);
+        Ok(Self(format!("{id15}{suffix}")))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -34,6 +59,42 @@ impl From<&str> for RecordId {
         Self::new(value)
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecordIdError {
+    InvalidLength(usize),
+    InvalidCharacter { index: usize, character: char },
+    InvalidChecksum { expected: String, actual: String },
+    InvalidKeyPrefix(String),
+}
+
+impl fmt::Display for RecordIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLength(length) => {
+                write!(
+                    formatter,
+                    "Salesforce ID must contain 15 or 18 characters, found {length}"
+                )
+            }
+            Self::InvalidCharacter { index, character } => write!(
+                formatter,
+                "Salesforce ID contains invalid character `{character}` at index {index}"
+            ),
+            Self::InvalidChecksum { expected, actual } => write!(
+                formatter,
+                "Salesforce ID checksum is invalid: expected `{expected}`, found `{actual}`"
+            ),
+            Self::InvalidKeyPrefix(prefix) => write!(
+                formatter,
+                "Salesforce key prefix `{prefix}` must contain three ASCII alphanumeric characters"
+            ),
+        }
+    }
+}
+
+impl Error for RecordIdError {}
 
 /// Values that the first storage boundary can persist without Apex runtime
 /// representation details.
@@ -144,6 +205,9 @@ pub trait Storage {
         Self: 'storage;
 
     fn begin_transaction(&mut self) -> Result<Self::Transaction<'_>, Self::Error>;
+
+    /// Remove every record while retaining the migrated schema.
+    fn reset(&mut self) -> Result<(), Self::Error>;
 }
 
 /// Transactional record operations below Apex DML semantics.
@@ -161,6 +225,12 @@ pub trait StorageTransaction {
 
     fn delete(&mut self, object_api_name: &str, id: &RecordId) -> Result<bool, Self::Error>;
 
+    fn savepoint(&mut self, name: &str) -> Result<(), Self::Error>;
+
+    fn rollback_to(&mut self, name: &str) -> Result<(), Self::Error>;
+
+    fn release_savepoint(&mut self, name: &str) -> Result<(), Self::Error>;
+
     fn commit(self) -> Result<(), Self::Error>;
 
     fn rollback(self) -> Result<(), Self::Error>;
@@ -168,6 +238,49 @@ pub trait StorageTransaction {
 
 fn canonical_name(name: &str) -> String {
     name.to_ascii_lowercase()
+}
+
+fn validate_record_id(value: &str) -> Result<(), RecordIdError> {
+    let length = value.len();
+    if length != 15 && length != 18 {
+        return Err(RecordIdError::InvalidLength(length));
+    }
+    for (index, byte) in value.bytes().enumerate() {
+        if !byte.is_ascii_alphanumeric() {
+            return Err(RecordIdError::InvalidCharacter {
+                index,
+                character: char::from(byte),
+            });
+        }
+    }
+    if length == 18 {
+        let expected = checksum_suffix(&value[..15]);
+        let actual = &value[15..];
+        if expected != actual {
+            return Err(RecordIdError::InvalidChecksum {
+                expected,
+                actual: actual.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn checksum_suffix(id15: &str) -> String {
+    const CHECKSUM: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+    let bytes = id15.as_bytes();
+    let mut suffix = String::with_capacity(3);
+    for chunk in 0..3 {
+        let mut bits = 0_u8;
+        for offset in 0..5 {
+            let byte = bytes[chunk * 5 + offset];
+            if byte.is_ascii_uppercase() {
+                bits |= 1 << offset;
+            }
+        }
+        suffix.push(char::from(CHECKSUM[usize::from(bits)]));
+    }
+    suffix
 }
 
 #[cfg(test)]
@@ -204,6 +317,7 @@ mod tests {
     struct MemoryTransaction<'storage> {
         target: &'storage mut BTreeMap<(String, RecordId), Record>,
         working: BTreeMap<(String, RecordId), Record>,
+        savepoints: BTreeMap<String, BTreeMap<(String, RecordId), Record>>,
     }
 
     impl Storage for MemoryStorage {
@@ -215,7 +329,13 @@ mod tests {
             Ok(MemoryTransaction {
                 target: &mut self.records,
                 working,
+                savepoints: BTreeMap::new(),
             })
+        }
+
+        fn reset(&mut self) -> Result<(), Self::Error> {
+            self.records.clear();
+            Ok(())
         }
     }
 
@@ -251,6 +371,24 @@ mod tests {
                 .is_some())
         }
 
+        fn savepoint(&mut self, name: &str) -> Result<(), Self::Error> {
+            self.savepoints
+                .insert(name.to_owned(), self.working.clone());
+            Ok(())
+        }
+
+        fn rollback_to(&mut self, name: &str) -> Result<(), Self::Error> {
+            if let Some(snapshot) = self.savepoints.get(name) {
+                self.working = snapshot.clone();
+            }
+            Ok(())
+        }
+
+        fn release_savepoint(&mut self, name: &str) -> Result<(), Self::Error> {
+            self.savepoints.remove(name);
+            Ok(())
+        }
+
         fn commit(self) -> Result<(), Self::Error> {
             *self.target = self.working;
             Ok(())
@@ -281,6 +419,51 @@ mod tests {
             verify.read("ACCOUNT", &id).unwrap().unwrap().field("name"),
             Some(&DataValue::String("Acme".into()))
         );
+        verify.commit().unwrap();
+    }
+
+    #[test]
+    fn record_ids_validate_and_generate_salesforce_shapes() {
+        let generated = RecordId::generate("a01", 42).unwrap();
+        assert_eq!(generated.as_str().len(), 18);
+        assert!(generated.as_str().starts_with("a01"));
+        assert_eq!(RecordId::parse(generated.to_string()).unwrap(), generated);
+        assert_eq!(
+            RecordId::parse("001000000000001AAB").unwrap_err(),
+            RecordIdError::InvalidChecksum {
+                expected: "AAA".to_owned(),
+                actual: "AAB".to_owned(),
+            }
+        );
+        assert_eq!(
+            RecordId::parse("bad").unwrap_err(),
+            RecordIdError::InvalidLength(3)
+        );
+    }
+
+    #[test]
+    fn storage_contract_supports_savepoints_and_fast_reset() {
+        let mut storage = MemoryStorage::default();
+        let first = RecordId::generate("001", 1).unwrap();
+        let second = RecordId::generate("001", 2).unwrap();
+
+        let mut transaction = storage.begin_transaction().unwrap();
+        transaction
+            .write(Record::new("Account", first.clone()))
+            .unwrap();
+        transaction.savepoint("after_first").unwrap();
+        transaction
+            .write(Record::new("Account", second.clone()))
+            .unwrap();
+        transaction.rollback_to("after_first").unwrap();
+        transaction.release_savepoint("after_first").unwrap();
+        assert!(transaction.read("Account", &first).unwrap().is_some());
+        assert!(transaction.read("Account", &second).unwrap().is_none());
+        transaction.commit().unwrap();
+
+        storage.reset().unwrap();
+        let mut verify = storage.begin_transaction().unwrap();
+        assert!(verify.read("Account", &first).unwrap().is_none());
         verify.commit().unwrap();
     }
 }

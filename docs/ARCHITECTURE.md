@@ -19,6 +19,9 @@ Tree-walking interpreter ─► values, objects, and debug output
     │
     ▼
 Isolated test runner ─► deterministic results, JUnit, and coverage
+    │
+    ▼
+Platform kernel ─► normalized SObject schema and SQLite transactions
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -45,6 +48,12 @@ and the source map resolves diagnostics, coverage, and individual runtime stack
 frames by source identity. An unchanged input set reuses the complete checked
 program; after a change, unchanged parsed units are retained and reverse
 dependents are identified before project-wide semantic linking.
+
+M7 imports custom-object metadata from those package directories before
+semantic linking. The normalized catalog is attached to checked HIR, so custom
+object types, field targets, and dynamic SObject calls execute without exposing
+SQLite types to the checker or interpreter. Metadata-only changes invalidate
+the complete checked-build cache even when every `.cls` fingerprint is stable.
 
 The CLI is a thin adapter over those functions.
 
@@ -85,6 +94,9 @@ state between interpreters.
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
 | `platform` | Storage-independent normalized schema and transactional record-storage contracts |
+| `platform::metadata` | SFDX custom-object and field metadata import |
+| `platform::sobject` | Schema-validated typed/dynamic SObject values at the platform boundary |
+| `platform::sqlite` | Schema migration and transactional SQLite record persistence |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -213,14 +225,14 @@ filesystem-independent fixture data.
 The implemented host surface currently owns structured debug output.
 `platform::schema` provides a case-insensitive normalized catalog and
 `SchemaProvider`, while `platform::storage` defines storage-neutral records and
-transaction traits. They are deliberately not wired into Apex expressions yet;
-metadata import, SQLite adaptation, and SObject runtime values are the next M7
-layers.
+transaction traits. M7 adds metadata import, an additive SQLite adapter, and
+schema-backed interpreter SObjects. Apex DML remains separate: in-memory
+SObject field mutation does not silently persist a record.
 
 ## Local data architecture
 
-SQLite will eventually provide persistent local org state. The logical model
-should still support fast isolated transactions for tests:
+SQLite provides persistent local org state below future DML/query semantics.
+The logical model supports fast isolated transactions for tests:
 
 ```text
 SFDX metadata
@@ -231,12 +243,17 @@ SFDX metadata
     → trigger dispatcher
 ```
 
-Schema normalization must remain separate from SQLite DDL so alternate storage
-or in-memory implementations remain possible.
+Schema normalization remains separate from SQLite DDL so alternate storage or
+in-memory implementations remain possible. The SQLite adapter owns physical
+tables and an explicit schema registry. Additive migrations preserve records;
+incompatible changes fail rather than rebuilding or coercing data silently.
+Named savepoints, rollback, fixture replacement, and reset implement the
+isolation substrate that M8 can connect to Apex tests.
 
-That separation now exists in code: normalized schema types have no SQLite
-dependency, and the transaction contract deals in storage-neutral records
-rather than AST or runtime `Value` nodes.
+The transaction contract deals in storage-neutral records rather than AST or
+runtime `Value` nodes. Interpreter SObjects likewise use checked schema indices
+and in-memory values; DML lowering will perform the explicit conversion at the
+platform boundary.
 
 ## Compatibility architecture
 

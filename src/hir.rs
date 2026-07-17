@@ -1,4 +1,4 @@
-use crate::{ast, span::Span};
+use crate::{ast, platform::SchemaCatalog, span::Span};
 use std::{collections::HashMap, ops::Deref};
 
 mod intrinsic;
@@ -19,6 +19,7 @@ pub struct Program {
     calls: HashMap<Span, CallTarget>,
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
+    schema: SchemaCatalog,
 }
 
 impl Program {
@@ -28,6 +29,7 @@ impl Program {
         calls: HashMap<Span, CallTarget>,
         references: HashMap<Span, ReferenceTarget>,
         members: HashMap<Span, MemberTarget>,
+        schema: SchemaCatalog,
     ) -> Self {
         Self {
             ast,
@@ -35,6 +37,7 @@ impl Program {
             calls,
             references,
             members,
+            schema,
         }
     }
 
@@ -56,6 +59,10 @@ impl Program {
 
     pub fn member_target(&self, span: Span) -> Option<MemberTarget> {
         self.members.get(&span).copied()
+    }
+
+    pub fn schema(&self) -> &SchemaCatalog {
+        &self.schema
     }
 }
 
@@ -99,6 +106,11 @@ pub enum CallTarget {
         class_id: usize,
         member_id: Option<usize>,
     },
+    SObjectConstructor {
+        object_id: Option<usize>,
+    },
+    SObjectGet,
+    SObjectPut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -120,6 +132,7 @@ pub enum ReferenceTarget {
 pub enum MemberTarget {
     Instance(ClassMemberId),
     Static(ClassMemberId),
+    SObjectField { object_id: usize, field_id: usize },
 }
 
 #[cfg(test)]

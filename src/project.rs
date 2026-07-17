@@ -2,6 +2,7 @@ use crate::{
     ast::Program as AstProgram,
     diagnostic::Diagnostic,
     hir,
+    platform::{SchemaCatalog, import_metadata},
     span::{SourceId, Span},
 };
 use std::{
@@ -33,6 +34,7 @@ pub struct Compilation {
     pub program: hir::Program,
     pub dependencies: DependencyGraph,
     pub incremental: IncrementalReport,
+    pub schema: SchemaCatalog,
     source_map: SourceMap,
 }
 
@@ -69,6 +71,7 @@ pub struct ProjectCompiler {
     last_fingerprints: BTreeMap<PathBuf, u64>,
     last_dependencies: DependencyGraph,
     last_compilation: Option<Compilation>,
+    last_schema: SchemaCatalog,
 }
 
 impl Default for ProjectCompiler {
@@ -79,6 +82,7 @@ impl Default for ProjectCompiler {
             last_fingerprints: BTreeMap::new(),
             last_dependencies: DependencyGraph::default(),
             last_compilation: None,
+            last_schema: SchemaCatalog::new(),
         }
     }
 }
@@ -90,6 +94,8 @@ impl ProjectCompiler {
 
     pub fn compile(&mut self, path: impl AsRef<Path>) -> Result<Compilation, ProjectError> {
         let project = discover(path)?;
+        let schema = import_metadata(&project.source_roots)
+            .map_err(|error| ProjectError::message(error.to_string()))?;
         let fingerprints = project
             .files
             .iter()
@@ -97,6 +103,7 @@ impl ProjectCompiler {
             .collect::<BTreeMap<_, _>>();
 
         if fingerprints == self.last_fingerprints
+            && schema == self.last_schema
             && let Some(previous) = &self.last_compilation
         {
             let mut cached = previous.clone();
@@ -183,7 +190,7 @@ impl ProjectCompiler {
         let mut invalidated = dependent_closure(&changed, &self.last_dependencies);
         invalidated.extend(dependent_closure(&changed, &dependencies));
 
-        let program = crate::semantic::check(&merged)
+        let program = crate::semantic::check_with_schema(&merged, &schema)
             .map_err(|diagnostic| source_map.project_error(diagnostic))?;
         let compilation = Compilation {
             root: project.root,
@@ -194,10 +201,12 @@ impl ProjectCompiler {
                 reused_files,
                 invalidated_files: invalidated.into_iter().collect(),
             },
+            schema,
             source_map,
         };
         self.last_fingerprints = fingerprints;
         self.last_dependencies = dependencies;
+        self.last_schema = compilation.schema.clone();
         self.last_compilation = Some(compilation.clone());
         Ok(compilation)
     }
