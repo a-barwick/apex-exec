@@ -1,6 +1,6 @@
 use super::{
-    AggregateResultId, Collection, CollectionId, ObjectId, ObjectInstance, SObjectId,
-    SObjectInstance, Slot, Value,
+    AggregateResultId, Collection, CollectionId, ObjectId, ObjectInstance, PlatformValue,
+    PlatformValueId, SObjectId, SObjectInstance, Slot, Value,
 };
 use crate::hir::ClassMemberId;
 use crate::platform::DataValue;
@@ -17,6 +17,7 @@ pub(super) struct ExecutionStore {
     objects: Vec<ObjectInstance>,
     sobjects: Vec<SObjectInstance>,
     aggregate_results: Vec<BTreeMap<String, DataValue>>,
+    platform_values: Vec<PlatformValue>,
     static_fields: HashMap<ClassMemberId, Slot>,
 }
 
@@ -83,6 +84,24 @@ impl ExecutionStore {
         self.aggregate_results
             .get(id.0)
             .expect("runtime aggregate result handles are always valid")
+    }
+
+    pub(super) fn allocate_platform(&mut self, value: PlatformValue) -> Value {
+        let id = PlatformValueId(self.platform_values.len());
+        self.platform_values.push(value);
+        Value::Platform(id)
+    }
+
+    pub(super) fn platform(&self, id: PlatformValueId) -> &PlatformValue {
+        self.platform_values
+            .get(id.0)
+            .expect("runtime platform handles are always valid")
+    }
+
+    pub(super) fn platform_mut(&mut self, id: PlatformValueId) -> &mut PlatformValue {
+        self.platform_values
+            .get_mut(id.0)
+            .expect("runtime platform handles are always valid")
     }
 
     pub(super) fn sobject(&self, id: SObjectId) -> &SObjectInstance {

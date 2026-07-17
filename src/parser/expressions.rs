@@ -227,6 +227,7 @@ impl Parser {
             TokenKind::StringLiteral(value) => Expression::StringLiteral(value, token.span),
             TokenKind::BooleanLiteral(value) => Expression::BooleanLiteral(value, token.span),
             TokenKind::IntegerLiteral(value) => Expression::IntegerLiteral(value, token.span),
+            TokenKind::DecimalLiteral(value) => Expression::DecimalLiteral(value, token.span),
             TokenKind::Null => Expression::NullLiteral(token.span),
             TokenKind::Identifier(spelling) => {
                 let name = Identifier::new(spelling, token.span);
@@ -286,7 +287,10 @@ impl Parser {
             });
         }
 
-        if matches!(ty, TypeName::Custom(_)) {
+        if matches!(
+            ty,
+            TypeName::Custom(_) | TypeName::Http | TypeName::HttpRequest | TypeName::HttpResponse
+        ) {
             if !self.check(&TokenKind::LeftParen) {
                 return Err(Diagnostic::new(
                     "expected `(` after class name",

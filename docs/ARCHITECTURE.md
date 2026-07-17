@@ -70,6 +70,15 @@ DML tree atomic while an outer entry-point checkpoint provides uncaught
 transaction rollback. Trigger enter/exit and DML events share one deterministic
 host timeline.
 
+M10 extends the checked intrinsic boundary with a closed curated platform API
+set. Scalar date/time/decimal/ID values live directly in interpreter values;
+stateful regex, Blob, describe, and HTTP objects live in the execution store by
+identity. The host supplies deterministic clock, pseudo-random, user, limits,
+and callout services. A default host never performs network I/O: tests enqueue
+responses and can inspect captured requests. Unknown platform calls fail during
+checking with the active `m10-common` profile rather than reaching dynamic
+runtime lookup.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -241,8 +250,8 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
-The implemented host surface owns structured debug, query, DML, and trigger
-timeline output.
+The implemented host surface owns structured debug, query, DML, trigger
+timeline, deterministic context, limits, and mock HTTP callout behavior.
 `platform::schema` provides a case-insensitive normalized catalog and
 `SchemaProvider`, while `platform::storage` defines storage-neutral records and
 transaction traits. M7 adds metadata import, an additive SQLite adapter, and

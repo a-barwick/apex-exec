@@ -209,10 +209,10 @@ This is the second major enterprise-value checkpoint.
 
 ## M10 — Curated platform compatibility
 
-**Status:** Active
+**Status:** Complete
 
-Implement the common Apex platform surface based on real project usage rather
-than attempting every Salesforce API. Initial candidates include:
+Implements a first common Apex platform profile based on real project usage
+rather than attempting every Salesforce API:
 
 - `Date`, `Datetime`, `Time`, `Decimal`, `Id`, `Blob`, and `Object`
 - JSON, regex, schema describe, and common `Test` and `Limits` methods
@@ -221,6 +221,13 @@ than attempting every Salesforce API. Initial candidates include:
 
 Unsupported APIs must produce structured errors naming the missing API and the
 active compatibility profile.
+
+### Exit criterion
+
+A project can use the supported value types, JSON and regex utilities, schema
+describe, deterministic context and limits, and host-mocked HTTP callouts
+without source changes. Invalid inputs are catchable runtime failures and APIs
+outside the curated surface identify the `m10-common` profile explicitly.
 
 ## M11 — Deterministic asynchronous execution
 
@@ -232,7 +239,7 @@ work; background scheduling must not introduce nondeterminism.
 
 ## M12 — Debugger, REPL, and editor integration
 
-**Status:** Planned
+**Status:** Active
 
 - Persistent REPL state
 - Debug Adapter Protocol

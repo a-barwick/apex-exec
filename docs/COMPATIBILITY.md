@@ -24,7 +24,13 @@ conformance harness is a later milestone.
 | `String` | Yes | Yes | Yes | Simplified | Single-quoted literals, common escapes, and the documented M3 method subset |
 | `Boolean` | Yes | Yes | Yes | Compatible | `true` and `false` are case-insensitive |
 | `Integer` | Yes | Yes | Yes | Simplified | Stored as Rust `i64`; Apex range/overflow pending |
-| `Object` | Yes | Yes | Yes | Simplified | Minimal assignment, overload-widening, and explicit-cast carrier; general Object API pending |
+| `Decimal` | Yes | Yes | Yes | Simplified | Decimal literals, mixed Integer arithmetic, comparison, parsing, scale, and fixed-point display |
+| `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
+| `Datetime` | Yes | Yes | Yes | Simplified | UTC construction/parsing, epoch milliseconds, arithmetic, date/time projections, and formatting |
+| `Time` | Yes | Yes | Yes | Simplified | Millisecond construction/parsing, wrapping arithmetic, components, and formatting |
+| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character standalone values with checksum-aware `to15`/`to18` |
+| `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
+| `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
@@ -68,6 +74,10 @@ conformance harness is a later milestone.
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; other annotations and `SeeAllData=true` are explicit errors |
+| JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization and recursive untyped deserialization |
+| Regex | Yes | Yes | Yes | Compatible | `Pattern.compile`/`quote` and stateful `Matcher` match/find/group/start/end |
+| Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
+| HTTP callouts | Yes | Yes | Via host | Simplified | Stateful request/response APIs, queued mock responses, captured requests, and no live network |
 
 ## M3 built-in method surface
 
@@ -138,11 +148,12 @@ construction and `getMessage()`, `getTypeName()`, and
 hierarchy, and Salesforce-exact message and stack formatting are not yet
 claimed.
 
-`Object` remains a narrow checked widening, overload, and runtime-cast carrier;
-it does not claim the broader platform surface planned for M10. Casts include
-identical types, `Object` up/downcasts, the core exception root, and related
-user classes/interfaces. Unsupported unrelated casts are compile errors, while
-a permitted downcast with the wrong runtime value throws `TypeException`.
+`Object` is a checked widening, overload, runtime-cast, and `toString` carrier.
+Casts include identical types, `Object` up/downcasts, the core exception root,
+and related user classes/interfaces. Unsupported unrelated casts are compile
+errors, while a permitted downcast with the wrong runtime value throws
+`TypeException`. Equality/hash and the broader inherited Object API are not
+implemented.
 
 ## M5 classes and project compilation
 
@@ -306,6 +317,43 @@ guarantee an equivalent order. `addError`, merge, validation/workflow/flow
 automation, mixed-SObject bulk lists, and partial DML results remain
 unsupported.
 
+## M10 curated platform compatibility
+
+The first compatibility profile is named `m10-common`. Supported platform
+calls are statically selected HIR intrinsics; calls outside the recognized
+surface produce a compile diagnostic naming the API and profile.
+
+- `Date`: `newInstance`, `valueOf`, `today`, `addDays`, `addMonths`, `addYears`,
+  `daysBetween`, `format`, `year`, `month`, and `day`.
+- `Datetime`: `newInstance`, `now`, `valueOf`, `valueOfGmt`, `getTime`,
+  `date`/`dateGmt`, `time`/`timeGmt`, arithmetic through seconds, and `format`.
+- `Time`: `newInstance`, `valueOf`, arithmetic through milliseconds,
+  components, and `format`.
+- `Decimal`: literals, mixed Integer operators, `valueOf`, `setScale`, `abs`,
+  `scale`, and deterministic text conversion.
+- `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
+  `size`; `EncodingUtil`: Base64 encode/decode.
+- `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`.
+- Regex: `Pattern.compile`/`quote` and
+  `Matcher.matches`/`find`/`group`/`start`/`end`.
+- Describe: `Schema.getGlobalDescribe`, `SObjectType.getDescribe`, and
+  object-level `getName`, `getKeyPrefix`, and `isCustom`.
+- Deterministic services: `System.now`/`today`/`currentTimeMillis`,
+  `Datetime.now`, `Date.today`, `Math.random`, and common `UserInfo` methods.
+- Tests/limits: `Test.startTest`, `stopTest`, `isRunningTest`, and current/limit
+  query, DML statement, and callout counters.
+- Callouts: common `HttpRequest`/`HttpResponse` state plus `Http.send`.
+  `PlatformHost` supplies responses; `RecordingHost` queues mocks and captures
+  requests. An unmocked callout throws `CalloutException` and no live network
+  transport exists.
+
+Date/time formatting is fixed UTC rather than locale/time-zone aware. Decimal
+does not expose every Apex rounding mode. Typed JSON deserialization, arbitrary
+user-object reflection, field describe, `HttpCalloutMock`/`Test.setMock`, named
+credentials, and namespace-qualified `System.JSON` syntax remain unsupported.
+SObject Id/reference fields retain their earlier String surface; standalone
+`Id` values are validated but full field-level integration is future work.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
@@ -323,7 +371,7 @@ unsupported.
 | Triggers | Implemented (simplified) | M9 |
 | Transaction-wide rollback | Implemented (snapshot-backed) | M9 |
 | Recycle bin / undelete | Implemented (simplified) | M9 |
-| Common platform APIs | Active | M10 |
+| Common platform APIs | Implemented (`m10-common` profile) | M10 |
 | Async Apex | Deferred | M11 |
 | Governor limits | Deferred | Post-core compatibility profile |
 | Sharing/security behavior | Deferred | Post-core compatibility profile |
@@ -361,7 +409,7 @@ unsupported.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M9 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+At M10 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
 lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
 ordinary members until unsupported `instanceof`; the remaining first blockers
 are safe navigation, null coalescing, ternary syntax, and bitwise operators.

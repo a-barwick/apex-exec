@@ -356,6 +356,7 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
         Expression::StringLiteral(..)
         | Expression::BooleanLiteral(..)
         | Expression::IntegerLiteral(..)
+        | Expression::DecimalLiteral(..)
         | Expression::NullLiteral(..) => {}
         Expression::Soql(query) => walk_soql_query(visitor, query),
         Expression::Sosl(query) => walk_sosl_query(visitor, query),
@@ -541,7 +542,20 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         TypeName::String
         | TypeName::Boolean
         | TypeName::Integer
+        | TypeName::Decimal
+        | TypeName::Date
+        | TypeName::Datetime
+        | TypeName::Time
+        | TypeName::Id
+        | TypeName::Blob
         | TypeName::Object
+        | TypeName::Pattern
+        | TypeName::Matcher
+        | TypeName::Http
+        | TypeName::HttpRequest
+        | TypeName::HttpResponse
+        | TypeName::SObjectType
+        | TypeName::DescribeSObjectResult
         | TypeName::Exception
         | TypeName::NullPointerException
         | TypeName::ListException

@@ -2,6 +2,71 @@ use crate::platform::{
     DatabaseError, DatabaseSnapshot, DmlOperation, LocalDatabase, PreparedDmlRecord, QueryOutcome,
     SObject, SchemaCatalog, SoqlRequest, SoslRequest,
 };
+use std::collections::{BTreeMap, VecDeque};
+
+pub const M10_COMPATIBILITY_PROFILE: &str = "m10-common";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserContext {
+    pub user_id: String,
+    pub username: String,
+}
+
+impl Default for UserContext {
+    fn default() -> Self {
+        Self {
+            user_id: "005000000000001AAA".to_owned(),
+            username: "local@example.invalid".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpRequestData {
+    pub endpoint: String,
+    pub method: String,
+    pub body: String,
+    pub headers: BTreeMap<String, String>,
+    pub timeout_ms: i64,
+}
+
+impl Default for HttpRequestData {
+    fn default() -> Self {
+        Self {
+            endpoint: String::new(),
+            method: "GET".to_owned(),
+            body: String::new(),
+            headers: BTreeMap::new(),
+            timeout_ms: 10_000,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpResponseData {
+    pub status_code: i64,
+    pub status: String,
+    pub body: String,
+    pub headers: BTreeMap<String, String>,
+}
+
+impl Default for HttpResponseData {
+    fn default() -> Self {
+        Self {
+            status_code: 200,
+            status: "OK".to_owned(),
+            body: String::new(),
+            headers: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LimitUsage {
+    pub queries: i64,
+    pub dml_statements: i64,
+    pub callouts: i64,
+}
 
 /// A structured debug event emitted by the Apex `System.debug` intrinsic.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +203,33 @@ pub trait PlatformHost {
     }
 
     fn trigger(&mut self, _event: TriggerEvent) {}
+
+    /// Deterministic UTC wall clock, represented as Unix epoch milliseconds.
+    fn now_millis(&mut self) -> i64 {
+        1_735_689_600_000 // 2025-01-01T00:00:00Z
+    }
+
+    fn random_u64(&mut self) -> u64 {
+        0x4d59_5df4_d0f3_3173
+    }
+
+    fn user_context(&self) -> UserContext {
+        UserContext::default()
+    }
+
+    fn send_http(&mut self, _request: &HttpRequestData) -> Result<HttpResponseData, String> {
+        Err(format!(
+            "HTTP callout has no configured mock in compatibility profile `{M10_COMPATIBILITY_PROFILE}`"
+        ))
+    }
+
+    fn limit_usage(&self) -> LimitUsage {
+        LimitUsage::default()
+    }
+
+    fn begin_test_window(&mut self) {}
+
+    fn end_test_window(&mut self) {}
 }
 
 impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
@@ -198,10 +290,37 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
     fn trigger(&mut self, event: TriggerEvent) {
         (**self).trigger(event);
     }
+
+    fn now_millis(&mut self) -> i64 {
+        (**self).now_millis()
+    }
+
+    fn random_u64(&mut self) -> u64 {
+        (**self).random_u64()
+    }
+
+    fn user_context(&self) -> UserContext {
+        (**self).user_context()
+    }
+
+    fn send_http(&mut self, request: &HttpRequestData) -> Result<HttpResponseData, String> {
+        (**self).send_http(request)
+    }
+
+    fn limit_usage(&self) -> LimitUsage {
+        (**self).limit_usage()
+    }
+
+    fn begin_test_window(&mut self) {
+        (**self).begin_test_window();
+    }
+
+    fn end_test_window(&mut self) {
+        (**self).end_test_window();
+    }
 }
 
 /// Default host used by the public convenience APIs.
-#[derive(Default)]
 pub struct RecordingHost {
     output: Vec<String>,
     database: Option<LocalDatabase>,
@@ -210,9 +329,32 @@ pub struct RecordingHost {
     triggers: Vec<TriggerEvent>,
     timeline: Vec<TransactionEvent>,
     checkpoints: Vec<DatabaseSnapshot>,
+    now_millis: i64,
+    random_state: u64,
+    user: UserContext,
+    http_responses: VecDeque<HttpResponseData>,
+    callout_requests: Vec<HttpRequestData>,
+    callouts: i64,
+    test_window_baseline: Option<LimitUsage>,
 }
 
 impl RecordingHost {
+    pub fn set_now_millis(&mut self, now_millis: i64) {
+        self.now_millis = now_millis;
+    }
+
+    pub fn set_user_context(&mut self, user: UserContext) {
+        self.user = user;
+    }
+
+    pub fn enqueue_http_response(&mut self, response: HttpResponseData) {
+        self.http_responses.push_back(response);
+    }
+
+    pub fn callout_requests(&self) -> &[HttpRequestData] {
+        &self.callout_requests
+    }
+
     pub fn query_events(&self) -> &[QueryEvent] {
         &self.queries
     }
@@ -243,6 +385,27 @@ impl RecordingHost {
                 .migrate(schema.clone())?;
         }
         Ok(self.database.as_mut().expect("database was initialized"))
+    }
+}
+
+impl Default for RecordingHost {
+    fn default() -> Self {
+        Self {
+            output: Vec::new(),
+            database: None,
+            queries: Vec::new(),
+            dml: Vec::new(),
+            triggers: Vec::new(),
+            timeline: Vec::new(),
+            checkpoints: Vec::new(),
+            now_millis: 1_735_689_600_000,
+            random_state: 0x4d59_5df4_d0f3_3173,
+            user: UserContext::default(),
+            http_responses: VecDeque::new(),
+            callout_requests: Vec::new(),
+            callouts: 0,
+            test_window_baseline: None,
+        }
     }
 }
 
@@ -351,6 +514,60 @@ impl PlatformHost for RecordingHost {
     fn trigger(&mut self, event: TriggerEvent) {
         self.triggers.push(event.clone());
         self.timeline.push(TransactionEvent::Trigger(event));
+    }
+
+    fn now_millis(&mut self) -> i64 {
+        self.now_millis
+    }
+
+    fn random_u64(&mut self) -> u64 {
+        // xorshift64*: stable and intentionally not cryptographic.
+        let mut state = self.random_state;
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        self.random_state = state;
+        state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn user_context(&self) -> UserContext {
+        self.user.clone()
+    }
+
+    fn send_http(&mut self, request: &HttpRequestData) -> Result<HttpResponseData, String> {
+        self.callouts += 1;
+        self.callout_requests.push(request.clone());
+        self.http_responses.pop_front().ok_or_else(|| {
+            format!(
+                "HTTP callout has no configured mock in compatibility profile `{M10_COMPATIBILITY_PROFILE}`"
+            )
+        })
+    }
+
+    fn limit_usage(&self) -> LimitUsage {
+        let absolute = LimitUsage {
+            queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
+            dml_statements: i64::try_from(self.dml.len()).unwrap_or(i64::MAX),
+            callouts: self.callouts,
+        };
+        let baseline = self.test_window_baseline.unwrap_or_default();
+        LimitUsage {
+            queries: absolute.queries - baseline.queries,
+            dml_statements: absolute.dml_statements - baseline.dml_statements,
+            callouts: absolute.callouts - baseline.callouts,
+        }
+    }
+
+    fn begin_test_window(&mut self) {
+        self.test_window_baseline = Some(LimitUsage {
+            queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
+            dml_statements: i64::try_from(self.dml.len()).unwrap_or(i64::MAX),
+            callouts: self.callouts,
+        });
+    }
+
+    fn end_test_window(&mut self) {
+        self.test_window_baseline = None;
     }
 }
 

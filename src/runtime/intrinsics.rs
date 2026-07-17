@@ -1,3 +1,4 @@
+use super::platform_intrinsics::datetime_from_millis;
 use super::{
     Collection, CollectionId, DebugEvent, EvaluatedArgument, Interpreter, PlatformHost, Value,
     checked_list_index, integer_overflow, invalid_runtime_operands, runtime_exception, typed_value,
@@ -76,6 +77,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
                 _ => Err(invalid_runtime_operands(receiver_span)),
             },
+            IntrinsicId::Platform(intrinsic) => {
+                self.call_platform(intrinsic, receiver, &arguments, span)
+            }
         }
     }
 
@@ -182,6 +186,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(Value::Integer)
                     .ok_or_else(|| integer_overflow(span))
             }
+            MathIntrinsic::Random => {
+                let [] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let numerator = rust_decimal::Decimal::from(self.host.random_u64() >> 1);
+                let denominator = rust_decimal::Decimal::from(u64::MAX >> 1);
+                Ok(Value::Decimal(numerator / denominator))
+            }
         }
     }
 
@@ -249,6 +261,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     assertion_failure_message(message.as_deref(), &detail),
                     actual.span,
                 ))
+            }
+            SystemIntrinsic::Now => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Datetime(datetime_from_millis(
+                    self.host.now_millis(),
+                    span,
+                )?))
+            }
+            SystemIntrinsic::Today => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Date(
+                    datetime_from_millis(self.host.now_millis(), span)?.date_naive(),
+                ))
+            }
+            SystemIntrinsic::CurrentTimeMillis => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Integer(self.host.now_millis()))
             }
         }
     }
@@ -1005,7 +1034,7 @@ fn assertion_failure_message(message: Option<&str>, detail: &str) -> String {
     }
 }
 
-fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
+pub(super) fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
     match value {
         Value::Integer(value) => Ok(*value),
         Value::Null(_) => Err(runtime_exception(
@@ -1029,7 +1058,7 @@ fn expect_boolean(value: &Value, span: Span) -> Result<bool, Diagnostic> {
     }
 }
 
-fn expect_string(value: &Value, span: Span) -> Result<&str, Diagnostic> {
+pub(super) fn expect_string(value: &Value, span: Span) -> Result<&str, Diagnostic> {
     match value {
         Value::String(value) => Ok(value),
         Value::Null(_) => Err(runtime_exception(
@@ -1098,7 +1127,10 @@ fn utf16_byte_index(value: &str, target: usize) -> Option<usize> {
     (units == target).then_some(value.len())
 }
 
-fn expect_no_arguments(arguments: &[EvaluatedArgument], span: Span) -> Result<(), Diagnostic> {
+pub(super) fn expect_no_arguments(
+    arguments: &[EvaluatedArgument],
+    span: Span,
+) -> Result<(), Diagnostic> {
     if arguments.is_empty() {
         Ok(())
     } else {
@@ -1106,7 +1138,7 @@ fn expect_no_arguments(arguments: &[EvaluatedArgument], span: Span) -> Result<()
     }
 }
 
-fn invalid_call_arguments(span: Span) -> Diagnostic {
+pub(super) fn invalid_call_arguments(span: Span) -> Diagnostic {
     runtime_exception(
         "TypeException",
         "invalid call arguments escaped semantic validation",

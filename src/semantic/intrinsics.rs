@@ -4,7 +4,8 @@ use crate::{
     diagnostic::Diagnostic,
     hir::{
         ExceptionIntrinsic, ExpressionType, IntrinsicId, ListIntrinsic, MapIntrinsic,
-        MathIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
+        MathIntrinsic, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
+        SystemIntrinsic,
     },
     span::Span,
 };
@@ -682,11 +683,13 @@ impl Checker {
             "max" => MathIntrinsic::Max,
             "min" => MathIntrinsic::Min,
             "mod" => MathIntrinsic::Mod,
+            "random" => MathIntrinsic::Random,
             _ => return Err(unknown_static_method("Math", method)),
         };
         let arity = match intrinsic {
             MathIntrinsic::Abs => 1,
             MathIntrinsic::Max | MathIntrinsic::Min | MathIntrinsic::Mod => 2,
+            MathIntrinsic::Random => 0,
         };
         require_static_arity("Math", method, arguments.len(), &[arity], arguments)?;
         for (index, argument) in arguments.iter().enumerate() {
@@ -700,7 +703,11 @@ impl Checker {
         }
         Ok((
             IntrinsicId::Math(intrinsic),
-            ExpressionType::Value(TypeName::Integer),
+            ExpressionType::Value(if intrinsic == MathIntrinsic::Random {
+                TypeName::Decimal
+            } else {
+                TypeName::Integer
+            }),
         ))
     }
 
@@ -714,6 +721,9 @@ impl Checker {
             "assert" => SystemIntrinsic::Assert,
             "assertequals" => SystemIntrinsic::AssertEquals,
             "assertnotequals" => SystemIntrinsic::AssertNotEquals,
+            "now" => SystemIntrinsic::Now,
+            "today" => SystemIntrinsic::Today,
+            "currenttimemillis" => SystemIntrinsic::CurrentTimeMillis,
             _ => return Err(unknown_static_method("System", method)),
         };
         let result = match intrinsic {
@@ -745,8 +755,631 @@ impl Checker {
                 }
                 Ok(ExpressionType::Void)
             }
+            SystemIntrinsic::Now => {
+                require_static_arity("System", method, arguments.len(), &[0], arguments)?;
+                Ok(ExpressionType::Value(TypeName::Datetime))
+            }
+            SystemIntrinsic::Today => {
+                require_static_arity("System", method, arguments.len(), &[0], arguments)?;
+                Ok(ExpressionType::Value(TypeName::Date))
+            }
+            SystemIntrinsic::CurrentTimeMillis => {
+                require_static_arity("System", method, arguments.len(), &[0], arguments)?;
+                Ok(ExpressionType::Value(TypeName::Integer))
+            }
         }?;
         Ok((IntrinsicId::System(intrinsic), result))
+    }
+
+    pub(super) fn static_platform_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        use PlatformIntrinsic as P;
+        let canonical_owner = owner.to_ascii_lowercase();
+        let intrinsic = match (canonical_owner.as_str(), method.canonical.as_str()) {
+            ("date", "newinstance") => P::DateNewInstance,
+            ("date", "valueof") => P::DateValueOf,
+            ("date", "today") => P::DateToday,
+            ("datetime", "newinstance") => P::DatetimeNewInstance,
+            ("datetime", "now") => P::DatetimeNow,
+            ("datetime", "valueof") => P::DatetimeValueOf,
+            ("datetime", "valueofgmt") => P::DatetimeValueOfGmt,
+            ("time", "newinstance") => P::TimeNewInstance,
+            ("time", "valueof") => P::TimeValueOf,
+            ("decimal", "valueof") => P::DecimalValueOf,
+            ("id", "valueof") => P::IdValueOf,
+            ("blob", "valueof") => P::BlobValueOf,
+            ("json", "serialize") => P::JsonSerialize,
+            ("json", "serializepretty") => P::JsonSerializePretty,
+            ("json", "deserializeuntyped") => P::JsonDeserializeUntyped,
+            ("pattern", "compile") => P::PatternCompile,
+            ("pattern", "quote") => P::PatternQuote,
+            ("schema", "getglobaldescribe") => P::SchemaGetGlobalDescribe,
+            ("test", "starttest") => P::TestStartTest,
+            ("test", "stoptest") => P::TestStopTest,
+            ("test", "isrunningtest") => P::TestIsRunningTest,
+            ("limits", "getqueries") => P::LimitsGetQueries,
+            ("limits", "getlimitqueries") => P::LimitsGetLimitQueries,
+            ("limits", "getdmlstatements") => P::LimitsGetDmlStatements,
+            ("limits", "getlimitdmlstatements") => P::LimitsGetLimitDmlStatements,
+            ("limits", "getcallouts") => P::LimitsGetCallouts,
+            ("limits", "getlimitcallouts") => P::LimitsGetLimitCallouts,
+            ("userinfo", "getuserid") => P::UserInfoGetUserId,
+            ("userinfo", "getusername") => P::UserInfoGetUserName,
+            ("encodingutil", "base64encode") => P::EncodingBase64Encode,
+            ("encodingutil", "base64decode") => P::EncodingBase64Decode,
+            _ => return Err(unsupported_platform_api(owner, method)),
+        };
+        let result = match intrinsic {
+            P::DateNewInstance => {
+                require_static_arity(owner, method, arguments.len(), &[3], arguments)?;
+                self.require_all(owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Date
+            }
+            P::DateValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Date
+            }
+            P::DateToday => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Date
+            }
+            P::DatetimeNewInstance => {
+                require_static_arity(owner, method, arguments.len(), &[6], arguments)?;
+                self.require_all(owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Datetime
+            }
+            P::DatetimeNow => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Datetime
+            }
+            P::DatetimeValueOf | P::DatetimeValueOfGmt => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Datetime
+            }
+            P::TimeNewInstance => {
+                require_static_arity(owner, method, arguments.len(), &[4], arguments)?;
+                self.require_all(owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Time
+            }
+            P::TimeValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Time
+            }
+            P::DecimalValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Decimal
+            }
+            P::IdValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Id
+            }
+            P::BlobValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Blob
+            }
+            P::JsonSerialize | P::JsonSerializePretty => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_non_void_argument(owner, &method.spelling, 0, &arguments[0])?;
+                TypeName::String
+            }
+            P::JsonDeserializeUntyped => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Object
+            }
+            P::PatternCompile | P::PatternQuote => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                if intrinsic == P::PatternCompile {
+                    TypeName::Pattern
+                } else {
+                    TypeName::String
+                }
+            }
+            P::SchemaGetGlobalDescribe => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::SObjectType))
+            }
+            P::TestStartTest | P::TestStopTest => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::TestIsRunningTest => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Boolean
+            }
+            P::LimitsGetQueries
+            | P::LimitsGetLimitQueries
+            | P::LimitsGetDmlStatements
+            | P::LimitsGetLimitDmlStatements
+            | P::LimitsGetCallouts
+            | P::LimitsGetLimitCallouts => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Integer
+            }
+            P::UserInfoGetUserId => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Id
+            }
+            P::UserInfoGetUserName => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::String
+            }
+            P::EncodingBase64Encode => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Blob,
+                )?;
+                TypeName::String
+            }
+            P::EncodingBase64Decode => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Blob
+            }
+            _ => unreachable!("instance intrinsic selected as static"),
+        };
+        Ok((
+            IntrinsicId::Platform(intrinsic),
+            ExpressionType::Value(result),
+        ))
+    }
+
+    pub(super) fn platform_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        use PlatformIntrinsic as P;
+        let intrinsic = match (receiver_type, method.canonical.as_str()) {
+            (TypeName::Date, "adddays") => P::DateAddDays,
+            (TypeName::Date, "addmonths") => P::DateAddMonths,
+            (TypeName::Date, "addyears") => P::DateAddYears,
+            (TypeName::Date, "daysbetween") => P::DateDaysBetween,
+            (TypeName::Date, "format") => P::DateFormat,
+            (TypeName::Date, "year") => P::DateYear,
+            (TypeName::Date, "month") => P::DateMonth,
+            (TypeName::Date, "day") => P::DateDay,
+            (TypeName::Datetime, "gettime") => P::DatetimeGetTime,
+            (TypeName::Datetime, "date") => P::DatetimeDate,
+            (TypeName::Datetime, "dategmt") => P::DatetimeDateGmt,
+            (TypeName::Datetime, "time") => P::DatetimeTime,
+            (TypeName::Datetime, "timegmt") => P::DatetimeTimeGmt,
+            (TypeName::Datetime, "adddays") => P::DatetimeAddDays,
+            (TypeName::Datetime, "addhours") => P::DatetimeAddHours,
+            (TypeName::Datetime, "addminutes") => P::DatetimeAddMinutes,
+            (TypeName::Datetime, "addseconds") => P::DatetimeAddSeconds,
+            (TypeName::Datetime, "format") => P::DatetimeFormat,
+            (TypeName::Time, "addhours") => P::TimeAddHours,
+            (TypeName::Time, "addminutes") => P::TimeAddMinutes,
+            (TypeName::Time, "addseconds") => P::TimeAddSeconds,
+            (TypeName::Time, "addmilliseconds") => P::TimeAddMilliseconds,
+            (TypeName::Time, "hour") => P::TimeHour,
+            (TypeName::Time, "minute") => P::TimeMinute,
+            (TypeName::Time, "second") => P::TimeSecond,
+            (TypeName::Time, "millisecond") => P::TimeMillisecond,
+            (TypeName::Time, "format") => P::TimeFormat,
+            (TypeName::Decimal, "setscale") => P::DecimalSetScale,
+            (TypeName::Decimal, "abs") => P::DecimalAbs,
+            (TypeName::Decimal, "scale") => P::DecimalScale,
+            (TypeName::Decimal, "tostring") => P::ObjectToString,
+            (TypeName::Id, "to15") => P::IdTo15,
+            (TypeName::Id, "to18") => P::IdTo18,
+            (TypeName::Blob, "tostring") => P::BlobToString,
+            (TypeName::Blob, "size") => P::BlobSize,
+            (TypeName::Object, "tostring") => P::ObjectToString,
+            (TypeName::Pattern, "matcher") => P::PatternMatcher,
+            (TypeName::Matcher, "matches") => P::MatcherMatches,
+            (TypeName::Matcher, "find") => P::MatcherFind,
+            (TypeName::Matcher, "group") => P::MatcherGroup,
+            (TypeName::Matcher, "start") => P::MatcherStart,
+            (TypeName::Matcher, "end") => P::MatcherEnd,
+            (TypeName::SObjectType, "getdescribe") => P::SObjectTypeGetDescribe,
+            (TypeName::DescribeSObjectResult, "getname") => P::DescribeGetName,
+            (TypeName::DescribeSObjectResult, "getkeyprefix") => P::DescribeGetKeyPrefix,
+            (TypeName::DescribeSObjectResult, "iscustom") => P::DescribeIsCustom,
+            (TypeName::HttpRequest, "setendpoint") => P::HttpRequestSetEndpoint,
+            (TypeName::HttpRequest, "getendpoint") => P::HttpRequestGetEndpoint,
+            (TypeName::HttpRequest, "setmethod") => P::HttpRequestSetMethod,
+            (TypeName::HttpRequest, "getmethod") => P::HttpRequestGetMethod,
+            (TypeName::HttpRequest, "setbody") => P::HttpRequestSetBody,
+            (TypeName::HttpRequest, "getbody") => P::HttpRequestGetBody,
+            (TypeName::HttpRequest, "setheader") => P::HttpRequestSetHeader,
+            (TypeName::HttpRequest, "getheader") => P::HttpRequestGetHeader,
+            (TypeName::HttpRequest, "settimeout") => P::HttpRequestSetTimeout,
+            (TypeName::HttpRequest, "gettimeout") => P::HttpRequestGetTimeout,
+            (TypeName::HttpResponse, "setstatuscode") => P::HttpResponseSetStatusCode,
+            (TypeName::HttpResponse, "getstatuscode") => P::HttpResponseGetStatusCode,
+            (TypeName::HttpResponse, "setbody") => P::HttpResponseSetBody,
+            (TypeName::HttpResponse, "getbody") => P::HttpResponseGetBody,
+            (TypeName::HttpResponse, "setheader") => P::HttpResponseSetHeader,
+            (TypeName::HttpResponse, "getheader") => P::HttpResponseGetHeader,
+            (TypeName::HttpResponse, "setstatus") => P::HttpResponseSetStatus,
+            (TypeName::HttpResponse, "getstatus") => P::HttpResponseGetStatus,
+            (TypeName::Http, "send") => P::HttpSend,
+            _ => return Err(unsupported_platform_api(&receiver_type.apex_name(), method)),
+        };
+        let owner = receiver_type.apex_name();
+        let result = match intrinsic {
+            P::DateAddDays | P::DateAddMonths | P::DateAddYears => {
+                self.one_argument(&owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Date
+            }
+            P::DateDaysBetween => {
+                self.one_argument(&owner, method, arguments, &TypeName::Date)?;
+                TypeName::Integer
+            }
+            P::DateFormat => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::DateYear | P::DateMonth | P::DateDay => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::DatetimeGetTime => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::DatetimeDate | P::DatetimeDateGmt => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Date
+            }
+            P::DatetimeTime | P::DatetimeTimeGmt => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Time
+            }
+            P::DatetimeAddDays
+            | P::DatetimeAddHours
+            | P::DatetimeAddMinutes
+            | P::DatetimeAddSeconds => {
+                self.one_argument(&owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Datetime
+            }
+            P::DatetimeFormat => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::TimeAddHours | P::TimeAddMinutes | P::TimeAddSeconds | P::TimeAddMilliseconds => {
+                self.one_argument(&owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Time
+            }
+            P::TimeHour | P::TimeMinute | P::TimeSecond | P::TimeMillisecond => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::TimeFormat => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::DecimalSetScale => {
+                self.one_argument(&owner, method, arguments, &TypeName::Integer)?;
+                TypeName::Decimal
+            }
+            P::DecimalAbs => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Decimal
+            }
+            P::DecimalScale => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::IdTo15 | P::IdTo18 | P::BlobToString | P::ObjectToString => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::BlobSize => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::PatternMatcher => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                TypeName::Matcher
+            }
+            P::MatcherMatches | P::MatcherFind => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Boolean
+            }
+            P::MatcherGroup => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0, 1],
+                    arguments,
+                )?;
+                if let Some(arg) = arguments.first() {
+                    self.require_named_argument(
+                        &owner,
+                        &method.spelling,
+                        0,
+                        arg,
+                        &TypeName::Integer,
+                    )?;
+                }
+                TypeName::String
+            }
+            P::MatcherStart | P::MatcherEnd => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0, 1],
+                    arguments,
+                )?;
+                if let Some(arg) = arguments.first() {
+                    self.require_named_argument(
+                        &owner,
+                        &method.spelling,
+                        0,
+                        arg,
+                        &TypeName::Integer,
+                    )?;
+                }
+                TypeName::Integer
+            }
+            P::SObjectTypeGetDescribe => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::DescribeSObjectResult
+            }
+            P::DescribeGetName | P::DescribeGetKeyPrefix => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::DescribeIsCustom => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Boolean
+            }
+            P::HttpRequestSetEndpoint
+            | P::HttpRequestSetMethod
+            | P::HttpRequestSetBody
+            | P::HttpResponseSetBody
+            | P::HttpResponseSetStatus => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::HttpRequestSetHeader | P::HttpResponseSetHeader => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                self.require_all(&owner, method, arguments, &TypeName::String)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::HttpRequestSetTimeout | P::HttpResponseSetStatusCode => {
+                self.one_argument(&owner, method, arguments, &TypeName::Integer)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::HttpRequestGetEndpoint
+            | P::HttpRequestGetMethod
+            | P::HttpRequestGetBody
+            | P::HttpResponseGetBody
+            | P::HttpResponseGetStatus => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::HttpRequestGetHeader | P::HttpResponseGetHeader => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                TypeName::String
+            }
+            P::HttpRequestGetTimeout | P::HttpResponseGetStatusCode => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Integer
+            }
+            P::HttpSend => {
+                self.one_argument(&owner, method, arguments, &TypeName::HttpRequest)?;
+                TypeName::HttpResponse
+            }
+            _ => unreachable!("static intrinsic selected as instance"),
+        };
+        Ok((
+            IntrinsicId::Platform(intrinsic),
+            ExpressionType::Value(result),
+        ))
+    }
+
+    fn require_all(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+        expected: &TypeName,
+    ) -> Result<(), Diagnostic> {
+        for (index, argument) in arguments.iter().enumerate() {
+            self.require_named_argument(owner, &method.spelling, index, argument, expected)?;
+        }
+        Ok(())
+    }
+
+    fn one_argument(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+        expected: &TypeName,
+    ) -> Result<(), Diagnostic> {
+        require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+        self.require_named_argument(owner, &method.spelling, 0, &arguments[0], expected)
     }
 
     pub(super) fn require_argument(
@@ -859,6 +1492,16 @@ pub(super) fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> D
 fn unknown_static_method(owner: &str, method: &Identifier) -> Diagnostic {
     Diagnostic::new(
         format!("unknown static method `{}` on {}", method.spelling, owner),
+        method.span,
+    )
+}
+
+fn unsupported_platform_api(owner: &str, method: &Identifier) -> Diagnostic {
+    Diagnostic::new(
+        format!(
+            "unsupported API `{}.{}` in compatibility profile `m10-common`",
+            owner, method.spelling
+        ),
         method.span,
     )
 }

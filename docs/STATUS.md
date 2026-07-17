@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M10 — Curated platform compatibility
+M12 — Debugger, REPL, and editor integration
 
 ## Completed
 
@@ -159,17 +159,36 @@ M10 — Curated platform compatibility
 - Trigger statement and branch observations included in Apex test coverage
 - A handler-oriented M9 example that checks, invokes, and runs three Apex tests
   with 100% production line and branch coverage
+- Decimal literals and checked mixed Integer/Decimal arithmetic, comparison,
+  scale, parsing, formatting, and overflow/division failures
+- Immutable `Date`, `Datetime`, and `Time` values with deterministic UTC
+  construction, parsing, component access, formatting, and arithmetic
+- Dedicated validated `Id` values, UTF-8 `Blob` values, and Base64 utilities
+- JSON serialization/pretty-printing and recursive untyped deserialization over
+  primitives, Lists, Sets, and String-keyed Maps
+- Regex `Pattern`/`Matcher` compilation, full matching, repeated search, capture
+  groups, and source positions
+- Schema global describe maps plus SObject name, key-prefix, and custom-object
+  describe access
+- Deterministic clock, pseudo-randomness, and user context supplied through the
+  replaceable platform host
+- Common `Test.startTest`/`stopTest`/`isRunningTest` and query, DML, and callout
+  `Limits` counters
+- Stateful `HttpRequest`/`HttpResponse` objects and host-mocked `Http.send`,
+  including captured requests and explicit missing-mock failures
+- Profile-aware compile errors for unsupported curated platform calls
+- A complete M10 example whose four Apex tests pass with 100% production line
+  coverage, plus ten Rust integration tests covering success, failure,
+  determinism, mocking, checking, and runtime boundaries
 
 ## Immediate target
 
-Implement M10 curated platform compatibility based on common real-project API
-usage. Start with value types and deterministic services that unblock the
-largest North Star and ordinary unit-test slices while keeping unsupported APIs
-explicit.
+Begin M12 with a persistent REPL and debugger protocol boundary while retaining
+deterministic runtime state and source-mapped diagnostics.
 
 ## North Star indicators
 
-At M9 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M10 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -199,8 +218,9 @@ compatibility percentages.
 - Overload resolution supports exact matches, `Exception` and `Object`
   widening, and checked user-class/interface subtyping. Numeric and broader
   platform conversions remain future work.
-- `Object` is currently a typed assignment and cast carrier, not the full Apex
-  `Object` API planned for the curated platform milestone.
+- `Object` supports assignment, overload widening, casts, and `toString()`;
+  equality/hash and the broader inherited Apex Object surface remain
+  unsupported.
 - The core exception subset supports construction, catching, rethrowing,
   messages, type names, and deterministic stack text. Custom exception classes,
   causes, and Salesforce-exact stack formatting require later compatibility and
@@ -220,9 +240,9 @@ compatibility percentages.
   changing an existing field type, nullability, relationship target, or key
   prefix require an explicit future migration policy.
 - Typed custom-object field access is available in metadata-aware project
-  compilation. Id and relationship fields currently appear as `String` in
-  Apex execution while the storage boundary uses validated `RecordId` values;
-  the dedicated Apex `Id` type remains M10 work.
+  compilation. Id and relationship fields still appear as `String` in SObject
+  execution for backwards compatibility, while standalone `Id` values validate
+  15/18-character IDs. Full field-level `Id` integration remains future work.
 - Static SOQL supports direct fields and one custom parent `__r` relationship
   level. Child subqueries, `HAVING`, `TYPEOF`, polymorphic relationships, date
   literals, and the broader SOQL grammar remain unsupported.
@@ -262,6 +282,18 @@ compatibility percentages.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
   claim of Salesforce-exact coverage accounting.
+- Date/time formatting is fixed deterministic UTC formatting rather than
+  locale/time-zone aware Salesforce formatting. Decimal uses 96-bit
+  `rust_decimal` semantics and does not yet implement every Apex rounding mode.
+- JSON typed deserialization, arbitrary user-object field reflection, and
+  namespace-qualified `System.JSON` syntax remain unsupported; untyped JSON
+  preserves ordered String-keyed Maps.
+- Schema describe currently covers imported SObjects and object-level name,
+  key-prefix, and custom flags; field describe and broader metadata are
+  unsupported.
+- HTTP callouts are synchronous and must be mocked through `PlatformHost`.
+  Apex `HttpCalloutMock`/`Test.setMock`, named credentials, TLS, and live
+  network transport are intentionally not implemented.
 
 ## Handoff checklist
 

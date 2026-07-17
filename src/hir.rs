@@ -8,8 +8,9 @@ use std::{collections::HashMap, ops::Deref};
 mod intrinsic;
 
 pub use intrinsic::{
-    ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic, MathIntrinsic, SetIntrinsic,
-    StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
+    ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic, MathIntrinsic,
+    PlatformConstructor, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
+    SystemIntrinsic,
 };
 
 /// The checked program consumed by execution.
@@ -124,6 +125,7 @@ pub enum CallTarget {
     SObjectPut,
     DatabaseDml(ast::DmlOperation),
     AggregateResultGet,
+    PlatformConstructor(PlatformConstructor),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
