@@ -11,17 +11,24 @@ use crate::{
     platform::FieldType,
     span::Span,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use rust_decimal::Decimal;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 mod database;
 mod host;
 mod image;
 mod intrinsics;
+mod platform_intrinsics;
 mod store;
 
 pub use host::{
-    DebugEvent, DmlEvent, PlatformHost, QueryEvent, QueryKind, RecordingHost, TransactionEvent,
-    TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage,
+    DebugEvent, DmlEvent, HttpRequestData, HttpResponseData, LimitUsage, M10_COMPATIBILITY_PROFILE,
+    PlatformHost, QueryEvent, QueryKind, RecordingHost, TransactionEvent,
+    TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 use store::ExecutionStore;
@@ -57,11 +64,20 @@ struct SObjectId(usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AggregateResultId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlatformValueId(usize);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Value {
     String(String),
     Boolean(bool),
     Integer(i64),
+    Decimal(Decimal),
+    Date(NaiveDate),
+    Datetime(DateTime<Utc>),
+    Time(NaiveTime),
+    Id(String),
+    Platform(PlatformValueId),
     Collection(CollectionId),
     Object(ObjectId),
     SObject(SObjectId),
@@ -69,6 +85,38 @@ enum Value {
     Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
+}
+
+#[derive(Clone, Debug)]
+enum PlatformValue {
+    Blob(Vec<u8>),
+    Pattern(String),
+    Matcher {
+        pattern: String,
+        input: String,
+        next_start: usize,
+        captures: Vec<Option<(usize, usize)>>,
+    },
+    Http,
+    HttpRequest(HttpRequestData),
+    HttpResponse(HttpResponseData),
+    SObjectType(usize),
+    DescribeSObject(usize),
+}
+
+impl PlatformValue {
+    fn ty(&self) -> TypeName {
+        match self {
+            Self::Blob(_) => TypeName::Blob,
+            Self::Pattern(_) => TypeName::Pattern,
+            Self::Matcher { .. } => TypeName::Matcher,
+            Self::Http => TypeName::Http,
+            Self::HttpRequest(_) => TypeName::HttpRequest,
+            Self::HttpResponse(_) => TypeName::HttpResponse,
+            Self::SObjectType(_) => TypeName::SObjectType,
+            Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
+        }
+    }
 }
 
 impl Value {
@@ -786,6 +834,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Expression::StringLiteral(value, _) => Ok(Value::String(value.clone())),
             Expression::BooleanLiteral(value, _) => Ok(Value::Boolean(*value)),
             Expression::IntegerLiteral(value, _) => Ok(Value::Integer(*value)),
+            Expression::DecimalLiteral(value, span) => value
+                .parse::<Decimal>()
+                .map(Value::Decimal)
+                .map_err(|_| Diagnostic::new("invalid Decimal literal", *span)),
             Expression::NullLiteral(_) => Ok(Value::Null(None)),
             Expression::Soql(query) => self.evaluate_soql(query.span),
             Expression::Sosl(query) => self.evaluate_sosl(query.span),
@@ -840,6 +892,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     )),
                     CallTarget::Constructor { .. }
                     | CallTarget::SObjectConstructor { .. }
+                    | CallTarget::PlatformConstructor(_)
                     | CallTarget::SObjectGet
                     | CallTarget::SObjectPut
                     | CallTarget::DatabaseDml(_)
@@ -925,7 +978,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Some(
                         CallTarget::TopLevelMethod(_)
                         | CallTarget::Constructor { .. }
-                        | CallTarget::SObjectConstructor { .. },
+                        | CallTarget::SObjectConstructor { .. }
+                        | CallTarget::PlatformConstructor(_),
                     ) => Err(Diagnostic::new(
                         "invalid checked target for member call",
                         *span,
@@ -1400,6 +1454,24 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .program()
             .call_target(span)
             .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?;
+        if let CallTarget::PlatformConstructor(constructor) = target {
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    "platform constructor received unexpected arguments",
+                    span,
+                ));
+            }
+            let value = match constructor {
+                crate::hir::PlatformConstructor::Http => PlatformValue::Http,
+                crate::hir::PlatformConstructor::HttpRequest => {
+                    PlatformValue::HttpRequest(HttpRequestData::default())
+                }
+                crate::hir::PlatformConstructor::HttpResponse => {
+                    PlatformValue::HttpResponse(HttpResponseData::default())
+                }
+            };
+            return Ok(self.store.allocate_platform(value));
+        }
         if let CallTarget::SObjectConstructor { object_id } = target {
             let object_id = if let Some(object_id) = object_id {
                 if !arguments.is_empty() {
@@ -2279,17 +2351,31 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         operator_span: Span,
     ) -> Result<Value, Diagnostic> {
         match operator {
-            UnaryOperator::Positive => {
-                let value = self.evaluate_integer(operand)?;
-                Ok(Value::Integer(value))
-            }
-            UnaryOperator::Negate => {
-                let value = self.evaluate_integer(operand)?;
-                value
+            UnaryOperator::Positive => match self.evaluate(operand)? {
+                value @ (Value::Integer(_) | Value::Decimal(_)) => Ok(value),
+                Value::Null(_) => Err(runtime_exception(
+                    "NullPointerException",
+                    "expected non-null numeric value at runtime",
+                    operand.span(),
+                )),
+                _ => Err(invalid_runtime_operands(operand.span())),
+            },
+            UnaryOperator::Negate => match self.evaluate(operand)? {
+                Value::Integer(value) => value
                     .checked_neg()
                     .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(operator_span))
-            }
+                    .ok_or_else(|| integer_overflow(operator_span)),
+                Value::Decimal(value) => value
+                    .checked_mul(Decimal::NEGATIVE_ONE)
+                    .map(Value::Decimal)
+                    .ok_or_else(|| integer_overflow(operator_span)),
+                Value::Null(_) => Err(runtime_exception(
+                    "NullPointerException",
+                    "expected non-null numeric value at runtime",
+                    operand.span(),
+                )),
+                _ => Err(invalid_runtime_operands(operand.span())),
+            },
             UnaryOperator::Not => {
                 let value = self.evaluate_boolean(operand)?;
                 Ok(Value::Boolean(!value))
@@ -2352,6 +2438,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             .checked_add(*right)
                             .map(Value::Integer)
                             .ok_or_else(|| integer_overflow(operator_span)),
+                        _ if is_numeric_value(&left) && is_numeric_value(&right) => {
+                            decimal_binary(left, right, operator_span, Decimal::checked_add)
+                        }
                         (Value::Null(_), _) | (_, Value::Null(_)) => Err(runtime_exception(
                             "NullPointerException",
                             "operator cannot be applied to null at runtime",
@@ -2362,12 +2451,33 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
             }
             BinaryOperator::Subtract => {
-                checked_integer_binary(left, right, operator_span, i64::checked_sub)
+                if matches!((&left, &right), (Value::Integer(_), Value::Integer(_))) {
+                    checked_integer_binary(left, right, operator_span, i64::checked_sub)
+                } else {
+                    decimal_binary(left, right, operator_span, Decimal::checked_sub)
+                }
             }
             BinaryOperator::Multiply => {
-                checked_integer_binary(left, right, operator_span, i64::checked_mul)
+                if matches!((&left, &right), (Value::Integer(_), Value::Integer(_))) {
+                    checked_integer_binary(left, right, operator_span, i64::checked_mul)
+                } else {
+                    decimal_binary(left, right, operator_span, Decimal::checked_mul)
+                }
             }
             BinaryOperator::Divide => {
+                if is_numeric_value(&left)
+                    && is_numeric_value(&right)
+                    && !matches!((&left, &right), (Value::Integer(_), Value::Integer(_)))
+                {
+                    if decimal_value(&right, operator_span)?.is_zero() {
+                        return Err(runtime_exception(
+                            "MathException",
+                            "division by zero",
+                            operator_span,
+                        ));
+                    }
+                    return decimal_binary(left, right, operator_span, Decimal::checked_div);
+                }
                 let (left, right) = integer_pair(left, right, operator_span)?;
                 if right == 0 {
                     return Err(runtime_exception(
@@ -2381,6 +2491,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .ok_or_else(|| integer_overflow(operator_span))
             }
             BinaryOperator::Remainder => {
+                if is_numeric_value(&left)
+                    && is_numeric_value(&right)
+                    && !matches!((&left, &right), (Value::Integer(_), Value::Integer(_)))
+                {
+                    if decimal_value(&right, operator_span)?.is_zero() {
+                        return Err(runtime_exception(
+                            "MathException",
+                            "remainder by zero",
+                            operator_span,
+                        ));
+                    }
+                    return decimal_binary(left, right, operator_span, Decimal::checked_rem);
+                }
                 let (left, right) = integer_pair(left, right, operator_span)?;
                 if right == 0 {
                     return Err(runtime_exception(
@@ -2393,13 +2516,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(Value::Integer)
                     .ok_or_else(|| integer_overflow(operator_span))
             }
-            BinaryOperator::Less => compare_integers(left, right, operator_span, |a, b| a < b),
-            BinaryOperator::LessEqual => {
-                compare_integers(left, right, operator_span, |a, b| a <= b)
+            BinaryOperator::Less => {
+                compare_values(left, right, operator_span, |ordering| ordering.is_lt())
             }
-            BinaryOperator::Greater => compare_integers(left, right, operator_span, |a, b| a > b),
+            BinaryOperator::LessEqual => {
+                compare_values(left, right, operator_span, |ordering| ordering.is_le())
+            }
+            BinaryOperator::Greater => {
+                compare_values(left, right, operator_span, |ordering| ordering.is_gt())
+            }
             BinaryOperator::GreaterEqual => {
-                compare_integers(left, right, operator_span, |a, b| a >= b)
+                compare_values(left, right, operator_span, |ordering| ordering.is_ge())
             }
             BinaryOperator::Equal => Ok(Value::Boolean(self.operator_values_equal(&left, &right))),
             BinaryOperator::NotEqual => {
@@ -2415,18 +2542,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Null(_) => Err(runtime_exception(
                 "NullPointerException",
                 "expected non-null Boolean value at runtime",
-                expression.span(),
-            )),
-            _ => Err(invalid_runtime_operands(expression.span())),
-        }
-    }
-
-    fn evaluate_integer(&mut self, expression: &Expression) -> Result<i64, Diagnostic> {
-        match self.evaluate(expression)? {
-            Value::Integer(value) => Ok(value),
-            Value::Null(_) => Err(runtime_exception(
-                "NullPointerException",
-                "expected non-null Integer value at runtime",
                 expression.span(),
             )),
             _ => Err(invalid_runtime_operands(expression.span())),
@@ -2711,6 +2826,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             (Value::String(left), Value::String(right)) => left == right,
             (Value::Boolean(left), Value::Boolean(right)) => left == right,
             (Value::Integer(left), Value::Integer(right)) => left == right,
+            (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Date(left), Value::Date(right)) => left == right,
+            (Value::Datetime(left), Value::Datetime(right)) => left == right,
+            (Value::Time(left), Value::Time(right)) => left == right,
+            (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
+            (Value::Platform(left), Value::Platform(right)) => left == right,
             (Value::Collection(left), Value::Collection(right)) => {
                 self.collections_equal(*left, *right)
             }
@@ -2778,6 +2899,30 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::String(value) => value.clone(),
             Value::Boolean(value) => value.to_string(),
             Value::Integer(value) => value.to_string(),
+            Value::Decimal(value) => value.normalize().to_string(),
+            Value::Date(value) => value.format("%Y-%m-%d").to_string(),
+            Value::Datetime(value) => value.format("%Y-%m-%d %H:%M:%S").to_string(),
+            Value::Time(value) => value.format("%H:%M:%S%.3f").to_string(),
+            Value::Id(value) => value.clone(),
+            Value::Platform(id) => match self.store.platform(*id) {
+                PlatformValue::Blob(bytes) => format!("Blob[{}]", bytes.len()),
+                PlatformValue::Pattern(pattern) => pattern.clone(),
+                PlatformValue::Matcher { .. } => "Matcher".to_owned(),
+                PlatformValue::Http => "Http".to_owned(),
+                PlatformValue::HttpRequest(request) => {
+                    format!("HttpRequest[{} {}]", request.method, request.endpoint)
+                }
+                PlatformValue::HttpResponse(response) => {
+                    format!("HttpResponse[{} {}]", response.status_code, response.status)
+                }
+                PlatformValue::SObjectType(object_id)
+                | PlatformValue::DescribeSObject(object_id) => {
+                    self.program().schema().object_at(*object_id).map_or_else(
+                        || "Schema".to_owned(),
+                        |object| object.api_name().to_owned(),
+                    )
+                }
+            },
             Value::Collection(id) => match self.collection(*id) {
                 Collection::List { elements, .. } => format!(
                     "({})",
@@ -2905,6 +3050,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::String(_) => matches!(target, TypeName::String),
             Value::Boolean(_) => matches!(target, TypeName::Boolean),
             Value::Integer(_) => matches!(target, TypeName::Integer),
+            Value::Decimal(_) => matches!(target, TypeName::Decimal),
+            Value::Date(_) => matches!(target, TypeName::Date),
+            Value::Datetime(_) => matches!(target, TypeName::Datetime),
+            Value::Time(_) => matches!(target, TypeName::Time),
+            Value::Id(_) => matches!(target, TypeName::Id),
+            Value::Platform(id) => self.store.platform(*id).ty() == *target,
             Value::Collection(id) => self.collection_type(*id) == *target,
             Value::Object(id) => {
                 let TypeName::Custom(target) = target else {
@@ -2945,6 +3096,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::String(_) => TypeName::String.apex_name(),
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
+            Value::Decimal(_) => TypeName::Decimal.apex_name(),
+            Value::Date(_) => TypeName::Date.apex_name(),
+            Value::Datetime(_) => TypeName::Datetime.apex_name(),
+            Value::Time(_) => TypeName::Time.apex_name(),
+            Value::Id(_) => TypeName::Id.apex_name(),
+            Value::Platform(id) => self.store.platform(*id).ty().apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
             Value::Object(id) => self.classes()[self.store.object(*id).class_id]
                 .name
@@ -3053,16 +3210,6 @@ fn checked_integer_binary(
         .ok_or_else(|| integer_overflow(span))
 }
 
-fn compare_integers(
-    left: Value,
-    right: Value,
-    span: Span,
-    comparison: impl FnOnce(i64, i64) -> bool,
-) -> Result<Value, Diagnostic> {
-    let (left, right) = integer_pair(left, right, span)?;
-    Ok(Value::Boolean(comparison(left, right)))
-}
-
 fn integer_pair(left: Value, right: Value, span: Span) -> Result<(i64, i64), Diagnostic> {
     match (left, right) {
         (Value::Integer(left), Value::Integer(right)) => Ok((left, right)),
@@ -3078,8 +3225,67 @@ fn integer_pair(left: Value, right: Value, span: Span) -> Result<(i64, i64), Dia
 fn typed_value(value: Value, ty: &TypeName) -> Value {
     match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
+        Value::Integer(value) if *ty == TypeName::Decimal => Value::Decimal(Decimal::from(value)),
         value => value,
     }
+}
+
+fn is_numeric_value(value: &Value) -> bool {
+    matches!(value, Value::Integer(_) | Value::Decimal(_))
+}
+
+fn decimal_value(value: &Value, span: Span) -> Result<Decimal, Diagnostic> {
+    match value {
+        Value::Integer(value) => Ok(Decimal::from(*value)),
+        Value::Decimal(value) => Ok(*value),
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
+            "operator cannot be applied to null at runtime",
+            span,
+        )),
+        _ => Err(invalid_runtime_operands(span)),
+    }
+}
+
+fn decimal_binary(
+    left: Value,
+    right: Value,
+    span: Span,
+    operation: fn(Decimal, Decimal) -> Option<Decimal>,
+) -> Result<Value, Diagnostic> {
+    let left = decimal_value(&left, span)?;
+    let right = decimal_value(&right, span)?;
+    operation(left, right)
+        .map(Value::Decimal)
+        .ok_or_else(|| runtime_exception("MathException", "Decimal arithmetic overflow", span))
+}
+
+fn compare_values(
+    left: Value,
+    right: Value,
+    span: Span,
+    comparison: impl FnOnce(Ordering) -> bool,
+) -> Result<Value, Diagnostic> {
+    let ordering = match (&left, &right) {
+        (Value::Integer(_), Value::Integer(_))
+        | (Value::Integer(_), Value::Decimal(_))
+        | (Value::Decimal(_), Value::Integer(_))
+        | (Value::Decimal(_), Value::Decimal(_)) => {
+            decimal_value(&left, span)?.cmp(&decimal_value(&right, span)?)
+        }
+        (Value::Date(left), Value::Date(right)) => left.cmp(right),
+        (Value::Datetime(left), Value::Datetime(right)) => left.cmp(right),
+        (Value::Time(left), Value::Time(right)) => left.cmp(right),
+        (Value::Null(_), _) | (_, Value::Null(_)) => {
+            return Err(runtime_exception(
+                "NullPointerException",
+                "operator cannot be applied to null at runtime",
+                span,
+            ));
+        }
+        _ => return Err(invalid_runtime_operands(span)),
+    };
+    Ok(Value::Boolean(comparison(ordering)))
 }
 
 fn apex_field_type(field_type: &FieldType) -> TypeName {

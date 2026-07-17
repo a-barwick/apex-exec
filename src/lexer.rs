@@ -145,13 +145,27 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 let text = &self.source[start..self.cursor];
-                let value = text.parse::<i64>().map_err(|_| {
-                    Diagnostic::new(
-                        "integer literal is out of range",
-                        self.span(start, self.cursor),
-                    )
-                })?;
-                TokenKind::IntegerLiteral(value)
+                if self.peek() == Some('.')
+                    && self
+                        .remaining()
+                        .chars()
+                        .nth(1)
+                        .is_some_and(|next| next.is_ascii_digit())
+                {
+                    self.bump();
+                    while self.peek().is_some_and(|next| next.is_ascii_digit()) {
+                        self.bump();
+                    }
+                    TokenKind::DecimalLiteral(self.source[start..self.cursor].to_owned())
+                } else {
+                    let value = text.parse::<i64>().map_err(|_| {
+                        Diagnostic::new(
+                            "integer literal is out of range",
+                            self.span(start, self.cursor),
+                        )
+                    })?;
+                    TokenKind::IntegerLiteral(value)
+                }
             }
             '"' => {
                 return Err(Diagnostic::new(

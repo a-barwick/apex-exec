@@ -7,8 +7,8 @@ use crate::{
     },
     diagnostic::Diagnostic,
     hir::{
-        self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget,
-        TriggerContextVariable,
+        self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, PlatformConstructor,
+        ReferenceTarget, TriggerContextVariable,
     },
     platform::{FieldType, SchemaCatalog},
     span::Span,
@@ -932,6 +932,9 @@ impl Checker {
         if actual == expected || *expected == TypeName::Object {
             return true;
         }
+        if *actual == TypeName::Integer && *expected == TypeName::Decimal {
+            return true;
+        }
         if *expected == TypeName::Exception && actual.is_exception() {
             return true;
         }
@@ -1404,6 +1407,7 @@ impl Checker {
             Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
             Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
             Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
+            Expression::DecimalLiteral(..) => Ok(ExpressionType::Value(TypeName::Decimal)),
             Expression::NullLiteral(..) => Ok(ExpressionType::Null),
             Expression::Soql(query) => self.soql_type(query, None),
             Expression::Sosl(query) => self.sosl_type(query),
@@ -1543,6 +1547,26 @@ impl Checker {
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         self.validate_type(ty, span)?;
+        let platform_constructor = match ty {
+            TypeName::Http => Some(PlatformConstructor::Http),
+            TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
+            TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
+            _ => None,
+        };
+        if let Some(constructor) = platform_constructor {
+            for argument in arguments {
+                self.expression_type(argument)?;
+            }
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!("{} constructor expects no arguments", ty.apex_name()),
+                    arguments[0].span(),
+                ));
+            }
+            self.calls
+                .insert(span, CallTarget::PlatformConstructor(constructor));
+            return Ok(ExpressionType::Value(ty.clone()));
+        }
         let TypeName::Custom(name) = ty else {
             return Err(Diagnostic::new(
                 "object construction requires a class type",
@@ -2355,6 +2379,12 @@ impl Checker {
                             result
                         })
                     }
+                    owner if is_platform_static_owner(owner) => self
+                        .static_platform_method_type(&identifier.spelling, method, arguments)
+                        .map(|(intrinsic, result)| {
+                            self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+                            result
+                        }),
                     _ => {
                         let receiver_type = self.variable_type(identifier)?;
                         let ExpressionType::Value(receiver_type) = receiver_type else {
@@ -2457,6 +2487,22 @@ impl Checker {
                 self.map_method_type(receiver_type, key, value, method, arguments)?
             }
             TypeName::String => self.string_instance_method_type(method, arguments)?,
+            TypeName::Date
+            | TypeName::Datetime
+            | TypeName::Time
+            | TypeName::Decimal
+            | TypeName::Id
+            | TypeName::Blob
+            | TypeName::Object
+            | TypeName::Pattern
+            | TypeName::Matcher
+            | TypeName::Http
+            | TypeName::HttpRequest
+            | TypeName::HttpResponse
+            | TypeName::SObjectType
+            | TypeName::DescribeSObjectResult => {
+                self.platform_instance_method_type(receiver_type, method, arguments)?
+            }
             ty if ty.is_exception() => {
                 self.exception_instance_method_type(receiver_type, method, arguments)?
             }
@@ -2574,8 +2620,18 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         match operator {
             UnaryOperator::Positive | UnaryOperator::Negate => {
-                self.require_operand(operand, &TypeName::Integer, operator_span)?;
-                Ok(ExpressionType::Value(TypeName::Integer))
+                let ty = self.expression_type(operand)?;
+                if matches!(
+                    ty,
+                    ExpressionType::Value(TypeName::Integer | TypeName::Decimal)
+                ) {
+                    Ok(ty)
+                } else {
+                    Err(Diagnostic::new(
+                        format!("expected numeric operand, found {}", ty.name()),
+                        operator_span,
+                    ))
+                }
             }
             UnaryOperator::Not => {
                 self.require_operand(operand, &TypeName::Boolean, operator_span)?;
@@ -2611,6 +2667,8 @@ impl Checker {
                     && right_type == ExpressionType::Value(TypeName::Integer)
                 {
                     Ok(ExpressionType::Value(TypeName::Integer))
+                } else if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
+                    Ok(ExpressionType::Value(TypeName::Decimal))
                 } else if (left_type == ExpressionType::Value(TypeName::String)
                     || right_type == ExpressionType::Value(TypeName::String))
                     && left_type != ExpressionType::Void
@@ -2634,9 +2692,7 @@ impl Checker {
             | BinaryOperator::LessEqual
             | BinaryOperator::Greater
             | BinaryOperator::GreaterEqual => {
-                if left_type == ExpressionType::Value(TypeName::Integer)
-                    && right_type == ExpressionType::Value(TypeName::Integer)
-                {
+                if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
                     if matches!(
                         operator,
                         BinaryOperator::Less
@@ -2646,8 +2702,36 @@ impl Checker {
                     ) {
                         Ok(ExpressionType::Value(TypeName::Boolean))
                     } else {
-                        Ok(ExpressionType::Value(TypeName::Integer))
+                        Ok(
+                            if left_type == ExpressionType::Value(TypeName::Integer)
+                                && right_type == ExpressionType::Value(TypeName::Integer)
+                            {
+                                ExpressionType::Value(TypeName::Integer)
+                            } else {
+                                ExpressionType::Value(TypeName::Decimal)
+                            },
+                        )
                     }
+                } else if matches!(
+                    (&left_type, &right_type),
+                    (
+                        ExpressionType::Value(TypeName::Date),
+                        ExpressionType::Value(TypeName::Date)
+                    ) | (
+                        ExpressionType::Value(TypeName::Datetime),
+                        ExpressionType::Value(TypeName::Datetime)
+                    ) | (
+                        ExpressionType::Value(TypeName::Time),
+                        ExpressionType::Value(TypeName::Time)
+                    )
+                ) && matches!(
+                    operator,
+                    BinaryOperator::Less
+                        | BinaryOperator::LessEqual
+                        | BinaryOperator::Greater
+                        | BinaryOperator::GreaterEqual
+                ) {
+                    Ok(ExpressionType::Value(TypeName::Boolean))
                 } else {
                     Err(invalid_binary_operands(
                         operator,
@@ -2926,6 +3010,32 @@ fn invalid_binary_operands(
             right.name()
         ),
         span,
+    )
+}
+
+fn is_platform_static_owner(name: &str) -> bool {
+    matches!(
+        name,
+        "date"
+            | "datetime"
+            | "time"
+            | "decimal"
+            | "id"
+            | "blob"
+            | "json"
+            | "pattern"
+            | "schema"
+            | "test"
+            | "limits"
+            | "userinfo"
+            | "encodingutil"
+    )
+}
+
+fn is_numeric_type(ty: &ExpressionType) -> bool {
+    matches!(
+        ty,
+        ExpressionType::Value(TypeName::Integer | TypeName::Decimal)
     )
 }
 

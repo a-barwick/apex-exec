@@ -5,4 +5,9 @@ edition = "2024"
 description = "A local Apex compiler and execution runtime"
 
 [dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+regex = "1"
+rust_decimal = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = { version = "1", features = ["preserve_order"] }

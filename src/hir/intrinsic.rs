@@ -14,6 +14,7 @@ pub enum IntrinsicId {
     List(ListIntrinsic),
     Set(SetIntrinsic),
     Map(MapIntrinsic),
+    Platform(PlatformIntrinsic),
 }
 
 impl IntrinsicId {
@@ -22,6 +23,155 @@ impl IntrinsicId {
         matches!(
             self,
             Self::StaticString(_) | Self::Math(_) | Self::System(_)
+        ) || matches!(self, Self::Platform(intrinsic) if intrinsic.is_static())
+    }
+}
+
+/// Constructors for platform objects whose state is owned by the execution
+/// store rather than by user-class fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PlatformConstructor {
+    Http,
+    HttpRequest,
+    HttpResponse,
+}
+
+/// Curated M10 platform calls. This remains a closed checker-selected set so
+/// unsupported APIs cannot fall through to name-based runtime behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PlatformIntrinsic {
+    DateNewInstance,
+    DateValueOf,
+    DateToday,
+    DateAddDays,
+    DateAddMonths,
+    DateAddYears,
+    DateDaysBetween,
+    DateFormat,
+    DateYear,
+    DateMonth,
+    DateDay,
+    DatetimeNewInstance,
+    DatetimeNow,
+    DatetimeValueOf,
+    DatetimeValueOfGmt,
+    DatetimeGetTime,
+    DatetimeDate,
+    DatetimeDateGmt,
+    DatetimeTime,
+    DatetimeTimeGmt,
+    DatetimeAddDays,
+    DatetimeAddHours,
+    DatetimeAddMinutes,
+    DatetimeAddSeconds,
+    DatetimeFormat,
+    TimeNewInstance,
+    TimeValueOf,
+    TimeAddHours,
+    TimeAddMinutes,
+    TimeAddSeconds,
+    TimeAddMilliseconds,
+    TimeHour,
+    TimeMinute,
+    TimeSecond,
+    TimeMillisecond,
+    TimeFormat,
+    DecimalValueOf,
+    DecimalSetScale,
+    DecimalAbs,
+    DecimalScale,
+    IdValueOf,
+    IdTo15,
+    IdTo18,
+    BlobValueOf,
+    BlobToString,
+    BlobSize,
+    ObjectToString,
+    JsonSerialize,
+    JsonSerializePretty,
+    JsonDeserializeUntyped,
+    PatternCompile,
+    PatternQuote,
+    PatternMatcher,
+    MatcherMatches,
+    MatcherFind,
+    MatcherGroup,
+    MatcherStart,
+    MatcherEnd,
+    SchemaGetGlobalDescribe,
+    SObjectTypeGetDescribe,
+    DescribeGetName,
+    DescribeGetKeyPrefix,
+    DescribeIsCustom,
+    TestStartTest,
+    TestStopTest,
+    TestIsRunningTest,
+    LimitsGetQueries,
+    LimitsGetLimitQueries,
+    LimitsGetDmlStatements,
+    LimitsGetLimitDmlStatements,
+    LimitsGetCallouts,
+    LimitsGetLimitCallouts,
+    UserInfoGetUserId,
+    UserInfoGetUserName,
+    EncodingBase64Encode,
+    EncodingBase64Decode,
+    HttpRequestSetEndpoint,
+    HttpRequestGetEndpoint,
+    HttpRequestSetMethod,
+    HttpRequestGetMethod,
+    HttpRequestSetBody,
+    HttpRequestGetBody,
+    HttpRequestSetHeader,
+    HttpRequestGetHeader,
+    HttpRequestSetTimeout,
+    HttpRequestGetTimeout,
+    HttpResponseSetStatusCode,
+    HttpResponseGetStatusCode,
+    HttpResponseSetBody,
+    HttpResponseGetBody,
+    HttpResponseSetHeader,
+    HttpResponseGetHeader,
+    HttpResponseSetStatus,
+    HttpResponseGetStatus,
+    HttpSend,
+}
+
+impl PlatformIntrinsic {
+    pub fn is_static(self) -> bool {
+        matches!(
+            self,
+            Self::DateNewInstance
+                | Self::DateValueOf
+                | Self::DateToday
+                | Self::DatetimeNewInstance
+                | Self::DatetimeNow
+                | Self::DatetimeValueOf
+                | Self::DatetimeValueOfGmt
+                | Self::TimeNewInstance
+                | Self::TimeValueOf
+                | Self::DecimalValueOf
+                | Self::IdValueOf
+                | Self::BlobValueOf
+                | Self::JsonSerialize
+                | Self::JsonSerializePretty
+                | Self::JsonDeserializeUntyped
+                | Self::PatternCompile
+                | Self::PatternQuote
+                | Self::SchemaGetGlobalDescribe
+                | Self::TestStartTest
+                | Self::TestStopTest
+                | Self::TestIsRunningTest
+                | Self::LimitsGetQueries
+                | Self::LimitsGetLimitQueries
+                | Self::LimitsGetDmlStatements
+                | Self::LimitsGetLimitDmlStatements
+                | Self::LimitsGetCallouts
+                | Self::LimitsGetLimitCallouts
+                | Self::UserInfoGetUserId
+                | Self::UserInfoGetUserName
+                | Self::EncodingBase64Encode
+                | Self::EncodingBase64Decode
         )
     }
 }
@@ -46,6 +196,7 @@ pub enum MathIntrinsic {
     Max,
     Min,
     Mod,
+    Random,
 }
 
 /// Supported static methods on the Apex `System` type.
@@ -56,6 +207,9 @@ pub enum SystemIntrinsic {
     Assert,
     AssertEquals,
     AssertNotEquals,
+    Now,
+    Today,
+    CurrentTimeMillis,
 }
 
 /// Supported methods on an Apex `String` value.
