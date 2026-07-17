@@ -198,6 +198,40 @@ impl StorageTransaction for SqliteStorageTransaction<'_> {
         Ok(())
     }
 
+    fn scan(&mut self, object_api_name: &str) -> Result<Vec<Record>, Self::Error> {
+        let object = self.schema.object(object_api_name)?;
+        let fields = object
+            .fields()
+            .filter(|field| !is_id(field))
+            .collect::<Vec<_>>();
+        let columns = std::iter::once(quote("Id"))
+            .chain(fields.iter().map(|field| quote(field.api_name())))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {columns} FROM {} ORDER BY {}",
+            quote(object.api_name()),
+            quote("Id")
+        );
+        let mut statement = self
+            .transaction
+            .prepare(&sql)
+            .map_err(SqliteError::database)?;
+        let rows = statement
+            .query_map([], |row| {
+                let stored_id: String = row.get(0)?;
+                let mut record = Record::new(object.api_name(), RecordId::new(stored_id));
+                for (index, field) in fields.iter().enumerate() {
+                    let value = decode_value(field, row.get_ref(index + 1)?)?;
+                    record.set_field(field.api_name(), value);
+                }
+                Ok(record)
+            })
+            .map_err(SqliteError::database)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(SqliteError::database)
+    }
+
     fn delete(&mut self, object_api_name: &str, id: &RecordId) -> Result<bool, Self::Error> {
         let object = self.schema.object(object_api_name)?;
         let changed = self

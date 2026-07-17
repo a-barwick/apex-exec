@@ -6,6 +6,7 @@ use crate::{
 
 mod declarations;
 mod expressions;
+mod queries;
 mod statements;
 mod types;
 
@@ -79,6 +80,21 @@ impl Parser {
             self.cursor += 1;
         }
         token
+    }
+
+    fn check_keyword(&self, expected: &str) -> bool {
+        matches!(
+            &self.current().kind,
+            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case(expected)
+        )
+    }
+
+    fn expect_keyword(&mut self, expected: &str, message: &str) -> Result<Token, Diagnostic> {
+        if self.check_keyword(expected) {
+            Ok(self.advance())
+        } else {
+            Err(Diagnostic::new(message, self.current().span))
+        }
     }
 }
 

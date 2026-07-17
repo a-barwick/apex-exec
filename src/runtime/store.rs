@@ -1,7 +1,9 @@
 use super::{
-    Collection, CollectionId, ObjectId, ObjectInstance, SObjectId, SObjectInstance, Slot, Value,
+    AggregateResultId, Collection, CollectionId, ObjectId, ObjectInstance, SObjectId,
+    SObjectInstance, Slot, Value,
 };
 use crate::hir::ClassMemberId;
+use crate::platform::DataValue;
 use std::collections::{BTreeMap, HashMap};
 
 /// Mutable language data owned by one isolated execution.
@@ -14,6 +16,7 @@ pub(super) struct ExecutionStore {
     collections: Vec<Collection>,
     objects: Vec<ObjectInstance>,
     sobjects: Vec<SObjectInstance>,
+    aggregate_results: Vec<BTreeMap<String, DataValue>>,
     static_fields: HashMap<ClassMemberId, Slot>,
 }
 
@@ -62,8 +65,24 @@ impl ExecutionStore {
         self.sobjects.push(SObjectInstance {
             object_id,
             fields: BTreeMap::new(),
+            relationships: BTreeMap::new(),
         });
         Value::SObject(id)
+    }
+
+    pub(super) fn allocate_aggregate_result(
+        &mut self,
+        values: BTreeMap<String, DataValue>,
+    ) -> Value {
+        let id = AggregateResultId(self.aggregate_results.len());
+        self.aggregate_results.push(values);
+        Value::AggregateResult(id)
+    }
+
+    pub(super) fn aggregate_result(&self, id: AggregateResultId) -> &BTreeMap<String, DataValue> {
+        self.aggregate_results
+            .get(id.0)
+            .expect("runtime aggregate result handles are always valid")
     }
 
     pub(super) fn sobject(&self, id: SObjectId) -> &SObjectInstance {

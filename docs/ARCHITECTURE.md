@@ -21,7 +21,7 @@ Tree-walking interpreter ─► values, objects, and debug output
 Isolated test runner ─► deterministic results, JUnit, and coverage
     │
     ▼
-Platform kernel ─► normalized SObject schema and SQLite transactions
+Platform kernel ─► normalized schema, checked queries/DML, and SQLite transactions
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -54,6 +54,12 @@ semantic linking. The normalized catalog is attached to checked HIR, so custom
 object types, field targets, and dynamic SObject calls execute without exposing
 SQLite types to the checker or interpreter. Metadata-only changes invalidate
 the complete checked-build cache even when every `.cls` fingerprint is stable.
+
+M8 adds dedicated SOQL/SOSL AST nodes and schema-indexed checked query plans.
+Runtime evaluation supplies concrete bind values and converts between
+interpreter SObjects and storage-neutral platform requests. Filtering,
+ordering, aggregates, relationship hydration, deterministic SOSL matching, and
+atomic DML validation live above SQLite in the platform database service.
 
 The CLI is a thin adapter over those functions.
 
@@ -90,6 +96,7 @@ state between interpreters.
 | `ast` | Parsed program representation and shared immutable visitor |
 | `hir` | Checked expression types, declaration targets, and intrinsic IDs |
 | `parser` | Grammar façade with declaration, statement, expression, type/lookahead, and test modules |
+| `parser::queries` | Dedicated SOQL/SOSL grammar and DML statement parsing |
 | `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
@@ -97,6 +104,8 @@ state between interpreters.
 | `platform::metadata` | SFDX custom-object and field metadata import |
 | `platform::sobject` | Schema-validated typed/dynamic SObject values at the platform boundary |
 | `platform::sqlite` | Schema migration and transactional SQLite record persistence |
+| `platform::database` | Query execution, relationship hydration, aggregates, SOSL search, and atomic DML semantics |
+| `runtime::database` | Bind evaluation and conversion between HIR plans, runtime values, and platform requests/results |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -222,16 +231,21 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
-The implemented host surface currently owns structured debug output.
+The implemented host surface owns structured debug, query, and DML output.
 `platform::schema` provides a case-insensitive normalized catalog and
 `SchemaProvider`, while `platform::storage` defines storage-neutral records and
 transaction traits. M7 adds metadata import, an additive SQLite adapter, and
-schema-backed interpreter SObjects. Apex DML remains separate: in-memory
-SObject field mutation does not silently persist a record.
+schema-backed interpreter SObjects.
+
+M8 extends that boundary with checked SOQL/SOSL requests and atomic DML
+operations. The default recording host lazily owns one in-memory SQLite
+database per interpreter and records structured query/DML events. In-memory
+SObject field mutation still does not silently persist a record; only an
+explicit DML statement or `Database` method crosses the persistence boundary.
 
 ## Local data architecture
 
-SQLite provides persistent local org state below future DML/query semantics.
+SQLite provides local org state below DML/query semantics.
 The logical model supports fast isolated transactions for tests:
 
 ```text

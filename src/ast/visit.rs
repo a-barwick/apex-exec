@@ -9,7 +9,8 @@ use super::{
     Annotation, AssignmentTarget, CatchClause, ClassDeclaration, ClassMember,
     CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration, Identifier,
     MapEntry, MethodDeclaration, NamedType, Parameter, Program, PropertyAccessor,
-    PropertyDeclaration, ReturnType, Statement, TypeName,
+    PropertyDeclaration, ReturnType, SoqlCondition, SoqlInValues, SoqlQuery, SoqlValue, SoslQuery,
+    Statement, TypeName,
 };
 
 pub trait Visitor<'ast> {
@@ -319,7 +320,9 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
                 visitor.visit_statement(finally_block);
             }
         }
-        Statement::Throw { value, .. } => visitor.visit_expression(value),
+        Statement::Throw { value, .. } | Statement::Dml { value, .. } => {
+            visitor.visit_expression(value);
+        }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
                 visitor.visit_expression(value);
@@ -338,6 +341,8 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
         | Expression::BooleanLiteral(..)
         | Expression::IntegerLiteral(..)
         | Expression::NullLiteral(..) => {}
+        Expression::Soql(query) => walk_soql_query(visitor, query),
+        Expression::Sosl(query) => walk_sosl_query(visitor, query),
         Expression::Variable(identifier) => visitor.visit_identifier(identifier),
         Expression::Assignment { target, value, .. } => {
             visitor.visit_assignment_target(target);
@@ -411,6 +416,58 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
     }
 }
 
+fn walk_soql_query<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, query: &'ast SoqlQuery) {
+    if let Some(condition) = &query.where_clause {
+        walk_soql_condition(visitor, condition);
+    }
+    if let Some(limit) = &query.limit {
+        walk_soql_value(visitor, limit);
+    }
+    if let Some(offset) = &query.offset {
+        walk_soql_value(visitor, offset);
+    }
+}
+
+fn walk_sosl_query<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, query: &'ast SoslQuery) {
+    walk_soql_value(visitor, &query.search);
+    for returning in &query.returning {
+        if let Some(condition) = &returning.where_clause {
+            walk_soql_condition(visitor, condition);
+        }
+        if let Some(limit) = &returning.limit {
+            walk_soql_value(visitor, limit);
+        }
+    }
+}
+
+fn walk_soql_condition<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    condition: &'ast SoqlCondition,
+) {
+    match condition {
+        SoqlCondition::Comparison { right, .. } => walk_soql_value(visitor, right),
+        SoqlCondition::In { values, .. } => match values {
+            SoqlInValues::Values(values) => {
+                for value in values {
+                    walk_soql_value(visitor, value);
+                }
+            }
+            SoqlInValues::Bind(expression) => visitor.visit_expression(expression),
+        },
+        SoqlCondition::Not { condition, .. } => walk_soql_condition(visitor, condition),
+        SoqlCondition::Logical { left, right, .. } => {
+            walk_soql_condition(visitor, left);
+            walk_soql_condition(visitor, right);
+        }
+    }
+}
+
+fn walk_soql_value<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, value: &'ast SoqlValue) {
+    if let SoqlValue::Bind(expression, _) = value {
+        visitor.visit_expression(expression);
+    }
+}
+
 pub fn walk_assignment_target<'ast, V: Visitor<'ast> + ?Sized>(
     visitor: &mut V,
     target: &'ast AssignmentTarget,
@@ -477,7 +534,10 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::StringException
         | TypeName::IllegalArgumentException
         | TypeName::FinalException
-        | TypeName::AssertException => {}
+        | TypeName::AssertException
+        | TypeName::QueryException
+        | TypeName::DmlException
+        | TypeName::AggregateResult => {}
     }
 }
 

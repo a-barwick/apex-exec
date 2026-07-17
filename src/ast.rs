@@ -218,6 +218,11 @@ pub enum Statement {
         value: Expression,
         span: Span,
     },
+    Dml {
+        operation: DmlOperation,
+        value: Expression,
+        span: Span,
+    },
     Return {
         value: Option<Expression>,
         span: Span,
@@ -230,6 +235,8 @@ pub enum Expression {
     BooleanLiteral(bool, Span),
     IntegerLiteral(i64, Span),
     NullLiteral(Span),
+    Soql(Box<SoqlQuery>),
+    Sosl(Box<SoslQuery>),
     Variable(Identifier),
     Assignment {
         target: AssignmentTarget,
@@ -317,9 +324,182 @@ impl Expression {
             | Self::Unary { span, .. }
             | Self::Postfix { span, .. }
             | Self::Binary { span, .. } => *span,
+            Self::Soql(query) => query.span,
+            Self::Sosl(query) => query.span,
             Self::Variable(identifier) => identifier.span,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlOperation {
+    Insert,
+    Update,
+    Upsert,
+    Delete,
+    Undelete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoqlQuery {
+    pub select: Vec<SoqlSelectItem>,
+    pub from: Identifier,
+    pub where_clause: Option<SoqlCondition>,
+    pub group_by: Vec<FieldPath>,
+    pub order_by: Vec<SoqlOrderBy>,
+    pub limit: Option<SoqlValue>,
+    pub offset: Option<SoqlValue>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SoqlSelectItem {
+    Field(FieldPath),
+    Aggregate {
+        function: SoqlAggregateFunction,
+        field: Option<FieldPath>,
+        alias: Option<Identifier>,
+        span: Span,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoqlAggregateFunction {
+    Count,
+    Sum,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldPath {
+    pub segments: Vec<Identifier>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SoqlCondition {
+    Comparison {
+        left: FieldPath,
+        operator: SoqlComparisonOperator,
+        right: SoqlValue,
+        span: Span,
+    },
+    In {
+        field: FieldPath,
+        negated: bool,
+        values: SoqlInValues,
+        span: Span,
+    },
+    Not {
+        condition: Box<SoqlCondition>,
+        span: Span,
+    },
+    Logical {
+        left: Box<SoqlCondition>,
+        operator: SoqlLogicalOperator,
+        right: Box<SoqlCondition>,
+        span: Span,
+    },
+}
+
+impl SoqlCondition {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Comparison { span, .. }
+            | Self::In { span, .. }
+            | Self::Not { span, .. }
+            | Self::Logical { span, .. } => *span,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoqlComparisonOperator {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Like,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoqlLogicalOperator {
+    And,
+    Or,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SoqlInValues {
+    Values(Vec<SoqlValue>),
+    Bind(Box<Expression>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SoqlValue {
+    String(String, Span),
+    Boolean(bool, Span),
+    Integer(i64, Span),
+    Null(Span),
+    Bind(Box<Expression>, Span),
+}
+
+impl SoqlValue {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::String(_, span)
+            | Self::Boolean(_, span)
+            | Self::Integer(_, span)
+            | Self::Null(span)
+            | Self::Bind(_, span) => *span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoqlOrderBy {
+    pub field: FieldPath,
+    pub direction: SortDirection,
+    pub nulls: Option<NullsOrder>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NullsOrder {
+    First,
+    Last,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoslQuery {
+    pub search: SoqlValue,
+    pub scope: SoslScope,
+    pub returning: Vec<SoslReturning>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoslScope {
+    AllFields,
+    NameFields,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoslReturning {
+    pub object: Identifier,
+    pub fields: Vec<FieldPath>,
+    pub where_clause: Option<SoqlCondition>,
+    pub order_by: Vec<SoqlOrderBy>,
+    pub limit: Option<SoqlValue>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -426,6 +606,9 @@ pub enum TypeName {
     IllegalArgumentException,
     FinalException,
     AssertException,
+    QueryException,
+    DmlException,
+    AggregateResult,
     Custom(NamedType),
     List(Box<TypeName>),
     Set(Box<TypeName>),
@@ -448,6 +631,9 @@ impl TypeName {
             "illegalargumentexception" => Some(Self::IllegalArgumentException),
             "finalexception" => Some(Self::FinalException),
             "assertexception" => Some(Self::AssertException),
+            "queryexception" => Some(Self::QueryException),
+            "dmlexception" => Some(Self::DmlException),
+            "aggregateresult" => Some(Self::AggregateResult),
             _ => None,
         }
     }
@@ -464,6 +650,8 @@ impl TypeName {
                 | Self::IllegalArgumentException
                 | Self::FinalException
                 | Self::AssertException
+                | Self::QueryException
+                | Self::DmlException
         )
     }
 
@@ -482,6 +670,9 @@ impl TypeName {
             Self::IllegalArgumentException => "IllegalArgumentException".to_owned(),
             Self::FinalException => "FinalException".to_owned(),
             Self::AssertException => "AssertException".to_owned(),
+            Self::QueryException => "QueryException".to_owned(),
+            Self::DmlException => "DmlException".to_owned(),
+            Self::AggregateResult => "AggregateResult".to_owned(),
             Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
@@ -539,6 +730,7 @@ impl Statement {
             | Self::Continue { span }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }
+            | Self::Dml { span, .. }
             | Self::Return { span, .. } => *span,
         }
     }
@@ -560,6 +752,8 @@ mod tests {
             "IllegalArgumentException",
             "FinalException",
             "AssertException",
+            "QueryException",
+            "DmlException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");

@@ -11,12 +11,13 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod database;
 mod host;
 mod image;
 mod intrinsics;
 mod store;
 
-pub use host::{DebugEvent, PlatformHost, RecordingHost};
+pub use host::{DebugEvent, DmlEvent, PlatformHost, QueryEvent, QueryKind, RecordingHost};
 use image::RuntimeImage;
 use store::ExecutionStore;
 
@@ -48,6 +49,9 @@ struct ObjectId(usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SObjectId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AggregateResultId(usize);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Value {
     String(String),
@@ -56,6 +60,7 @@ enum Value {
     Collection(CollectionId),
     Object(ObjectId),
     SObject(SObjectId),
+    AggregateResult(AggregateResultId),
     Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
@@ -102,6 +107,7 @@ struct ObjectInstance {
 struct SObjectInstance {
     object_id: usize,
     fields: BTreeMap<usize, Value>,
+    relationships: BTreeMap<usize, SObjectId>,
 }
 
 #[derive(Clone, Debug)]
@@ -506,6 +512,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     )),
                 }
             }
+            Statement::Dml {
+                operation,
+                value,
+                span,
+            } => {
+                self.execute_dml(*operation, value, *span)?;
+                Ok(Flow::Normal)
+            }
         }
     }
 
@@ -695,6 +709,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Expression::BooleanLiteral(value, _) => Ok(Value::Boolean(*value)),
             Expression::IntegerLiteral(value, _) => Ok(Value::Integer(*value)),
             Expression::NullLiteral(_) => Ok(Value::Null(None)),
+            Expression::Soql(query) => self.evaluate_soql(query.span),
+            Expression::Sosl(query) => self.evaluate_sosl(query.span),
             Expression::Variable(identifier) => self.evaluate_variable(identifier),
             Expression::Assignment { target, value, .. } => self.evaluate_assignment(target, value),
             Expression::NewCollection {
@@ -747,7 +763,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     CallTarget::Constructor { .. }
                     | CallTarget::SObjectConstructor { .. }
                     | CallTarget::SObjectGet
-                    | CallTarget::SObjectPut => Err(Diagnostic::new(
+                    | CallTarget::SObjectPut
+                    | CallTarget::DatabaseDml(_)
+                    | CallTarget::AggregateResultGet => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -802,6 +820,29 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     }
                     Some(CallTarget::SObjectPut) => {
                         self.evaluate_sobject_put(receiver, arguments, *span)
+                    }
+                    Some(CallTarget::DatabaseDml(operation)) => {
+                        let Some(value) = arguments.first() else {
+                            return Err(Diagnostic::new(
+                                "invalid checked Database DML call",
+                                *span,
+                            ));
+                        };
+                        let value = self.evaluate(value)?;
+                        if let Some(all_or_none) = arguments.get(1) {
+                            if self.evaluate(all_or_none)? == Value::Boolean(false) {
+                                return Err(runtime_exception(
+                                    "DmlException",
+                                    "Database allOrNone=false partial results are not supported",
+                                    *span,
+                                ));
+                            }
+                        }
+                        self.execute_dml_value(operation, value, *span)?;
+                        Ok(Value::Void)
+                    }
+                    Some(CallTarget::AggregateResultGet) => {
+                        self.evaluate_aggregate_result_get(receiver, arguments, *span)
                     }
                     Some(
                         CallTarget::TopLevelMethod(_)
@@ -902,6 +943,36 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             } => {
                 let receiver = self.evaluate_sobject_receiver(receiver)?;
                 self.read_sobject_field(receiver, object_id, field_id, span)
+            }
+            MemberTarget::SObjectRelationship {
+                object_id,
+                reference_field_id,
+                target_object_id,
+            } => {
+                let receiver = self.evaluate_sobject_receiver(receiver)?;
+                let instance = self.store.sobject(receiver);
+                if instance.object_id != object_id {
+                    return Err(Diagnostic::new(
+                        "SObject relationship target does not match runtime object type",
+                        span,
+                    ));
+                }
+                Ok(instance
+                    .relationships
+                    .get(&reference_field_id)
+                    .copied()
+                    .map(Value::SObject)
+                    .unwrap_or_else(|| {
+                        let target = self
+                            .program()
+                            .schema()
+                            .object_at(target_object_id)
+                            .expect("checked relationship target is valid");
+                        Value::Null(Some(TypeName::Custom(crate::ast::NamedType::new(
+                            target.api_name().to_owned(),
+                            span,
+                        ))))
+                    }))
             }
         }
     }
@@ -1757,6 +1828,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         let receiver = self.evaluate_sobject_receiver(receiver)?;
                         self.write_sobject_field(receiver, object_id, field_id, value, *span)
                     }
+                    MemberTarget::SObjectRelationship { .. } => Err(Diagnostic::new(
+                        "cannot assign a parent relationship value directly",
+                        *span,
+                    )),
                 }
             }
         }
@@ -2343,6 +2418,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         )?;
                         Ok(Value::Integer(if return_old { old } else { new }))
                     }
+                    MemberTarget::SObjectRelationship { .. } => {
+                        Err(invalid_runtime_operands(operator_span))
+                    }
                 }
             }
             Expression::Index {
@@ -2622,6 +2700,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .join(", ");
                 format!("{}:{{{fields}}}", object.api_name())
             }
+            Value::AggregateResult(id) => {
+                let fields = self
+                    .store
+                    .aggregate_result(*id)
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("AggregateResult:{{{fields}}}")
+            }
             Value::Exception(exception) => {
                 let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
                 if exception.message.is_empty() {
@@ -2706,6 +2794,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 target.canonical == "sobject"
                     || actual.api_name().eq_ignore_ascii_case(&target.spelling)
             }
+            Value::AggregateResult(_) => matches!(target, TypeName::AggregateResult),
             Value::Exception(exception) => {
                 matches!(target, TypeName::Exception)
                     || exception.exception_type.as_deref() == Some(target.apex_name().as_str())
@@ -2732,6 +2821,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .expect("runtime SObject schema index is valid")
                 .api_name()
                 .to_owned(),
+            Value::AggregateResult(_) => TypeName::AggregateResult.apex_name(),
             Value::Exception(exception) => exception
                 .exception_type
                 .clone()

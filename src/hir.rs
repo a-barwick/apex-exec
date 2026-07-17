@@ -1,4 +1,8 @@
-use crate::{ast, platform::SchemaCatalog, span::Span};
+use crate::{
+    ast,
+    platform::{DataValue, FieldType, SchemaCatalog},
+    span::Span,
+};
 use std::{collections::HashMap, ops::Deref};
 
 mod intrinsic;
@@ -19,6 +23,7 @@ pub struct Program {
     calls: HashMap<Span, CallTarget>,
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
+    queries: HashMap<Span, CheckedQuery>,
     schema: SchemaCatalog,
 }
 
@@ -29,6 +34,7 @@ impl Program {
         calls: HashMap<Span, CallTarget>,
         references: HashMap<Span, ReferenceTarget>,
         members: HashMap<Span, MemberTarget>,
+        queries: HashMap<Span, CheckedQuery>,
         schema: SchemaCatalog,
     ) -> Self {
         Self {
@@ -37,6 +43,7 @@ impl Program {
             calls,
             references,
             members,
+            queries,
             schema,
         }
     }
@@ -59,6 +66,10 @@ impl Program {
 
     pub fn member_target(&self, span: Span) -> Option<MemberTarget> {
         self.members.get(&span).copied()
+    }
+
+    pub fn checked_query(&self, span: Span) -> Option<&CheckedQuery> {
+        self.queries.get(&span)
     }
 
     pub fn schema(&self) -> &SchemaCatalog {
@@ -111,6 +122,8 @@ pub enum CallTarget {
     },
     SObjectGet,
     SObjectPut,
+    DatabaseDml(ast::DmlOperation),
+    AggregateResultGet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,7 +145,121 @@ pub enum ReferenceTarget {
 pub enum MemberTarget {
     Instance(ClassMemberId),
     Static(ClassMemberId),
-    SObjectField { object_id: usize, field_id: usize },
+    SObjectField {
+        object_id: usize,
+        field_id: usize,
+    },
+    SObjectRelationship {
+        object_id: usize,
+        reference_field_id: usize,
+        target_object_id: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedQuery {
+    Soql(Box<CheckedSoqlQuery>),
+    Sosl(Box<CheckedSoslQuery>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedSoqlQuery {
+    pub object_id: usize,
+    pub select: Vec<CheckedSelectItem>,
+    pub condition: Option<CheckedCondition>,
+    pub group_by: Vec<CheckedFieldPath>,
+    pub order_by: Vec<CheckedOrderBy>,
+    pub limit: Option<CheckedValue>,
+    pub offset: Option<CheckedValue>,
+    pub result: QueryResultKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryResultKind {
+    Records,
+    RecordSingle,
+    Count,
+    Aggregates,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedSelectItem {
+    Field(CheckedFieldPath),
+    Aggregate {
+        function: ast::SoqlAggregateFunction,
+        field: Option<CheckedFieldPath>,
+        alias: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedFieldPath {
+    pub root_object_id: usize,
+    pub relationship: Option<CheckedRelationship>,
+    pub field_id: usize,
+    pub field_type: FieldType,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedRelationship {
+    pub reference_field_id: usize,
+    pub target_object_id: usize,
+    pub spelling: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedCondition {
+    Comparison {
+        left: CheckedFieldPath,
+        operator: ast::SoqlComparisonOperator,
+        right: CheckedValue,
+    },
+    In {
+        field: CheckedFieldPath,
+        negated: bool,
+        values: CheckedInValues,
+    },
+    Not(Box<CheckedCondition>),
+    Logical {
+        left: Box<CheckedCondition>,
+        operator: ast::SoqlLogicalOperator,
+        right: Box<CheckedCondition>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedInValues {
+    Values(Vec<CheckedValue>),
+    Bind(Box<ast::Expression>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedValue {
+    Literal(DataValue),
+    Bind(Box<ast::Expression>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedOrderBy {
+    pub field: CheckedFieldPath,
+    pub direction: ast::SortDirection,
+    pub nulls: Option<ast::NullsOrder>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedSoslQuery {
+    pub search: CheckedValue,
+    pub scope: ast::SoslScope,
+    pub returning: Vec<CheckedSoslReturning>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedSoslReturning {
+    pub object_id: usize,
+    pub fields: Vec<CheckedFieldPath>,
+    pub condition: Option<CheckedCondition>,
+    pub order_by: Vec<CheckedOrderBy>,
+    pub limit: Option<CheckedValue>,
 }
 
 #[cfg(test)]

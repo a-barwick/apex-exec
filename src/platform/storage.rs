@@ -221,6 +221,8 @@ pub trait StorageTransaction {
     fn read(&mut self, object_api_name: &str, id: &RecordId)
     -> Result<Option<Record>, Self::Error>;
 
+    fn scan(&mut self, object_api_name: &str) -> Result<Vec<Record>, Self::Error>;
+
     fn write(&mut self, record: Record) -> Result<(), Self::Error>;
 
     fn delete(&mut self, object_api_name: &str, id: &RecordId) -> Result<bool, Self::Error>;
@@ -362,6 +364,16 @@ mod tests {
                 record,
             );
             Ok(())
+        }
+
+        fn scan(&mut self, object_api_name: &str) -> Result<Vec<Record>, Self::Error> {
+            let object = canonical_name(object_api_name);
+            Ok(self
+                .working
+                .iter()
+                .filter(|((record_object, _), _)| record_object == &object)
+                .map(|(_, record)| record.clone())
+                .collect())
         }
 
         fn delete(&mut self, object_api_name: &str, id: &RecordId) -> Result<bool, Self::Error> {

@@ -36,6 +36,12 @@ impl SObject {
         self.id.as_ref()
     }
 
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = (&str, &DataValue)> {
+        self.fields
+            .iter()
+            .map(|(name, value)| (name.as_str(), value))
+    }
+
     pub fn set_id(&mut self, id: RecordId) {
         self.fields
             .insert("id".to_owned(), DataValue::Id(id.clone()));

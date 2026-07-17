@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M8 — SOQL, SOSL, and DML
+M9 — Triggers and transaction semantics
 
 ## Completed
 
@@ -122,28 +122,44 @@ M8 — SOQL, SOSL, and DML
   storage-neutral platform contract
 - A complete M7 example project whose imported `Invoice__c` metadata compiles
   and executes through both typed and dynamic SObject access
+- Dedicated SOQL and SOSL AST grammars with immutable checked HIR plans rather
+  than string parsing or SQLite concerns in expression evaluation
+- Static SObject/field, aggregate/grouping, parent relationship, and bind
+  validation against the normalized M7 schema
+- SOQL comparison, `LIKE`, `IN`/`NOT IN`, Boolean filters, scalar and collection
+  binds, ordering/null placement, `LIMIT`, and `OFFSET`
+- Single-record and list SOQL results, scalar `COUNT()`, grouped
+  `COUNT`/`SUM`/`MIN`/`MAX`, and `AggregateResult.get`
+- One-level custom parent relationship selection and runtime traversal through
+  `__r` names backed by lookup/master-detail IDs
+- SOSL `FIND` with String binds, `IN ALL FIELDS`/`IN NAME FIELDS`, and typed
+  `RETURNING` clauses with filters, ordering, and limits
+- Bulk and scalar `insert`, `update`, `upsert`, and `delete` statements plus
+  the corresponding common `Database` methods
+- Catchable `QueryException` and `DmlException` failures for query cardinality,
+  bind, persistence, and unsupported DML semantics
+- A lazy per-execution in-memory SQLite database host with deterministic IDs,
+  atomic DML calls, test/setup visibility, and independent state per test
+- Public structured SOQL, SOSL, and DML trace events on the recording host
+- A two-class M8 repository/service example that persists, queries, follows a
+  parent relationship, and executes through the CLI without source changes
 
 ## Immediate target
 
-Implement M8 SOQL, SOSL, and DML against the normalized schema and SQLite
-transaction kernel completed in M7.
+Implement M9 triggers and transaction semantics above the M8 query/DML kernel.
 
 Recommended implementation order:
 
-1. Add dedicated SOQL grammar nodes without treating queries as ordinary Apex
-   expressions.
-2. Validate static object/field references and bind expressions against the M7
-   schema catalog.
-3. Lower common filters, ordering, limits, aggregates, and relationship queries
-   onto the SQLite adapter.
-4. Add Apex DML statements and common `Database` methods above the
-   unconditional M7 record-storage operations.
-5. Emit structured query/DML traces and connect test setup snapshots to the
-   database transaction host.
+1. Parse and statically validate trigger declarations and supported context
+   variables.
+2. Add before/after bulk trigger dispatch around the M8 DML service.
+3. Model transaction-wide rollback, recursion, and deterministic timelines.
+4. Add delete/undelete recycle-bin semantics before enabling `undelete`.
+5. Measure common trigger-handler architectures with end-to-end fixtures.
 
 ## North Star indicators
 
-At M7 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M8 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -197,25 +213,41 @@ compatibility percentages.
   compilation. Id and relationship fields currently appear as `String` in
   Apex execution while the storage boundary uses validated `RecordId` values;
   the dedicated Apex `Id` type remains M10 work.
-- Dynamic `SObject.get`/`put` and typed field access execute in memory.
-  SOQL, SOSL, Apex DML statements, `Database` methods, and automatic persistence
-  of interpreter SObjects begin in M8.
+- Static SOQL supports direct fields and one custom parent `__r` relationship
+  level. Child subqueries, `HAVING`, `TYPEOF`, polymorphic relationships, date
+  literals, and the broader SOQL grammar remain unsupported.
+- Aggregate queries support grouped direct fields plus `COUNT`, `SUM`, `MIN`,
+  and `MAX` over the current scalar types. `AggregateResult` exposes only
+  `get(String)`.
+- SOSL uses deterministic case-insensitive substring matching over stored
+  String fields. Salesforce tokenization, stemming, wildcards, snippets,
+  division clauses, and relevance ranking are not reproduced.
+- DML calls are atomic and support Id-based insert/update/upsert/delete without
+  validation rules, workflows, sharing, limits, or triggers. `Database`
+  methods currently return `void`; result APIs and `allOrNone=false` partial
+  results are rejected explicitly.
+- `undelete` syntax is recognized but raises `DmlException` until M9 supplies
+  recycle-bin semantics. External-ID upsert fields are not implemented.
+- The default recording host owns an in-memory SQLite database for one
+  interpreter. A persistent project database configuration and fixture CLI
+  remain future work.
 - Nested types, enums, annotations other than `@IsTest`/`@TestSetup`, explicit
   superclass-constructor calls, custom exception classes, and Salesforce-exact
   object string formatting are not implemented.
 - Sharing modifiers are parsed for structural progress but rejected during
   checking because sharing/security semantics remain deferred.
-- Test setup methods run before every isolated test interpreter. This provides
-  deterministic language state today; connecting Salesforce's one-time setup
-  transaction and database snapshot behavior to the M7 storage host is M8 test
-  runner work.
+- Test setup methods run before every isolated test interpreter, and their DML
+  is visible to that test while remaining isolated from parallel tests.
+  Salesforce's one-time setup transaction/snapshot optimization is not yet
+  reproduced.
 - Test discovery supports annotation-based static void methods only. Legacy
   `testMethod`, the newer `Assert` class, `Test.startTest`/`stopTest`, and
   org-backed `SeeAllData=true` remain unsupported.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
   claim of Salesforce-exact coverage accounting.
-- SOQL, SOSL, and DML are not implemented.
+- Trigger execution, cross-DML transaction rollback, and recycle-bin behavior
+  begin in M9.
 
 ## Handoff checklist
 
