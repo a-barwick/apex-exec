@@ -1,8 +1,8 @@
 use crate::{
     ast::{
-        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassMember,
-        CollectionInitializer, Expression, Identifier, MethodDeclaration, Modifier,
-        PostfixOperator, ReturnType, Statement, TypeName, UnaryOperator,
+        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassMember,
+        CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator, ReturnType,
+        Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
@@ -12,6 +12,12 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap},
 };
+
+mod host;
+mod image;
+
+pub use host::{DebugEvent, PlatformHost, RecordingHost};
+use image::RuntimeImage;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BranchHits {
@@ -120,40 +126,42 @@ enum Flow {
     Return(Option<Value>),
 }
 
-pub struct Interpreter {
+pub struct Interpreter<'program, H = RecordingHost> {
     scopes: Vec<HashMap<String, Slot>>,
     collections: Vec<Collection>,
     objects: Vec<ObjectInstance>,
     static_fields: HashMap<ClassMemberId, Slot>,
-    output: Vec<String>,
-    methods: Vec<MethodDeclaration>,
+    host: H,
     call_stack: Vec<ActiveCall>,
-    program: Option<Program>,
-    classes: Vec<ClassDeclaration>,
+    image: Option<RuntimeImage<'program>>,
     current_receiver: Option<ObjectId>,
     current_declaring_class: Option<usize>,
     trace: ExecutionTrace,
 }
 
-impl Interpreter {
+impl<'program> Interpreter<'program, RecordingHost> {
     pub fn new() -> Self {
+        Self::with_host(RecordingHost::default())
+    }
+}
+
+impl<'program, H: PlatformHost> Interpreter<'program, H> {
+    pub fn with_host(host: H) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             collections: Vec::new(),
             objects: Vec::new(),
             static_fields: HashMap::new(),
-            output: Vec::new(),
-            methods: Vec::new(),
+            host,
             call_stack: Vec::new(),
-            program: None,
-            classes: Vec::new(),
+            image: None,
             current_receiver: None,
             current_declaring_class: None,
             trace: ExecutionTrace::default(),
         }
     }
 
-    pub fn execute(mut self, program: &Program) -> Result<Vec<String>, Diagnostic> {
+    pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
         for statement in &program.statements {
             match self.execute_statement(statement)? {
@@ -179,24 +187,24 @@ impl Interpreter {
                 }
             }
         }
-        Ok(self.output)
+        Ok(self.host.take_debug_output())
     }
 
     pub fn invoke_static(
         mut self,
-        program: &Program,
+        program: &'program Program,
         class_name: &str,
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
         let class_id = self
-            .classes
+            .classes()
             .iter()
             .position(|class| class.name.spelling.eq_ignore_ascii_case(class_name))
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown class `{class_name}`"), Span::new(0, 0))
             })?;
-        let candidates = self.classes[class_id]
+        let candidates = self.classes()[class_id]
             .members
             .iter()
             .enumerate()
@@ -217,7 +225,7 @@ impl Interpreter {
                 format!(
                     "invocation requires one public static zero-argument method `{class_name}.{method_name}`"
                 ),
-                self.classes[class_id].name.span,
+                self.classes()[class_id].name.span,
             ));
         };
         let value = self.evaluate_class_method(
@@ -230,15 +238,16 @@ impl Interpreter {
             *span,
             false,
         )?;
+        let mut output = self.host.take_debug_output();
         if !matches!(value, Value::Void) {
-            self.output.push(self.display_value(&value));
+            output.push(self.display_value(&value));
         }
-        Ok(self.output)
+        Ok(output)
     }
 
     pub(crate) fn run_test(
         mut self,
-        program: &Program,
+        program: &'program Program,
         setup_methods: &[ClassMemberId],
         test_method: ClassMemberId,
     ) -> TestExecution {
@@ -252,7 +261,7 @@ impl Interpreter {
             Ok(())
         });
         TestExecution {
-            output: self.output,
+            output: self.host.take_debug_output(),
             diagnostic: result.err(),
             trace: self.trace,
         }
@@ -260,7 +269,7 @@ impl Interpreter {
 
     fn class_method_span(&self, target: ClassMemberId) -> Result<Span, Diagnostic> {
         match self
-            .classes
+            .classes()
             .get(target.class_id)
             .and_then(|class| class.members.get(target.member_id))
         {
@@ -272,15 +281,30 @@ impl Interpreter {
         }
     }
 
-    fn prepare(&mut self, program: &Program) -> Result<(), Diagnostic> {
-        self.methods = program.methods.clone();
-        self.program = Some(program.clone());
-        self.classes = program.classes.clone();
+    fn prepare(&mut self, program: &'program Program) -> Result<(), Diagnostic> {
+        self.image = Some(RuntimeImage::new(program));
         self.initialize_static_fields()
     }
 
+    fn image(&self) -> RuntimeImage<'program> {
+        self.image
+            .expect("execution always has an immutable runtime image")
+    }
+
+    fn program(&self) -> &'program Program {
+        self.image().program()
+    }
+
+    fn methods(&self) -> &'program [crate::ast::MethodDeclaration] {
+        self.image().methods()
+    }
+
+    fn classes(&self) -> &'program [crate::ast::ClassDeclaration] {
+        self.image().classes()
+    }
+
     fn initialize_static_fields(&mut self) -> Result<(), Diagnostic> {
-        for (class_id, class) in self.classes.iter().enumerate() {
+        for (class_id, class) in self.classes().iter().enumerate() {
             for (member_id, member) in class.members.iter().enumerate() {
                 let target = ClassMemberId {
                     class_id,
@@ -312,7 +336,7 @@ impl Interpreter {
             }
         }
 
-        let classes = self.classes.clone();
+        let classes = self.classes();
         for (class_id, class) in classes.iter().enumerate() {
             self.current_declaring_class = Some(class_id);
             for (member_id, member) in class.members.iter().enumerate() {
@@ -676,17 +700,12 @@ impl Interpreter {
                 arguments,
                 span,
             } => {
-                let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
-                    .call_target(*span)
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            "unresolved method call escaped semantic validation",
-                            name.span,
-                        )
-                    })?;
+                let target = self.program().call_target(*span).ok_or_else(|| {
+                    Diagnostic::new(
+                        "unresolved method call escaped semantic validation",
+                        name.span,
+                    )
+                })?;
                 match target {
                     CallTarget::TopLevelMethod(method_id) => {
                         self.evaluate_function_call(method_id, name, arguments, *span)
@@ -728,11 +747,7 @@ impl Interpreter {
                 arguments,
                 span,
             } => {
-                let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
-                    .call_target(*span);
+                let target = self.program().call_target(*span);
                 match target {
                     Some(CallTarget::StaticMethod(target)) => {
                         self.evaluate_class_method(target, None, arguments, *span, false)
@@ -792,9 +807,7 @@ impl Interpreter {
 
     fn evaluate_variable(&mut self, identifier: &Identifier) -> Result<Value, Diagnostic> {
         let target = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
+            .program()
             .reference_target(identifier.span)
             .ok_or_else(|| {
                 Diagnostic::new(
@@ -825,14 +838,9 @@ impl Interpreter {
         receiver: &Expression,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let target = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
-            .member_target(span)
-            .ok_or_else(|| {
-                Diagnostic::new("unresolved member escaped semantic validation", span)
-            })?;
+        let target = self.program().member_target(span).ok_or_else(|| {
+            Diagnostic::new("unresolved member escaped semantic validation", span)
+        })?;
         match target {
             MemberTarget::Static(target) => self.read_class_member(target, None, span),
             MemberTarget::Instance(target) => {
@@ -858,7 +866,7 @@ impl Interpreter {
         receiver: Option<ObjectId>,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let member = self.classes[target.class_id].members[target.member_id].clone();
+        let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
                 if field.modifiers.contains(&Modifier::Static) {
@@ -911,7 +919,7 @@ impl Interpreter {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let member = self.classes[target.class_id].members[target.member_id].clone();
+        let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
                 let value = typed_value(value, &field.ty);
@@ -978,9 +986,7 @@ impl Interpreter {
             class_id,
             member_id,
         } = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
+            .program()
             .call_target(span)
             .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?
         else {
@@ -1002,7 +1008,7 @@ impl Interpreter {
                 self.zero_argument_constructor(current)
             };
             if let Some(member_id) = selected {
-                let constructor = match self.classes[current].members[member_id].clone() {
+                let constructor = match self.classes()[current].members[member_id].clone() {
                     ClassMember::Constructor(constructor) => constructor,
                     _ => return Err(Diagnostic::new("invalid constructor member", span)),
                 };
@@ -1028,7 +1034,7 @@ impl Interpreter {
 
     fn allocate_instance_fields(&mut self, object: ObjectId, class_id: usize) {
         for current in self.class_lineage_base_first(class_id) {
-            for (member_id, member) in self.classes[current].members.iter().enumerate() {
+            for (member_id, member) in self.classes()[current].members.iter().enumerate() {
                 let (ty, is_static) = match member {
                     ClassMember::Field(field) => {
                         (&field.ty, field.modifiers.contains(&Modifier::Static))
@@ -1061,7 +1067,7 @@ impl Interpreter {
     ) -> Result<(), Diagnostic> {
         let saved_receiver = self.current_receiver.replace(object);
         let saved_declaring = self.current_declaring_class.replace(class_id);
-        let members = self.classes[class_id].members.clone();
+        let members = self.classes()[class_id].members.clone();
         let result = (|| {
             for (member_id, member) in members.iter().enumerate() {
                 let ClassMember::Field(field) = member else {
@@ -1094,8 +1100,8 @@ impl Interpreter {
         let mut cursor = Some(class_id);
         while let Some(id) = cursor {
             lineage.push(id);
-            cursor = self.classes[id].superclass.as_ref().and_then(|parent| {
-                self.classes
+            cursor = self.classes()[id].superclass.as_ref().and_then(|parent| {
+                self.classes()
                     .iter()
                     .position(|class| class.name.canonical == parent.canonical)
             });
@@ -1105,7 +1111,7 @@ impl Interpreter {
     }
 
     fn zero_argument_constructor(&self, class_id: usize) -> Option<usize> {
-        self.classes[class_id]
+        self.classes()[class_id]
             .members
             .iter()
             .position(|member| matches!(member, ClassMember::Constructor(constructor) if constructor.parameters.is_empty()))
@@ -1165,7 +1171,7 @@ impl Interpreter {
         } else {
             target
         };
-        let method = match self.classes[target.class_id].members[target.member_id].clone() {
+        let method = match self.classes()[target.class_id].members[target.member_id].clone() {
             ClassMember::Method(method) => method,
             _ => return Err(Diagnostic::new("method target is invalid", span)),
         };
@@ -1186,7 +1192,7 @@ impl Interpreter {
     }
 
     fn virtual_method_target(&self, receiver: ObjectId, declared: ClassMemberId) -> ClassMemberId {
-        let declared_method = match &self.classes[declared.class_id].members[declared.member_id] {
+        let declared_method = match &self.classes()[declared.class_id].members[declared.member_id] {
             ClassMember::Method(method) => method,
             _ => return declared,
         };
@@ -1197,7 +1203,7 @@ impl Interpreter {
             .collect::<Vec<_>>();
         let mut cursor = Some(self.objects[receiver.0].class_id);
         while let Some(class_id) = cursor {
-            for (member_id, member) in self.classes[class_id].members.iter().enumerate() {
+            for (member_id, member) in self.classes()[class_id].members.iter().enumerate() {
                 let ClassMember::Method(method) = member else {
                     continue;
                 };
@@ -1219,11 +1225,11 @@ impl Interpreter {
             if class_id == declared.class_id {
                 break;
             }
-            cursor = self.classes[class_id]
+            cursor = self.classes()[class_id]
                 .superclass
                 .as_ref()
                 .and_then(|parent| {
-                    self.classes
+                    self.classes()
                         .iter()
                         .position(|class| class.name.canonical == parent.canonical)
                 });
@@ -1348,7 +1354,7 @@ impl Interpreter {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let arguments = self.evaluate_arguments(arguments)?;
-        let method = self.methods.get(method_id).cloned().ok_or_else(|| {
+        let method = self.methods().get(method_id).cloned().ok_or_else(|| {
             Diagnostic::new("resolved method does not exist at runtime", name.span)
         })?;
         let body = method
@@ -1435,9 +1441,7 @@ impl Interpreter {
             AssignmentTarget::Variable(identifier) => {
                 let value = self.evaluate(value)?;
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .reference_target(identifier.span)
                     .ok_or_else(|| {
                         Diagnostic::new("unresolved assignment target", identifier.span)
@@ -1475,9 +1479,7 @@ impl Interpreter {
                 span,
             } => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .member_target(*span)
                     .ok_or_else(|| Diagnostic::new("unresolved member assignment", *span))?;
                 let value = self.evaluate(value)?;
@@ -1972,7 +1974,8 @@ impl Interpreter {
                 if matches!(argument.value, Value::Void) {
                     return Err(Diagnostic::new("cannot debug void", argument.span));
                 }
-                self.output.push(self.display_value(&argument.value));
+                let message = self.display_value(&argument.value);
+                self.host.debug(DebugEvent { message });
                 Ok(Value::Void)
             }
             "assert" => {
@@ -2968,9 +2971,7 @@ impl Interpreter {
         match operand {
             Expression::Variable(identifier) => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .reference_target(identifier.span)
                     .ok_or_else(|| Diagnostic::new("unresolved increment target", operator_span))?;
                 match target {
@@ -3013,9 +3014,7 @@ impl Interpreter {
             }
             Expression::MemberAccess { receiver, span, .. } => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .member_target(*span)
                     .ok_or_else(|| Diagnostic::new("unresolved increment target", *span))?;
                 match target {
@@ -3294,7 +3293,11 @@ impl Interpreter {
             },
             Value::Object(id) => {
                 let instance = &self.objects[id.0];
-                format!("{}@{}", self.classes[instance.class_id].name.spelling, id.0)
+                format!(
+                    "{}@{}",
+                    self.classes()[instance.class_id].name.spelling,
+                    id.0
+                )
             }
             Value::Exception(exception) => {
                 let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
@@ -3367,7 +3370,7 @@ impl Interpreter {
                     return false;
                 };
                 let target_id = self
-                    .classes
+                    .classes()
                     .iter()
                     .position(|class| class.name.canonical == target.canonical);
                 target_id.is_some_and(|target_id| {
@@ -3389,7 +3392,7 @@ impl Interpreter {
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
-            Value::Object(id) => self.classes[self.objects[id.0].class_id]
+            Value::Object(id) => self.classes()[self.objects[id.0].class_id]
                 .name
                 .spelling
                 .clone(),
@@ -3408,19 +3411,19 @@ impl Interpreter {
         if actual == expected {
             return true;
         }
-        if self.classes[actual].interfaces.iter().any(|interface| {
-            self.classes
+        if self.classes()[actual].interfaces.iter().any(|interface| {
+            self.classes()
                 .iter()
                 .position(|class| class.name.canonical == interface.canonical)
                 .is_some_and(|id| self.runtime_class_is_or_inherits(id, expected))
         }) {
             return true;
         }
-        self.classes[actual]
+        self.classes()[actual]
             .superclass
             .as_ref()
             .and_then(|parent| {
-                self.classes
+                self.classes()
                     .iter()
                     .position(|class| class.name.canonical == parent.canonical)
             })
@@ -3458,7 +3461,7 @@ impl Interpreter {
     }
 }
 
-impl Default for Interpreter {
+impl<'program> Default for Interpreter<'program, RecordingHost> {
     fn default() -> Self {
         Self::new()
     }
@@ -3695,9 +3698,36 @@ fn integer_overflow(span: Span) -> Diagnostic {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct ObservingHost {
+        events: Vec<DebugEvent>,
+    }
+
+    impl PlatformHost for ObservingHost {
+        fn debug(&mut self, event: DebugEvent) {
+            self.events.push(event);
+        }
+    }
+
     fn execute_source(source: &str) -> Result<Vec<String>, Diagnostic> {
         let program = crate::check(source)?;
         Interpreter::new().execute(&program)
+    }
+
+    #[test]
+    fn system_debug_crosses_the_platform_host_boundary() {
+        let program = crate::check("System.debug('hosted');").unwrap();
+        let mut host = ObservingHost::default();
+
+        let output = Interpreter::with_host(&mut host).execute(&program).unwrap();
+
+        assert!(output.is_empty());
+        assert_eq!(
+            host.events,
+            [DebugEvent {
+                message: "hosted".to_owned()
+            }]
+        );
     }
 
     #[test]
