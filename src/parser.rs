@@ -1089,7 +1089,7 @@ impl Parser {
             let end = self.peek(0).span.start;
             annotations.push(Annotation {
                 kind,
-                span: Span::new(start.start, end),
+                span: Span::new_in(start.source_id, start.start, end),
             });
         }
         Ok(annotations)
@@ -1322,11 +1322,28 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
+    use crate::span::SourceId;
 
     fn parse(source: &str) -> Program {
         Parser::new(Lexer::new(source).tokenize().unwrap())
             .parse_program()
             .unwrap()
+    }
+
+    #[test]
+    fn preserves_source_identity_through_constructed_spans() {
+        let source_id = SourceId::new(9);
+        let program = Parser::new(
+            Lexer::with_source("@IsTest public class Example {}", source_id)
+                .tokenize()
+                .unwrap(),
+        )
+        .parse_program()
+        .unwrap();
+
+        let class = &program.classes[0];
+        assert_eq!(class.span.source_id, source_id);
+        assert_eq!(class.annotations[0].span.source_id, source_id);
     }
 
     #[test]

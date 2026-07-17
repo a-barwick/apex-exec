@@ -1,17 +1,26 @@
 use crate::{
     diagnostic::Diagnostic,
-    span::Span,
+    span::{SourceId, Span},
     token::{Token, TokenKind},
 };
 
 pub struct Lexer<'a> {
     source: &'a str,
+    source_id: SourceId,
     cursor: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
-        Self { source, cursor: 0 }
+        Self::with_source(source, SourceId::ANONYMOUS)
+    }
+
+    pub(crate) fn with_source(source: &'a str, source_id: SourceId) -> Self {
+        Self {
+            source,
+            source_id,
+            cursor: 0,
+        }
     }
 
     pub fn tokenize(mut self) -> Result<Vec<Token>, Diagnostic> {
@@ -25,7 +34,7 @@ impl<'a> Lexer<'a> {
         }
         tokens.push(Token {
             kind: TokenKind::Eof,
-            span: Span::new(self.source.len(), self.source.len()),
+            span: self.span(self.source.len(), self.source.len()),
             lexeme: String::new(),
         });
         Ok(tokens)
@@ -47,7 +56,7 @@ impl<'a> Lexer<'a> {
                     if self.bump().is_none() {
                         return Err(Diagnostic::new(
                             "unterminated block comment",
-                            Span::new(start, self.source.len()),
+                            self.span(start, self.source.len()),
                         ));
                     }
                 }
@@ -139,7 +148,7 @@ impl<'a> Lexer<'a> {
                 let value = text.parse::<i64>().map_err(|_| {
                     Diagnostic::new(
                         "integer literal is out of range",
-                        Span::new(start, self.cursor),
+                        self.span(start, self.cursor),
                     )
                 })?;
                 TokenKind::IntegerLiteral(value)
@@ -147,13 +156,13 @@ impl<'a> Lexer<'a> {
             '"' => {
                 return Err(Diagnostic::new(
                     "Apex string literals must use single quotes",
-                    Span::new(start, self.cursor),
+                    self.span(start, self.cursor),
                 ));
             }
             _ => {
                 return Err(Diagnostic::new(
                     format!("unexpected character `{ch}`"),
-                    Span::new(start, self.cursor),
+                    self.span(start, self.cursor),
                 ));
             }
         };
@@ -184,15 +193,19 @@ impl<'a> Lexer<'a> {
     }
 
     fn unterminated_string(&self, start: usize) -> Diagnostic {
-        Diagnostic::new("unterminated string literal", Span::new(start, self.cursor))
+        Diagnostic::new("unterminated string literal", self.span(start, self.cursor))
     }
 
     fn token(&self, start: usize, kind: TokenKind) -> Token {
         Token {
             kind,
-            span: Span::new(start, self.cursor),
+            span: self.span(start, self.cursor),
             lexeme: self.source[start..self.cursor].to_owned(),
         }
+    }
+
+    fn span(&self, start: usize, end: usize) -> Span {
+        Span::new_in(self.source_id, start, end)
     }
 
     fn remaining(&self) -> &'a str {
@@ -291,6 +304,20 @@ mod tests {
 
         assert_eq!(error.message, "unterminated block comment");
         assert_eq!(&source[error.span.start..error.span.end], "/* never closed");
+    }
+
+    #[test]
+    fn source_aware_lexing_tags_tokens_and_diagnostics() {
+        let source_id = SourceId::new(7);
+        let tokens = Lexer::with_source("Integer value = 1;", source_id)
+            .tokenize()
+            .unwrap();
+        assert!(tokens.iter().all(|token| token.span.source_id == source_id));
+
+        let error = Lexer::with_source("\"wrong\"", source_id)
+            .tokenize()
+            .unwrap_err();
+        assert_eq!(error.span.source_id, source_id);
     }
 
     #[test]
