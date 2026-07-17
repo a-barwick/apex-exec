@@ -3,7 +3,8 @@ use crate::{
     ast::{
         AccessorKind, Annotation, AnnotationKind, ClassDeclaration, ClassKind, ClassMember,
         ConstructorDeclaration, FieldDeclaration, Identifier, MethodDeclaration, Modifier,
-        Parameter, PropertyAccessor, PropertyDeclaration, ReturnType, TypeName,
+        Parameter, PropertyAccessor, PropertyDeclaration, ReturnType, TriggerDeclaration,
+        TriggerEvent, TypeName,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -11,6 +12,53 @@ use crate::{
 };
 
 impl Parser {
+    pub(super) fn parse_trigger_declaration(&mut self) -> Result<TriggerDeclaration, Diagnostic> {
+        let start = self.expect_keyword("trigger", "expected `trigger`")?;
+        let name = self.expect_identifier("expected a trigger name")?;
+        self.expect_keyword("on", "expected `on` after trigger name")?;
+        let object = self.parse_named_type()?;
+        self.expect_simple(TokenKind::LeftParen, "expected `(` before trigger events")?;
+        let mut events = Vec::new();
+        loop {
+            let phase = self.expect_identifier("expected `before` or `after`")?;
+            let operation = self.expect_identifier("expected a trigger DML event")?;
+            let event = match (phase.canonical.as_str(), operation.canonical.as_str()) {
+                ("before", "insert") => TriggerEvent::BeforeInsert,
+                ("before", "update") => TriggerEvent::BeforeUpdate,
+                ("before", "delete") => TriggerEvent::BeforeDelete,
+                ("before", "undelete") => TriggerEvent::BeforeUndelete,
+                ("after", "insert") => TriggerEvent::AfterInsert,
+                ("after", "update") => TriggerEvent::AfterUpdate,
+                ("after", "delete") => TriggerEvent::AfterDelete,
+                ("after", "undelete") => TriggerEvent::AfterUndelete,
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "unsupported trigger event `{} {}`",
+                            phase.spelling, operation.spelling
+                        ),
+                        phase.span.merge(operation.span),
+                    ));
+                }
+            };
+            events.push(event);
+            if !self.check(&TokenKind::Comma) {
+                break;
+            }
+            self.advance();
+        }
+        self.expect_simple(TokenKind::RightParen, "expected `)` after trigger events")?;
+        let body = self.parse_block()?;
+        let span = start.span.merge(body.span());
+        Ok(TriggerDeclaration {
+            name,
+            object,
+            events,
+            body,
+            span,
+        })
+    }
+
     pub(super) fn parse_class_declaration(&mut self) -> Result<ClassDeclaration, Diagnostic> {
         let annotations = self.parse_annotations()?;
         let modifiers = self.parse_modifiers()?;

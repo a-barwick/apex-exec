@@ -1,10 +1,10 @@
 # Current Status
 
-**Last updated:** 2026-07-16
+**Last updated:** 2026-07-17
 
 ## Active milestone
 
-M9 — Triggers and transaction semantics
+M10 — Curated platform compatibility
 
 ## Completed
 
@@ -143,23 +143,33 @@ M9 — Triggers and transaction semantics
 - Public structured SOQL, SOSL, and DML trace events on the recording host
 - A two-class M8 repository/service example that persists, queries, follows a
   parent relationship, and executes through the CLI without source changes
+- Dedicated trigger declarations discovered from `.trigger` project files,
+  with schema-checked objects, event lists, bodies, and source mapping
+- Typed `Trigger.new`, `old`, `newMap`, `oldMap`, phase/operation flags, and
+  `size` contexts that pass directly into common static handler methods
+- Before/after insert, update, delete, and undelete dispatch over bulk groups,
+  including concrete insert/update partitioning for mixed upserts
+- Mutable before-trigger new records plus read-only context collections, old
+  images, and after images
+- Deterministic recursive trigger execution with an explicit depth bound and
+  structured enter/exit events interleaved with DML in one transaction timeline
+- Nested database checkpoints for caught per-DML rollback and uncaught
+  entry-point rollback, including recursive trigger work
+- Recycle-bin persistence and undelete restoration with stable record IDs
+- Trigger statement and branch observations included in Apex test coverage
+- A handler-oriented M9 example that checks, invokes, and runs three Apex tests
+  with 100% production line and branch coverage
 
 ## Immediate target
 
-Implement M9 triggers and transaction semantics above the M8 query/DML kernel.
-
-Recommended implementation order:
-
-1. Parse and statically validate trigger declarations and supported context
-   variables.
-2. Add before/after bulk trigger dispatch around the M8 DML service.
-3. Model transaction-wide rollback, recursion, and deterministic timelines.
-4. Add delete/undelete recycle-bin semantics before enabling `undelete`.
-5. Measure common trigger-handler architectures with end-to-end fixtures.
+Implement M10 curated platform compatibility based on common real-project API
+usage. Start with value types and deterministic services that unblock the
+largest North Star and ordinary unit-test slices while keeping unsupported APIs
+explicit.
 
 ## North Star indicators
 
-At M8 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M9 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -196,8 +206,8 @@ compatibility percentages.
   causes, and Salesforce-exact stack formatting require later compatibility and
   differential work.
 - SFDX discovery reads package-directory paths but does not yet interpret the
-  full Salesforce DX configuration or metadata surface. Each `.cls` file must
-  contain exactly one matching top-level class or interface.
+  full Salesforce DX configuration or metadata surface. Each `.cls` or
+  `.trigger` file must contain exactly one matching top-level declaration.
 - Parsed source units and unchanged complete builds are cached with stable
   source identities. A changed unit computes dependency invalidation and reuses
   unchanged parsed ASTs, while the cross-file semantic link currently reruns
@@ -222,12 +232,18 @@ compatibility percentages.
 - SOSL uses deterministic case-insensitive substring matching over stored
   String fields. Salesforce tokenization, stemming, wildcards, snippets,
   division clauses, and relevance ranking are not reproduced.
-- DML calls are atomic and support Id-based insert/update/upsert/delete without
-  validation rules, workflows, sharing, limits, or triggers. `Database`
-  methods currently return `void`; result APIs and `allOrNone=false` partial
-  results are rejected explicitly.
-- `undelete` syntax is recognized but raises `DmlException` until M9 supplies
-  recycle-bin semantics. External-ID upsert fields are not implemented.
+- DML calls are atomic and support Id-based insert/update/upsert/delete/
+  undelete with triggers, but not validation rules, workflows, sharing, limits,
+  external-ID upsert, mixed-SObject bulk lists, or partial results. `Database`
+  methods currently return `void`; result APIs and `allOrNone=false` are
+  rejected explicitly.
+- Trigger dispatch supports the eight planned before/after event combinations,
+  bulk contexts, handler calls, recursion, and read-only images. It does not
+  model Salesforce automation beyond Apex triggers, `addError`, merge events,
+  or platform-exact multi-trigger ordering.
+- Transaction checkpoints copy the local active and recycled record sets.
+  Persistent or high-volume hosts need native transactions or savepoints behind
+  the same host boundary.
 - The default recording host owns an in-memory SQLite database for one
   interpreter. A persistent project database configuration and fixture CLI
   remain future work.
@@ -246,8 +262,6 @@ compatibility percentages.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
   claim of Salesforce-exact coverage accounting.
-- Trigger execution, cross-DML transaction rollback, and recycle-bin behavior
-  begin in M9.
 
 ## Handoff checklist
 

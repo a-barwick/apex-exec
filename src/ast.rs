@@ -6,8 +6,48 @@ pub mod visit;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub classes: Vec<ClassDeclaration>,
+    pub triggers: Vec<TriggerDeclaration>,
     pub methods: Vec<MethodDeclaration>,
     pub statements: Vec<Statement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TriggerDeclaration {
+    pub name: Identifier,
+    pub object: NamedType,
+    pub events: Vec<TriggerEvent>,
+    pub body: Statement,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TriggerEvent {
+    BeforeInsert,
+    BeforeUpdate,
+    BeforeDelete,
+    BeforeUndelete,
+    AfterInsert,
+    AfterUpdate,
+    AfterDelete,
+    AfterUndelete,
+}
+
+impl TriggerEvent {
+    pub fn is_before(self) -> bool {
+        matches!(
+            self,
+            Self::BeforeInsert | Self::BeforeUpdate | Self::BeforeDelete | Self::BeforeUndelete
+        )
+    }
+
+    pub fn operation(self) -> DmlOperation {
+        match self {
+            Self::BeforeInsert | Self::AfterInsert => DmlOperation::Insert,
+            Self::BeforeUpdate | Self::AfterUpdate => DmlOperation::Update,
+            Self::BeforeDelete | Self::AfterDelete => DmlOperation::Delete,
+            Self::BeforeUndelete | Self::AfterUndelete => DmlOperation::Undelete,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

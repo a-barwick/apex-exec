@@ -10,7 +10,7 @@ use super::{
     CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration, Identifier,
     MapEntry, MethodDeclaration, NamedType, Parameter, Program, PropertyAccessor,
     PropertyDeclaration, ReturnType, SoqlCondition, SoqlInValues, SoqlQuery, SoqlValue, SoslQuery,
-    Statement, TypeName,
+    Statement, TriggerDeclaration, TypeName,
 };
 
 pub trait Visitor<'ast> {
@@ -20,6 +20,10 @@ pub trait Visitor<'ast> {
 
     fn visit_class_declaration(&mut self, class: &'ast ClassDeclaration) {
         walk_class_declaration(self, class);
+    }
+
+    fn visit_trigger_declaration(&mut self, trigger: &'ast TriggerDeclaration) {
+        walk_trigger_declaration(self, trigger);
     }
 
     fn visit_class_member(&mut self, member: &'ast ClassMember) {
@@ -99,12 +103,24 @@ pub fn walk_program<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, program: &
     for class in &program.classes {
         visitor.visit_class_declaration(class);
     }
+    for trigger in &program.triggers {
+        visitor.visit_trigger_declaration(trigger);
+    }
     for method in &program.methods {
         visitor.visit_method_declaration(method);
     }
     for statement in &program.statements {
         visitor.visit_statement(statement);
     }
+}
+
+pub fn walk_trigger_declaration<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    trigger: &'ast TriggerDeclaration,
+) {
+    visitor.visit_identifier(&trigger.name);
+    visitor.visit_named_type(&trigger.object);
+    visitor.visit_statement(&trigger.body);
 }
 
 pub fn walk_class_declaration<'ast, V: Visitor<'ast> + ?Sized>(

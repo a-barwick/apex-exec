@@ -146,26 +146,58 @@ impl ProjectCompiler {
             let ast = crate::parse_with_source(&file.source, source_id).map_err(|diagnostic| {
                 ProjectError::diagnostic(Some(file.path.clone()), file.source.clone(), diagnostic)
             })?;
-            if !ast.methods.is_empty() || !ast.statements.is_empty() || ast.classes.len() != 1 {
-                return Err(ProjectError::message(format!(
-                    "`{}` must contain exactly one top-level Apex class or interface",
-                    file.path.display()
-                )));
-            }
             let expected_name = file
                 .path
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
-            if !ast.classes[0]
-                .name
-                .spelling
-                .eq_ignore_ascii_case(expected_name)
-            {
-                return Err(ProjectError::message(format!(
-                    "type `{}` must be declared in `{expected_name}.cls`",
-                    ast.classes[0].name.spelling
-                )));
+            let extension = file
+                .path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if extension.eq_ignore_ascii_case("trigger") {
+                if !ast.classes.is_empty()
+                    || !ast.methods.is_empty()
+                    || !ast.statements.is_empty()
+                    || ast.triggers.len() != 1
+                {
+                    return Err(ProjectError::message(format!(
+                        "`{}` must contain exactly one top-level Apex trigger",
+                        file.path.display()
+                    )));
+                }
+                if !ast.triggers[0]
+                    .name
+                    .spelling
+                    .eq_ignore_ascii_case(expected_name)
+                {
+                    return Err(ProjectError::message(format!(
+                        "trigger `{}` must be declared in `{expected_name}.trigger`",
+                        ast.triggers[0].name.spelling
+                    )));
+                }
+            } else {
+                if !ast.triggers.is_empty()
+                    || !ast.methods.is_empty()
+                    || !ast.statements.is_empty()
+                    || ast.classes.len() != 1
+                {
+                    return Err(ProjectError::message(format!(
+                        "`{}` must contain exactly one top-level Apex class or interface",
+                        file.path.display()
+                    )));
+                }
+                if !ast.classes[0]
+                    .name
+                    .spelling
+                    .eq_ignore_ascii_case(expected_name)
+                {
+                    return Err(ProjectError::message(format!(
+                        "type `{}` must be declared in `{expected_name}.cls`",
+                        ast.classes[0].name.spelling
+                    )));
+                }
             }
             self.units.insert(
                 file.path.clone(),
@@ -228,6 +260,7 @@ fn merge_units(
 ) -> (AstProgram, SourceMap) {
     let mut merged = AstProgram {
         classes: Vec::new(),
+        triggers: Vec::new(),
         methods: Vec::new(),
         statements: Vec::new(),
     };
@@ -236,6 +269,7 @@ fn merge_units(
         let unit = &units[&file.path];
         let ast = unit.ast.clone();
         merged.classes.extend(ast.classes);
+        merged.triggers.extend(ast.triggers);
         merged.methods.extend(ast.methods);
         merged.statements.extend(ast.statements);
         source_map.insert(unit.source_id, file.path.clone(), unit.source.clone());

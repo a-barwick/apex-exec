@@ -1,6 +1,12 @@
-use super::{Collection, Interpreter, PlatformHost, SObjectId, Value, runtime_exception};
+use super::{
+    ActiveCall, Collection, Flow, Interpreter, PlatformHost, RuntimeTriggerEvent, SObjectId,
+    TriggerContext, TriggerPhase, TriggerStage, Value, runtime_exception,
+};
 use crate::{
-    ast::{DmlOperation as AstDmlOperation, Expression, SoqlAggregateFunction},
+    ast::{
+        DmlOperation as AstDmlOperation, Expression, SoqlAggregateFunction,
+        TriggerEvent as AstTriggerEvent, TypeName,
+    },
     diagnostic::Diagnostic,
     hir::{
         CheckedCondition, CheckedFieldPath, CheckedInValues, CheckedOrderBy, CheckedQuery,
@@ -58,6 +64,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
         span: Span,
     ) -> Result<(), Diagnostic> {
+        if self.trigger_depth >= 16 {
+            return Err(runtime_exception(
+                "DmlException",
+                "maximum recursive trigger depth of 16 exceeded",
+                span,
+            ));
+        }
         let handles = match value {
             Value::SObject(id) => vec![id],
             Value::Collection(id) => match self.store.collection(id) {
@@ -94,14 +107,332 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .map(|id| self.platform_sobject(*id, &schema, span))
             .collect::<Result<Vec<_>, _>>()?;
         let operation = map_dml_operation(operation);
-        let persisted = self
+        let original_instances = handles
+            .iter()
+            .map(|id| (*id, self.store.sobject(*id).clone()))
+            .collect::<Vec<_>>();
+        self.begin_transaction(span)?;
+        let result = self.execute_dml_transaction(operation, &handles, records, &schema, span);
+        if result.is_err() {
+            for (id, instance) in original_instances {
+                *self.store.sobject_mut(id) = instance;
+            }
+        }
+        self.finish_transaction(result, span)
+    }
+
+    fn execute_dml_transaction(
+        &mut self,
+        requested_operation: DmlOperation,
+        handles: &[SObjectId],
+        records: Vec<SObject>,
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let prepared = self
             .host
-            .dml(&schema, operation, records)
+            .prepare_dml(schema, requested_operation, &records)
             .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
-        for (id, value) in handles.into_iter().zip(persisted) {
-            self.update_runtime_sobject(id, &value, &schema, span)?;
+        if prepared.len() != handles.len() {
+            return Err(Diagnostic::new(
+                "platform DML preflight returned an invalid record count",
+                span,
+            ));
+        }
+        let first_object = prepared.first().and_then(|record| {
+            record
+                .new
+                .as_ref()
+                .or(record.old.as_ref())
+                .map(|value| value.object_api_name())
+        });
+        if prepared.iter().any(|record| {
+            record
+                .new
+                .as_ref()
+                .or(record.old.as_ref())
+                .is_some_and(|value| {
+                    first_object
+                        .is_some_and(|first| !value.object_api_name().eq_ignore_ascii_case(first))
+                })
+        }) {
+            return Err(runtime_exception(
+                "DmlException",
+                "mixed-SObject bulk DML is not supported",
+                span,
+            ));
+        }
+
+        for operation in [
+            DmlOperation::Insert,
+            DmlOperation::Update,
+            DmlOperation::Delete,
+            DmlOperation::Undelete,
+        ] {
+            let indices = prepared
+                .iter()
+                .enumerate()
+                .filter_map(|(index, record)| (record.operation == operation).then_some(index))
+                .collect::<Vec<_>>();
+            if indices.is_empty() {
+                continue;
+            }
+            let group_handles = indices
+                .iter()
+                .map(|index| handles[*index])
+                .collect::<Vec<_>>();
+            let mut old_handles = Vec::new();
+            for index in &indices {
+                if let Some(value) = &prepared[*index].new {
+                    self.update_runtime_sobject(handles[*index], value, schema, span)?;
+                }
+                if let Some(value) = &prepared[*index].old {
+                    old_handles.push(self.allocate_platform_sobject(value, schema, span)?);
+                }
+            }
+            let object = prepared[indices[0]]
+                .new
+                .as_ref()
+                .or(prepared[indices[0]].old.as_ref())
+                .expect("prepared DML record has an old or new value")
+                .object_api_name()
+                .to_owned();
+
+            self.execute_trigger_phase(
+                operation,
+                TriggerPhase::Before,
+                &object,
+                &group_handles,
+                &old_handles,
+                span,
+            )?;
+
+            let group_records = group_handles
+                .iter()
+                .map(|id| self.platform_sobject(*id, schema, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let persisted = self
+                .host
+                .dml(schema, operation, group_records)
+                .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
+            if persisted.len() != group_handles.len() {
+                return Err(Diagnostic::new(
+                    "platform DML returned an invalid record count",
+                    span,
+                ));
+            }
+            for (id, value) in group_handles.iter().copied().zip(&persisted) {
+                self.update_runtime_sobject(id, value, schema, span)?;
+            }
+
+            self.execute_trigger_phase(
+                operation,
+                TriggerPhase::After,
+                &object,
+                &group_handles,
+                &old_handles,
+                span,
+            )?;
         }
         Ok(())
+    }
+
+    fn execute_trigger_phase(
+        &mut self,
+        operation: DmlOperation,
+        phase: TriggerPhase,
+        object: &str,
+        new_handles: &[SObjectId],
+        old_handles: &[SObjectId],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let event = ast_trigger_event(operation, phase);
+        let triggers = self
+            .program()
+            .triggers
+            .iter()
+            .filter(|trigger| {
+                trigger.object.spelling.eq_ignore_ascii_case(object)
+                    && trigger.events.contains(&event)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for trigger in triggers {
+            let saved_context = self.trigger_context.take();
+            let saved_read_only = self.read_only_sobjects.clone();
+            let context = self.build_trigger_context(
+                event,
+                object,
+                new_handles,
+                old_handles,
+                trigger.name.span,
+            )?;
+            self.read_only_sobjects.extend(old_handles.iter().copied());
+            if phase == TriggerPhase::After {
+                self.read_only_sobjects.extend(new_handles.iter().copied());
+            }
+            self.trigger_context = Some(context);
+            self.trigger_depth += 1;
+            let depth = self.trigger_depth;
+            self.host.trigger(RuntimeTriggerEvent {
+                trigger: trigger.name.spelling.clone(),
+                object: object.to_owned(),
+                operation,
+                phase,
+                stage: TriggerStage::Enter,
+                depth,
+                records: new_handles.len().max(old_handles.len()),
+                succeeded: None,
+            });
+
+            let caller_scopes =
+                std::mem::replace(&mut self.scopes, vec![std::collections::HashMap::new()]);
+            let saved_receiver = self.current_receiver.take();
+            let saved_declaring = self.current_declaring_class.take();
+            self.call_stack.push(ActiveCall {
+                method: trigger.name.spelling.clone(),
+                call_span: span,
+            });
+            let result = match self.execute_statement(&trigger.body) {
+                Ok(Flow::Normal | Flow::Return(None)) => Ok(()),
+                Ok(Flow::Return(Some(_)) | Flow::Break | Flow::Continue) => Err(Diagnostic::new(
+                    "invalid control flow escaped trigger validation",
+                    trigger.span,
+                )),
+                Err(mut error) => {
+                    self.attach_stack_if_missing(&mut error);
+                    Err(error)
+                }
+            };
+            self.call_stack.pop();
+            self.scopes = caller_scopes;
+            self.current_receiver = saved_receiver;
+            self.current_declaring_class = saved_declaring;
+
+            self.host.trigger(RuntimeTriggerEvent {
+                trigger: trigger.name.spelling.clone(),
+                object: object.to_owned(),
+                operation,
+                phase,
+                stage: TriggerStage::Exit,
+                depth,
+                records: new_handles.len().max(old_handles.len()),
+                succeeded: Some(result.is_ok()),
+            });
+            self.trigger_depth -= 1;
+            self.trigger_context = saved_context;
+            self.read_only_sobjects = saved_read_only;
+            result?;
+        }
+        Ok(())
+    }
+
+    fn build_trigger_context(
+        &mut self,
+        event: AstTriggerEvent,
+        object: &str,
+        new_handles: &[SObjectId],
+        old_handles: &[SObjectId],
+        span: Span,
+    ) -> Result<TriggerContext, Diagnostic> {
+        let object_type = TypeName::Custom(crate::ast::NamedType::new(object.to_owned(), span));
+        let list_type = TypeName::List(Box::new(object_type.clone()));
+        let map_type = TypeName::Map(Box::new(TypeName::String), Box::new(object_type.clone()));
+        let operation = event.operation();
+        let new_available = operation != AstDmlOperation::Delete;
+        let old_available = matches!(operation, AstDmlOperation::Update | AstDmlOperation::Delete);
+        let new_map_available = matches!(
+            operation,
+            AstDmlOperation::Update | AstDmlOperation::Undelete
+        ) || (operation == AstDmlOperation::Insert && !event.is_before());
+        let old_map_available =
+            matches!(operation, AstDmlOperation::Update | AstDmlOperation::Delete);
+        let new_list = if new_available {
+            self.trigger_list(object_type.clone(), new_handles)
+        } else {
+            Value::Null(Some(list_type.clone()))
+        };
+        let old_list = if old_available {
+            self.trigger_list(object_type.clone(), old_handles)
+        } else {
+            Value::Null(Some(list_type))
+        };
+        let new_map = if new_map_available {
+            self.trigger_map(object_type.clone(), new_handles)
+        } else {
+            Value::Null(Some(map_type.clone()))
+        };
+        let old_map = if old_map_available {
+            self.trigger_map(object_type, old_handles)
+        } else {
+            Value::Null(Some(map_type))
+        };
+        Ok(TriggerContext {
+            event,
+            new_list,
+            old_list,
+            new_map,
+            old_map,
+            size: new_handles.len().max(old_handles.len()),
+        })
+    }
+
+    fn trigger_list(&mut self, element_type: TypeName, handles: &[SObjectId]) -> Value {
+        let value = self.store.allocate_collection(Collection::List {
+            element_type,
+            elements: handles.iter().copied().map(Value::SObject).collect(),
+            iteration_depth: 0,
+        });
+        let Value::Collection(id) = value else {
+            unreachable!("collection allocation returns a collection")
+        };
+        self.read_only_collections.insert(id);
+        Value::Collection(id)
+    }
+
+    fn trigger_map(&mut self, value_type: TypeName, handles: &[SObjectId]) -> Value {
+        let entries = handles
+            .iter()
+            .filter_map(|id| {
+                let instance = self.store.sobject(*id);
+                let object = self
+                    .program()
+                    .schema()
+                    .object_at(instance.object_id)
+                    .expect("trigger SObject type is valid");
+                let id_field = object.field_index("Id")?;
+                let Value::String(value) = instance.fields.get(&id_field)? else {
+                    return None;
+                };
+                Some((Value::String(value.clone()), Value::SObject(*id)))
+            })
+            .collect();
+        let value = self.store.allocate_collection(Collection::Map {
+            key_type: TypeName::String,
+            value_type,
+            entries,
+        });
+        let Value::Collection(id) = value else {
+            unreachable!("collection allocation returns a collection")
+        };
+        self.read_only_collections.insert(id);
+        Value::Collection(id)
+    }
+
+    fn allocate_platform_sobject(
+        &mut self,
+        value: &SObject,
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<SObjectId, Diagnostic> {
+        let object_id = schema
+            .object_index(value.object_api_name())
+            .ok_or_else(|| runtime_exception("DmlException", "unknown SObject type", span))?;
+        let Value::SObject(id) = self.store.allocate_sobject(object_id) else {
+            unreachable!("SObject allocation returns an SObject")
+        };
+        self.update_runtime_sobject(id, value, schema, span)?;
+        Ok(id)
     }
 
     pub(super) fn evaluate_aggregate_result_get(
@@ -670,6 +1001,20 @@ fn map_dml_operation(operation: AstDmlOperation) -> DmlOperation {
         AstDmlOperation::Upsert => DmlOperation::Upsert,
         AstDmlOperation::Delete => DmlOperation::Delete,
         AstDmlOperation::Undelete => DmlOperation::Undelete,
+    }
+}
+
+fn ast_trigger_event(operation: DmlOperation, phase: TriggerPhase) -> AstTriggerEvent {
+    match (phase, operation) {
+        (TriggerPhase::Before, DmlOperation::Insert) => AstTriggerEvent::BeforeInsert,
+        (TriggerPhase::Before, DmlOperation::Update) => AstTriggerEvent::BeforeUpdate,
+        (TriggerPhase::Before, DmlOperation::Delete) => AstTriggerEvent::BeforeDelete,
+        (TriggerPhase::Before, DmlOperation::Undelete) => AstTriggerEvent::BeforeUndelete,
+        (TriggerPhase::After, DmlOperation::Insert) => AstTriggerEvent::AfterInsert,
+        (TriggerPhase::After, DmlOperation::Update) => AstTriggerEvent::AfterUpdate,
+        (TriggerPhase::After, DmlOperation::Delete) => AstTriggerEvent::AfterDelete,
+        (TriggerPhase::After, DmlOperation::Undelete) => AstTriggerEvent::AfterUndelete,
+        (_, DmlOperation::Upsert) => unreachable!("upsert is split during DML preflight"),
     }
 }
 

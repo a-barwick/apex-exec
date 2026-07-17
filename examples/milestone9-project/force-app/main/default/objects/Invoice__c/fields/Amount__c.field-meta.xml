@@ -1,0 +1,8 @@
+<CustomField>
+    <fullName>Amount__c</fullName>
+    <label>Amount</label>
+    <precision>18</precision>
+    <scale>0</scale>
+    <required>true</required>
+    <type>Number</type>
+</CustomField>

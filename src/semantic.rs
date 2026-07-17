@@ -3,10 +3,13 @@ use crate::{
         AccessorKind, AnnotationKind, AssignmentTarget, BinaryOperator, CatchClause,
         ClassDeclaration, ClassKind, ClassMember, CollectionInitializer, ConstructorDeclaration,
         Expression, Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType,
-        Statement, TypeName, UnaryOperator,
+        Statement, TriggerDeclaration, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
-    hir::{self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget},
+    hir::{
+        self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget,
+        TriggerContextVariable,
+    },
     platform::{FieldType, SchemaCatalog},
     span::Span,
 };
@@ -79,6 +82,7 @@ struct Checker {
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
     current_static: bool,
+    current_trigger_object: Option<usize>,
     schema: SchemaCatalog,
 }
 
@@ -98,6 +102,7 @@ impl Checker {
             class_ids: HashMap::new(),
             current_class: None,
             current_static: false,
+            current_trigger_object: None,
             schema,
         }
     }
@@ -109,6 +114,7 @@ impl Checker {
         for class_id in 0..self.classes.len() {
             self.check_class(class_id)?;
         }
+        self.check_triggers(program)?;
         for method in &program.methods {
             self.check_method(method)?;
         }
@@ -124,6 +130,56 @@ impl Checker {
             self.queries,
             self.schema,
         ))
+    }
+
+    fn check_triggers(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        let mut names = std::collections::HashSet::new();
+        for trigger in &program.triggers {
+            if !names.insert(trigger.name.canonical.clone()) {
+                return Err(Diagnostic::new(
+                    format!("duplicate trigger `{}`", trigger.name.spelling),
+                    trigger.name.span,
+                ));
+            }
+            self.check_trigger(trigger)?;
+        }
+        Ok(())
+    }
+
+    fn check_trigger(&mut self, trigger: &TriggerDeclaration) -> Result<(), Diagnostic> {
+        let object_id = self
+            .schema
+            .object_index(&trigger.object.spelling)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown trigger SObject `{}`", trigger.object.spelling),
+                    trigger.object.span,
+                )
+            })?;
+        let mut events = std::collections::HashSet::new();
+        for event in &trigger.events {
+            if !events.insert(*event) {
+                return Err(Diagnostic::new(
+                    "duplicate trigger event",
+                    trigger.name.span,
+                ));
+            }
+        }
+
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let saved_return_type = self.return_type.replace(ReturnType::Void);
+        let saved_class = self.current_class.take();
+        let saved_static = std::mem::replace(&mut self.current_static, true);
+        let saved_trigger = self.current_trigger_object.replace(object_id);
+        let result = self.check_method_body(&trigger.body);
+        self.scopes = saved_scopes;
+        self.loop_depth = saved_loop_depth;
+        self.return_type = saved_return_type;
+        self.current_class = saved_class;
+        self.current_static = saved_static;
+        self.current_trigger_object = saved_trigger;
+        result
     }
 
     fn collect_classes(&mut self, program: &Program) -> Result<(), Diagnostic> {
@@ -1643,6 +1699,65 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
+        if let Expression::Variable(identifier) = receiver
+            && identifier.canonical == "trigger"
+        {
+            let Some(object_id) = self.current_trigger_object else {
+                return Err(Diagnostic::new(
+                    "Trigger context is only available inside a trigger",
+                    identifier.span,
+                ));
+            };
+            if for_write {
+                return Err(Diagnostic::new(
+                    format!("Trigger.{} is read-only", name.spelling),
+                    name.span,
+                ));
+            }
+            let object = self
+                .schema
+                .object_at(object_id)
+                .expect("current trigger object is valid");
+            let object_type = TypeName::Custom(crate::ast::NamedType::new(
+                object.api_name().to_owned(),
+                name.span,
+            ));
+            let (variable, ty) = match name.canonical.as_str() {
+                "new" => (
+                    TriggerContextVariable::New,
+                    TypeName::List(Box::new(object_type.clone())),
+                ),
+                "old" => (
+                    TriggerContextVariable::Old,
+                    TypeName::List(Box::new(object_type.clone())),
+                ),
+                "newmap" => (
+                    TriggerContextVariable::NewMap,
+                    TypeName::Map(Box::new(TypeName::String), Box::new(object_type.clone())),
+                ),
+                "oldmap" => (
+                    TriggerContextVariable::OldMap,
+                    TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+                ),
+                "isexecuting" => (TriggerContextVariable::IsExecuting, TypeName::Boolean),
+                "isbefore" => (TriggerContextVariable::IsBefore, TypeName::Boolean),
+                "isafter" => (TriggerContextVariable::IsAfter, TypeName::Boolean),
+                "isinsert" => (TriggerContextVariable::IsInsert, TypeName::Boolean),
+                "isupdate" => (TriggerContextVariable::IsUpdate, TypeName::Boolean),
+                "isdelete" => (TriggerContextVariable::IsDelete, TypeName::Boolean),
+                "isundelete" => (TriggerContextVariable::IsUndelete, TypeName::Boolean),
+                "size" => (TriggerContextVariable::Size, TypeName::Integer),
+                _ => {
+                    return Err(Diagnostic::new(
+                        format!("unknown Trigger context variable `{}`", name.spelling),
+                        name.span,
+                    ));
+                }
+            };
+            self.members
+                .insert(span, MemberTarget::TriggerContext(variable));
+            return Ok(ExpressionType::Value(ty));
+        }
         let potential_sobject = match receiver {
             Expression::Variable(identifier)
                 if self.lookup(&identifier.canonical).is_some()
