@@ -13,9 +13,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 mod host;
 mod image;
 mod intrinsics;
+mod store;
 
 pub use host::{DebugEvent, PlatformHost, RecordingHost};
 use image::RuntimeImage;
+use store::ExecutionStore;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BranchHits {
@@ -113,9 +115,7 @@ enum Flow {
 
 pub struct Interpreter<'program, H = RecordingHost> {
     scopes: Vec<HashMap<String, Slot>>,
-    collections: Vec<Collection>,
-    objects: Vec<ObjectInstance>,
-    static_fields: HashMap<ClassMemberId, Slot>,
+    store: ExecutionStore,
     host: H,
     call_stack: Vec<ActiveCall>,
     image: Option<RuntimeImage<'program>>,
@@ -134,9 +134,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     pub fn with_host(host: H) -> Self {
         Self {
             scopes: vec![HashMap::new()],
-            collections: Vec::new(),
-            objects: Vec::new(),
-            static_fields: HashMap::new(),
+            store: ExecutionStore::default(),
             host,
             call_stack: Vec::new(),
             image: None,
@@ -297,7 +295,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 match member {
                     ClassMember::Field(field) if field.modifiers.contains(&Modifier::Static) => {
-                        self.static_fields.insert(
+                        self.store.insert_static_slot(
                             target,
                             Slot {
                                 ty: field.ty.clone(),
@@ -308,7 +306,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     ClassMember::Property(property)
                         if property.modifiers.contains(&Modifier::Static) =>
                     {
-                        self.static_fields.insert(
+                        self.store.insert_static_slot(
                             target,
                             Slot {
                                 ty: property.ty.clone(),
@@ -337,8 +335,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         member_id,
                     };
                     let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .expect("static field was allocated")
                         .value = value;
                 }
@@ -865,14 +863,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match member {
             ClassMember::Field(field) => {
                 if field.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get(&target)
+                    self.store
+                        .static_slot(&target)
                         .map(|slot| slot.value.clone())
                         .ok_or_else(|| Diagnostic::new("missing static field storage", span))
                 } else {
                     let receiver =
                         receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object(receiver)
                         .fields
                         .get(&target)
                         .map(|slot| slot.value.clone())
@@ -896,11 +895,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         span,
                     )
                 } else if property.modifiers.contains(&Modifier::Static) {
-                    Ok(self.static_fields[&target].value.clone())
+                    Ok(self
+                        .store
+                        .static_slot(&target)
+                        .expect("auto property storage exists")
+                        .value
+                        .clone())
                 } else {
                     let receiver = receiver
                         .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    Ok(self.objects[receiver.0].fields[&target].value.clone())
+                    Ok(self.store.object(receiver).fields[&target].value.clone())
                 }
             }
             _ => Err(Diagnostic::new("target is not a value member", span)),
@@ -919,14 +923,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ClassMember::Field(field) => {
                 let value = typed_value(value, &field.ty);
                 if field.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .ok_or_else(|| Diagnostic::new("missing static field storage", span))?
                         .value = value.clone();
                 } else {
                     let receiver =
                         receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object_mut(receiver)
                         .fields
                         .get_mut(&target)
                         .ok_or_else(|| Diagnostic::new("missing instance field storage", span))?
@@ -953,14 +958,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         span,
                     )?;
                 } else if property.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .expect("auto property storage exists")
                         .value = value.clone();
                 } else {
                     let receiver = receiver
                         .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object_mut(receiver)
                         .fields
                         .get_mut(&target)
                         .expect("auto property storage exists")
@@ -988,11 +994,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid constructor target", span));
         };
         let arguments = self.evaluate_arguments(arguments)?;
-        let object_id = ObjectId(self.objects.len());
-        self.objects.push(ObjectInstance {
-            class_id,
-            fields: HashMap::new(),
-        });
+        let object_id = self.store.allocate_object(class_id);
         self.allocate_instance_fields(object_id, class_id);
         let lineage = self.class_lineage_base_first(class_id);
         for current in lineage {
@@ -1040,7 +1042,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => continue,
                 };
                 if !is_static {
-                    self.objects[object.0].fields.insert(
+                    self.store.object_mut(object).fields.insert(
                         ClassMemberId {
                             class_id: current,
                             member_id,
@@ -1073,7 +1075,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 if let Some(initializer) = &field.initializer {
                     let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.objects[object.0]
+                    self.store
+                        .object_mut(object)
                         .fields
                         .get_mut(&ClassMemberId {
                             class_id,
@@ -1196,7 +1199,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .iter()
             .map(|parameter| parameter.ty.clone())
             .collect::<Vec<_>>();
-        let mut cursor = Some(self.objects[receiver.0].class_id);
+        let mut cursor = Some(self.store.object(receiver).class_id);
         while let Some(class_id) = cursor {
             for (member_id, member) in self.classes()[class_id].members.iter().enumerate() {
                 let ClassMember::Method(method) = member else {
@@ -2300,7 +2303,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 ),
             },
             Value::Object(id) => {
-                let instance = &self.objects[id.0];
+                let instance = self.store.object(*id);
                 format!(
                     "{}@{}",
                     self.classes()[instance.class_id].name.spelling,
@@ -2321,21 +2324,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn allocate(&mut self, collection: Collection) -> Value {
-        let id = CollectionId(self.collections.len());
-        self.collections.push(collection);
-        Value::Collection(id)
+        self.store.allocate_collection(collection)
     }
 
     fn collection(&self, id: CollectionId) -> &Collection {
-        self.collections
-            .get(id.0)
-            .expect("runtime collection handles are always valid")
+        self.store.collection(id)
     }
 
     fn collection_mut(&mut self, id: CollectionId) -> &mut Collection {
-        self.collections
-            .get_mut(id.0)
-            .expect("runtime collection handles are always valid")
+        self.store.collection_mut(id)
     }
 
     fn lookup(&self, identifier: &Identifier) -> Result<&Slot, Diagnostic> {
@@ -2382,7 +2379,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .iter()
                     .position(|class| class.name.canonical == target.canonical);
                 target_id.is_some_and(|target_id| {
-                    self.runtime_class_is_or_inherits(self.objects[id.0].class_id, target_id)
+                    self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
                 })
             }
             Value::Exception(exception) => {
@@ -2400,7 +2397,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
-            Value::Object(id) => self.classes()[self.objects[id.0].class_id]
+            Value::Object(id) => self.classes()[self.store.object(*id).class_id]
                 .name
                 .spelling
                 .clone(),
