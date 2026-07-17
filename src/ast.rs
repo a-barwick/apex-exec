@@ -154,6 +154,7 @@ pub struct Annotation {
 pub enum AnnotationKind {
     IsTest { see_all_data: Option<bool> },
     TestSetup,
+    Future,
 }
 
 impl AnnotationKind {
@@ -163,6 +164,10 @@ impl AnnotationKind {
 
     pub fn is_test_setup(self) -> bool {
         matches!(self, Self::TestSetup)
+    }
+
+    pub fn is_future(self) -> bool {
+        matches!(self, Self::Future)
     }
 }
 
@@ -650,6 +655,9 @@ pub enum TypeName {
     Http,
     HttpRequest,
     HttpResponse,
+    QueueableContext,
+    BatchableContext,
+    SchedulableContext,
     SObjectType,
     DescribeSObjectResult,
     Exception,
@@ -663,6 +671,7 @@ pub enum TypeName {
     AssertException,
     QueryException,
     DmlException,
+    AsyncException,
     AggregateResult,
     Custom(NamedType),
     List(Box<TypeName>),
@@ -688,6 +697,9 @@ impl TypeName {
             "http" => Some(Self::Http),
             "httprequest" => Some(Self::HttpRequest),
             "httpresponse" => Some(Self::HttpResponse),
+            "queueablecontext" | "system.queueablecontext" => Some(Self::QueueableContext),
+            "batchablecontext" | "database.batchablecontext" => Some(Self::BatchableContext),
+            "schedulablecontext" | "system.schedulablecontext" => Some(Self::SchedulableContext),
             "sobjecttype" => Some(Self::SObjectType),
             "describesobjectresult" => Some(Self::DescribeSObjectResult),
             "exception" => Some(Self::Exception),
@@ -701,6 +713,7 @@ impl TypeName {
             "assertexception" => Some(Self::AssertException),
             "queryexception" => Some(Self::QueryException),
             "dmlexception" => Some(Self::DmlException),
+            "asyncexception" => Some(Self::AsyncException),
             "aggregateresult" => Some(Self::AggregateResult),
             _ => None,
         }
@@ -720,6 +733,7 @@ impl TypeName {
                 | Self::AssertException
                 | Self::QueryException
                 | Self::DmlException
+                | Self::AsyncException
         )
     }
 
@@ -740,6 +754,9 @@ impl TypeName {
             Self::Http => "Http".to_owned(),
             Self::HttpRequest => "HttpRequest".to_owned(),
             Self::HttpResponse => "HttpResponse".to_owned(),
+            Self::QueueableContext => "System.QueueableContext".to_owned(),
+            Self::BatchableContext => "Database.BatchableContext".to_owned(),
+            Self::SchedulableContext => "System.SchedulableContext".to_owned(),
             Self::SObjectType => "Schema.SObjectType".to_owned(),
             Self::DescribeSObjectResult => "Schema.DescribeSObjectResult".to_owned(),
             Self::Exception => "Exception".to_owned(),
@@ -753,6 +770,7 @@ impl TypeName {
             Self::AssertException => "AssertException".to_owned(),
             Self::QueryException => "QueryException".to_owned(),
             Self::DmlException => "DmlException".to_owned(),
+            Self::AsyncException => "AsyncException".to_owned(),
             Self::AggregateResult => "AggregateResult".to_owned(),
             Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),

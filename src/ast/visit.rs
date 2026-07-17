@@ -554,6 +554,9 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::Http
         | TypeName::HttpRequest
         | TypeName::HttpResponse
+        | TypeName::QueueableContext
+        | TypeName::BatchableContext
+        | TypeName::SchedulableContext
         | TypeName::SObjectType
         | TypeName::DescribeSObjectResult
         | TypeName::Exception
@@ -567,6 +570,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::AssertException
         | TypeName::QueryException
         | TypeName::DmlException
+        | TypeName::AsyncException
         | TypeName::AggregateResult => {}
     }
 }

@@ -15,9 +15,10 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rust_decimal::Decimal;
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
 };
 
+mod asynchronous;
 mod database;
 mod host;
 mod image;
@@ -26,9 +27,10 @@ mod platform_intrinsics;
 mod store;
 
 pub use host::{
-    DebugEvent, DmlEvent, HttpRequestData, HttpResponseData, LimitUsage, M10_COMPATIBILITY_PROFILE,
-    PlatformHost, QueryEvent, QueryKind, RecordingHost, TransactionEvent,
-    TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
+    AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
+    LimitUsage, M10_COMPATIBILITY_PROFILE, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind,
+    RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
+    TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 use store::ExecutionStore;
@@ -52,13 +54,13 @@ pub(crate) struct TestExecution {
     pub trace: ExecutionTrace,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct CollectionId(usize);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ObjectId(usize);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SObjectId(usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +104,10 @@ enum PlatformValue {
     HttpResponse(HttpResponseData),
     SObjectType(usize),
     DescribeSObject(usize),
+    AsyncContext {
+        ty: TypeName,
+        job_id: String,
+    },
 }
 
 impl PlatformValue {
@@ -115,6 +121,7 @@ impl PlatformValue {
             Self::HttpResponse(_) => TypeName::HttpResponse,
             Self::SObjectType(_) => TypeName::SObjectType,
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
+            Self::AsyncContext { ty, .. } => ty.clone(),
         }
     }
 }
@@ -170,6 +177,42 @@ struct EvaluatedArgument {
 }
 
 #[derive(Clone, Debug)]
+struct PendingAsyncJob {
+    id: String,
+    parent_id: Option<String>,
+    kind: AsyncJobKind,
+    work: AsyncWork,
+    span: Span,
+}
+
+#[derive(Clone, Debug)]
+enum AsyncWork {
+    Queueable {
+        receiver: ObjectId,
+    },
+    Future {
+        target: ClassMemberId,
+        arguments: Vec<EvaluatedArgument>,
+    },
+    Batch {
+        receiver: ObjectId,
+        scope_size: usize,
+    },
+    Scheduled {
+        receiver: ObjectId,
+    },
+    PlatformEvent {
+        records: Vec<SObjectId>,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct CurrentAsync {
+    id: String,
+    kind: AsyncJobKind,
+}
+
+#[derive(Clone, Debug)]
 struct ActiveCall {
     method: String,
     call_span: Span,
@@ -211,6 +254,9 @@ pub struct Interpreter<'program, H = RecordingHost> {
     read_only_sobjects: BTreeSet<SObjectId>,
     read_only_collections: BTreeSet<CollectionId>,
     trace: ExecutionTrace,
+    async_queue: VecDeque<PendingAsyncJob>,
+    current_async: Option<CurrentAsync>,
+    next_async_sequence: u64,
 }
 
 impl<'program> Interpreter<'program, RecordingHost> {
@@ -240,6 +286,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             read_only_sobjects: BTreeSet::new(),
             read_only_collections: BTreeSet::new(),
             trace: ExecutionTrace::default(),
+            async_queue: VecDeque::new(),
+            current_async: None,
+            next_async_sequence: 1,
         }
     }
 
@@ -1680,6 +1729,25 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         virtual_dispatch: bool,
     ) -> Result<Value, Diagnostic> {
         let arguments = self.evaluate_arguments(arguments)?;
+        self.evaluate_class_method_arguments(
+            target,
+            receiver,
+            arguments,
+            span,
+            virtual_dispatch,
+            true,
+        )
+    }
+
+    fn evaluate_class_method_arguments(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        arguments: Vec<EvaluatedArgument>,
+        span: Span,
+        virtual_dispatch: bool,
+        enqueue_future: bool,
+    ) -> Result<Value, Diagnostic> {
         let target = if virtual_dispatch {
             receiver
                 .map(|receiver| self.virtual_method_target(receiver, target))
@@ -1691,6 +1759,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ClassMember::Method(method) => method,
             _ => return Err(Diagnostic::new("method target is invalid", span)),
         };
+        if enqueue_future
+            && method
+                .annotations
+                .iter()
+                .any(|annotation| annotation.kind.is_future())
+        {
+            self.enqueue_future(target, arguments, span)?;
+            return Ok(Value::Void);
+        }
         let body = method
             .body
             .as_ref()
@@ -2921,6 +2998,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         || "Schema".to_owned(),
                         |object| object.api_name().to_owned(),
                     )
+                }
+                PlatformValue::AsyncContext { ty, job_id } => {
+                    format!("{}[{job_id}]", ty.apex_name())
                 }
             },
             Value::Collection(id) => match self.collection(*id) {

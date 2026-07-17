@@ -716,6 +716,53 @@ impl Checker {
         method: &Identifier,
         arguments: &[Expression],
     ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        use PlatformIntrinsic as P;
+        let async_intrinsic = match method.canonical.as_str() {
+            "enqueuejob" => Some(P::SystemEnqueueJob),
+            "schedule" => Some(P::SystemSchedule),
+            "isfuture" => Some(P::SystemIsFuture),
+            "isqueueable" => Some(P::SystemIsQueueable),
+            "isbatch" => Some(P::SystemIsBatch),
+            "isscheduled" => Some(P::SystemIsScheduled),
+            _ => None,
+        };
+        if let Some(intrinsic) = async_intrinsic {
+            let result = match intrinsic {
+                P::SystemEnqueueJob => {
+                    require_static_arity("System", method, arguments.len(), &[1], arguments)?;
+                    self.require_async_implementation(&arguments[0], "Queueable")?;
+                    ExpressionType::Value(TypeName::Id)
+                }
+                P::SystemSchedule => {
+                    require_static_arity("System", method, arguments.len(), &[3], arguments)?;
+                    self.require_named_argument(
+                        "System",
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        &TypeName::String,
+                    )?;
+                    self.require_named_argument(
+                        "System",
+                        &method.spelling,
+                        1,
+                        &arguments[1],
+                        &TypeName::String,
+                    )?;
+                    self.require_async_implementation(&arguments[2], "Schedulable")?;
+                    ExpressionType::Value(TypeName::Id)
+                }
+                P::SystemIsFuture
+                | P::SystemIsQueueable
+                | P::SystemIsBatch
+                | P::SystemIsScheduled => {
+                    require_static_arity("System", method, arguments.len(), &[0], arguments)?;
+                    ExpressionType::Value(TypeName::Boolean)
+                }
+                _ => unreachable!(),
+            };
+            return Ok((IntrinsicId::Platform(intrinsic), result));
+        }
         let intrinsic = match method.canonical.as_str() {
             "debug" => SystemIntrinsic::Debug,
             "assert" => SystemIntrinsic::Assert,
@@ -811,6 +858,8 @@ impl Checker {
             ("userinfo", "getusername") => P::UserInfoGetUserName,
             ("encodingutil", "base64encode") => P::EncodingBase64Encode,
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
+            ("database", "executebatch") => P::DatabaseExecuteBatch,
+            ("eventbus", "publish") => P::EventBusPublish,
             _ => return Err(unsupported_platform_api(owner, method)),
         };
         let result = match intrinsic {
@@ -985,6 +1034,25 @@ impl Checker {
                 )?;
                 TypeName::Blob
             }
+            P::DatabaseExecuteBatch => {
+                require_static_arity(owner, method, arguments.len(), &[1, 2], arguments)?;
+                self.require_async_implementation(&arguments[0], "Batchable")?;
+                if let Some(scope_size) = arguments.get(1) {
+                    self.require_named_argument(
+                        owner,
+                        &method.spelling,
+                        1,
+                        scope_size,
+                        &TypeName::Integer,
+                    )?;
+                }
+                TypeName::Id
+            }
+            P::EventBusPublish => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_platform_event_argument(&arguments[0])?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
             _ => unreachable!("instance intrinsic selected as static"),
         };
         Ok((
@@ -1066,6 +1134,10 @@ impl Checker {
             (TypeName::HttpResponse, "setstatus") => P::HttpResponseSetStatus,
             (TypeName::HttpResponse, "getstatus") => P::HttpResponseGetStatus,
             (TypeName::Http, "send") => P::HttpSend,
+            (TypeName::QueueableContext | TypeName::BatchableContext, "getjobid") => {
+                P::AsyncContextGetJobId
+            }
+            (TypeName::SchedulableContext, "gettriggerid") => P::SchedulableContextGetTriggerId,
             _ => return Err(unsupported_platform_api(&receiver_type.apex_name(), method)),
         };
         let owner = receiver_type.apex_name();
@@ -1350,12 +1422,87 @@ impl Checker {
                 self.one_argument(&owner, method, arguments, &TypeName::HttpRequest)?;
                 TypeName::HttpResponse
             }
+            P::AsyncContextGetJobId | P::SchedulableContextGetTriggerId => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Id
+            }
             _ => unreachable!("static intrinsic selected as instance"),
         };
         Ok((
             IntrinsicId::Platform(intrinsic),
             ExpressionType::Value(result),
         ))
+    }
+
+    fn require_async_implementation(
+        &mut self,
+        argument: &Expression,
+        interface: &str,
+    ) -> Result<(), Diagnostic> {
+        let actual = self.expression_type(argument)?;
+        let ExpressionType::Value(TypeName::Custom(name)) = actual else {
+            return Err(Diagnostic::new(
+                format!("{interface} submission requires a class instance"),
+                argument.span(),
+            ));
+        };
+        let Some(class_id) = self.class_ids.get(&name.canonical).copied() else {
+            return Err(Diagnostic::new(
+                format!("{interface} submission requires a user class instance"),
+                argument.span(),
+            ));
+        };
+        let implements =
+            self.classes[class_id]
+                .interfaces
+                .iter()
+                .any(|candidate| match interface {
+                    "Queueable" => super::is_queueable_interface(&candidate.canonical),
+                    "Batchable" => super::is_batchable_interface(&candidate.canonical),
+                    "Schedulable" => super::is_schedulable_interface(&candidate.canonical),
+                    _ => false,
+                });
+        if implements {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "{} does not implement {interface}",
+                    TypeName::Custom(name).apex_name()
+                ),
+                argument.span(),
+            ))
+        }
+    }
+
+    fn require_platform_event_argument(&mut self, argument: &Expression) -> Result<(), Diagnostic> {
+        let actual = self.expression_type(argument)?;
+        let event_type = match &actual {
+            ExpressionType::Value(TypeName::Custom(name)) if name.canonical.ends_with("__e") => {
+                true
+            }
+            ExpressionType::Value(TypeName::List(element)) => {
+                matches!(&**element, TypeName::Custom(name) if name.canonical.ends_with("__e"))
+            }
+            _ => false,
+        };
+        if event_type {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "EventBus.publish requires a platform event or List of platform events, found {}",
+                    actual.apex_name()
+                ),
+                argument.span(),
+            ))
+        }
     }
 
     fn require_all(

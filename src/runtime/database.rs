@@ -237,7 +237,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(())
     }
 
-    fn execute_trigger_phase(
+    pub(super) fn execute_trigger_phase(
         &mut self,
         operation: DmlOperation,
         phase: TriggerPhase,

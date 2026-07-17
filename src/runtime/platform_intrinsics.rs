@@ -438,11 +438,81 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::TestStopTest => {
                 expect_no_arguments(arguments, span)?;
                 self.host.end_test_window();
+                self.drain_async_jobs(span)?;
                 Ok(Value::Void)
             }
             P::TestIsRunningTest => {
                 expect_no_arguments(arguments, span)?;
                 Ok(Value::Boolean(true))
+            }
+            P::SystemEnqueueJob => {
+                let [job] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                self.enqueue_queueable(job.value.clone(), span)
+                    .map(Value::Id)
+            }
+            P::SystemSchedule => {
+                let [name, cron, job] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let name_span = name.span;
+                let cron_span = cron.span;
+                let name = expect_string(&name.value, name.span)?;
+                let cron = expect_string(&cron.value, cron.span)?;
+                if name.trim().is_empty() {
+                    return Err(platform_error(
+                        "scheduled job name cannot be blank",
+                        name_span,
+                    ));
+                }
+                if cron.split_whitespace().count() != 7 {
+                    return Err(platform_error(
+                        "scheduled job cron expression must contain 7 fields",
+                        cron_span,
+                    ));
+                }
+                self.enqueue_scheduled(job.value.clone(), span)
+                    .map(Value::Id)
+            }
+            P::SystemIsFuture | P::SystemIsQueueable | P::SystemIsBatch | P::SystemIsScheduled => {
+                expect_no_arguments(arguments, span)?;
+                let expected = match intrinsic {
+                    P::SystemIsFuture => super::AsyncJobKind::Future,
+                    P::SystemIsQueueable => super::AsyncJobKind::Queueable,
+                    P::SystemIsBatch => super::AsyncJobKind::Batch,
+                    P::SystemIsScheduled => super::AsyncJobKind::Scheduled,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Boolean(self.current_async_kind() == Some(expected)))
+            }
+            P::DatabaseExecuteBatch => {
+                let ([job] | [job, _]) = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let scope_size = arguments.get(1).map_or_else(
+                    || Ok(super::asynchronous::default_batch_scope_size()),
+                    |scope| expect_integer(&scope.value, scope.span),
+                )?;
+                self.enqueue_batch(job.value.clone(), scope_size, span)
+                    .map(Value::Id)
+            }
+            P::EventBusPublish => {
+                let [events] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                self.enqueue_platform_events(events.value.clone(), span)?;
+                Ok(Value::Void)
+            }
+            P::AsyncContextGetJobId | P::SchedulableContextGetTriggerId => {
+                expect_no_arguments(arguments, span)?;
+                let Some(Value::Platform(id)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let PlatformValue::AsyncContext { job_id, .. } = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::Id(job_id.clone()))
             }
             P::LimitsGetQueries
             | P::LimitsGetLimitQueries

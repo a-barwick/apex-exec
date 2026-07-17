@@ -38,7 +38,19 @@ impl Parser {
         &mut self,
     ) -> Result<(TypeName, crate::span::Span), Diagnostic> {
         let identifier = self.expect_identifier("expected a type name")?;
-        match identifier.canonical.as_str() {
+        let mut spelling = identifier.spelling.clone();
+        let mut canonical = identifier.canonical.clone();
+        let mut qualified_span = identifier.span;
+        if self.check(&TokenKind::Dot) {
+            self.advance();
+            let nested = self.expect_identifier("expected a type name after `.`")?;
+            spelling.push('.');
+            spelling.push_str(&nested.spelling);
+            canonical.push('.');
+            canonical.push_str(&nested.canonical);
+            qualified_span = qualified_span.merge(nested.span);
+        }
+        match canonical.as_str() {
             "list" | "set" => {
                 self.expect_simple(TokenKind::Less, "expected `<` after collection type name")?;
                 let (element, _) = self.parse_type_name()?;
@@ -65,20 +77,38 @@ impl Parser {
                     identifier.span.merge(end.span),
                 ))
             }
-            _ if TypeName::from_apex_name(&identifier.canonical).is_some() => Ok((
-                TypeName::from_apex_name(&identifier.canonical).expect("type presence was checked"),
-                identifier.span,
+            _ if TypeName::from_apex_name(&canonical).is_some() => Ok((
+                TypeName::from_apex_name(&canonical).expect("type presence was checked"),
+                qualified_span,
             )),
             _ => Ok((
-                TypeName::Custom(NamedType::new(identifier.spelling, identifier.span)),
-                identifier.span,
+                TypeName::Custom(NamedType::new(spelling, qualified_span)),
+                qualified_span,
             )),
         }
     }
 
     pub(super) fn parse_named_type(&mut self) -> Result<NamedType, Diagnostic> {
         let identifier = self.expect_identifier("expected a type name")?;
-        Ok(NamedType::new(identifier.spelling, identifier.span))
+        let mut spelling = identifier.spelling;
+        let mut span = identifier.span;
+        if self.check(&TokenKind::Dot) {
+            self.advance();
+            let nested = self.expect_identifier("expected an interface name after `.`")?;
+            spelling.push('.');
+            spelling.push_str(&nested.spelling);
+            span = span.merge(nested.span);
+        }
+        if self.check(&TokenKind::Less) {
+            self.advance();
+            let (_, argument_span) = self.parse_type_name()?;
+            let end = self.expect_simple(
+                TokenKind::Greater,
+                "expected `>` after interface type argument",
+            )?;
+            span = span.merge(argument_span).merge(end.span);
+        }
+        Ok(NamedType::new(spelling, span))
     }
 
     pub(super) fn is_declaration_start(&self) -> bool {
@@ -174,7 +204,18 @@ impl Parser {
         };
         let canonical = spelling.to_ascii_lowercase();
         let mut end = cursor + 1;
-        match canonical.as_str() {
+        let mut qualified = canonical.clone();
+        if matches!(self.token_at(end).kind, TokenKind::Dot)
+            && matches!(self.token_at(end + 1).kind, TokenKind::Identifier(_))
+        {
+            let TokenKind::Identifier(nested) = &self.token_at(end + 1).kind else {
+                unreachable!()
+            };
+            qualified.push('.');
+            qualified.push_str(&nested.to_ascii_lowercase());
+            end += 2;
+        }
+        match qualified.as_str() {
             "string"
             | "boolean"
             | "integer"
@@ -190,6 +231,12 @@ impl Parser {
             | "http"
             | "httprequest"
             | "httpresponse"
+            | "queueablecontext"
+            | "system.queueablecontext"
+            | "batchablecontext"
+            | "database.batchablecontext"
+            | "schedulablecontext"
+            | "system.schedulablecontext"
             | "sobjecttype"
             | "describesobjectresult"
             | "exception"
@@ -203,6 +250,7 @@ impl Parser {
             | "assertexception"
             | "queryexception"
             | "dmlexception"
+            | "asyncexception"
             | "aggregateresult" => {}
             "list" | "set" => {
                 if !matches!(self.token_at(end).kind, TokenKind::Less) {

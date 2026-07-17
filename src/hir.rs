@@ -25,6 +25,7 @@ pub struct Program {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     queries: HashMap<Span, CheckedQuery>,
+    async_contracts: HashMap<usize, AsyncClassContract>,
     schema: SchemaCatalog,
 }
 
@@ -36,6 +37,7 @@ impl Program {
         references: HashMap<Span, ReferenceTarget>,
         members: HashMap<Span, MemberTarget>,
         queries: HashMap<Span, CheckedQuery>,
+        async_contracts: HashMap<usize, AsyncClassContract>,
         schema: SchemaCatalog,
     ) -> Self {
         Self {
@@ -45,6 +47,7 @@ impl Program {
             references,
             members,
             queries,
+            async_contracts,
             schema,
         }
     }
@@ -73,9 +76,28 @@ impl Program {
         self.queries.get(&span)
     }
 
+    pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
+        self.async_contracts.get(&class_id)
+    }
+
     pub fn schema(&self) -> &SchemaCatalog {
         &self.schema
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AsyncClassContract {
+    pub queueable: Option<ClassMemberId>,
+    pub batch: Option<BatchContract>,
+    pub schedulable: Option<ClassMemberId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchContract {
+    pub start: ClassMemberId,
+    pub execute: ClassMemberId,
+    pub finish: ClassMemberId,
+    pub scope_type: ast::TypeName,
 }
 
 impl Deref for Program {
