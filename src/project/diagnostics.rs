@@ -146,10 +146,13 @@ impl ProjectError {
     }
 
     fn project_diagnostic(source_map: SourceMap, diagnostic: Diagnostic) -> Self {
+        let path = source_map
+            .entry_for_source(diagnostic.span.source_id)
+            .map(|entry| entry.path.clone());
         Self {
             kind: ProjectErrorKind::Diagnostic,
             message: diagnostic.message.clone(),
-            path: None,
+            path,
             source: String::new(),
             source_map: Some(source_map),
             diagnostic: Some(Box::new(diagnostic)),
@@ -208,5 +211,21 @@ mod tests {
         let diagnostic =
             ProjectError::diagnostic(None, String::new(), Diagnostic::new("bad", Span::new(0, 1)));
         assert_eq!(diagnostic.kind(), ProjectErrorKind::Diagnostic);
+    }
+
+    #[test]
+    fn project_diagnostic_exposes_its_primary_source_path() {
+        let source_id = SourceId::new(7);
+        let path = PathBuf::from("Service.cls");
+        let mut source_map = SourceMap::default();
+        source_map.insert(source_id, path.clone(), "Integer value = nope;".to_owned());
+
+        let error = source_map.project_error(Diagnostic::new(
+            "unknown variable `nope`",
+            Span::new_in(source_id, 16, 20),
+        ));
+
+        assert_eq!(error.kind(), ProjectErrorKind::Diagnostic);
+        assert_eq!(error.path(), Some(path.as_path()));
     }
 }

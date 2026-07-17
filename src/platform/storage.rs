@@ -38,6 +38,7 @@ impl From<&str> for RecordId {
 /// Values that the first storage boundary can persist without Apex runtime
 /// representation details.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DataValue {
     Null,
     Boolean(bool),
@@ -133,7 +134,9 @@ impl Record {
 ///
 /// The associated transaction may borrow the adapter, which allows both
 /// in-memory and connection-backed implementations without allocation or a
-/// SQLite dependency in this boundary.
+/// SQLite dependency in this boundary. This generic contract intentionally
+/// uses static dispatch; a dynamically erased host adapter can be layered over
+/// it when runtime configuration needs trait objects.
 pub trait Storage {
     type Error: Error + Send + Sync + 'static;
     type Transaction<'storage>: StorageTransaction<Error = Self::Error>

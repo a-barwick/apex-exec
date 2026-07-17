@@ -33,9 +33,9 @@ impl Span {
         }
     }
 
-    pub fn merge(self, other: Self) -> Self {
-        assert_eq!(
-            self.source_id, other.source_id,
+    pub const fn merge(self, other: Self) -> Self {
+        assert!(
+            self.source_id.0 == other.source_id.0,
             "cannot merge spans from different sources"
         );
         Self::new_in(self.source_id, self.start, other.end)

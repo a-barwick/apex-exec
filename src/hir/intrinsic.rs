@@ -1,4 +1,5 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IntrinsicId {
     StaticString(StaticStringIntrinsic),
     Math(MathIntrinsic),
@@ -20,6 +21,7 @@ impl IntrinsicId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StaticStringIntrinsic {
     ValueOf,
     Join,
@@ -30,6 +32,7 @@ pub enum StaticStringIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MathIntrinsic {
     Abs,
     Max,
@@ -38,6 +41,7 @@ pub enum MathIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SystemIntrinsic {
     Debug,
     Assert,
@@ -46,6 +50,7 @@ pub enum SystemIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StringIntrinsic {
     Length,
     Contains,
@@ -62,6 +67,7 @@ pub enum StringIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ExceptionIntrinsic {
     GetMessage,
     GetTypeName,
@@ -69,6 +75,7 @@ pub enum ExceptionIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ListIntrinsic {
     Add,
     AddAll,
@@ -85,6 +92,7 @@ pub enum ListIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SetIntrinsic {
     Add,
     AddAll,
@@ -100,6 +108,7 @@ pub enum SetIntrinsic {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MapIntrinsic {
     Clear,
     Clone,

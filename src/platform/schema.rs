@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, error::Error, fmt};
 /// representation. Additional value kinds can be introduced as the supported
 /// Apex data surface grows.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FieldType {
     Boolean,
     Integer,
@@ -163,6 +164,7 @@ impl SchemaProvider for SchemaCatalog {
 
 /// Explicit schema construction and lookup failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SchemaError {
     DuplicateObject { object: String },
     UnknownObject { object: String },

@@ -308,7 +308,9 @@ fn invocation_errors_render_each_stack_frame_against_its_source_file() {
     .unwrap();
 
     let compilation = ProjectCompiler::new().compile(&root).unwrap();
-    let rendered = compilation.invoke("Entry.run").unwrap_err().render();
+    let error = compilation.invoke("Entry.run").unwrap_err();
+    assert_eq!(error.path(), Some(worker.as_path()));
+    let rendered = error.render();
 
     assert!(rendered.contains(&format!(" --> {}:3:", worker.display())));
     assert!(rendered.contains(&format!("at fail ({}:3:", worker.display())));

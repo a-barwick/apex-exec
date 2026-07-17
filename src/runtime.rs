@@ -113,6 +113,11 @@ enum Flow {
     Return(Option<Value>),
 }
 
+/// One isolated Apex execution with a configurable platform host.
+///
+/// Entry points consume the interpreter and borrow one checked program for the
+/// duration of that execution. The program lifetime is normally inferred by
+/// [`Interpreter::execute`] or [`Interpreter::invoke_static`].
 pub struct Interpreter<'program, H = RecordingHost> {
     scopes: Vec<HashMap<String, Slot>>,
     store: ExecutionStore,
