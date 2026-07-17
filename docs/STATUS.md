@@ -180,6 +180,27 @@ M12 — Debugger, REPL, and editor integration
 - A complete M10 example whose four Apex tests pass with 100% production line
   coverage, plus ten Rust integration tests covering success, failure,
   determinism, mocking, checking, and runtime boundaries
+- Checked platform contracts for `Queueable`, `Database.Batchable<T>`, and
+  `Schedulable`, including their context parameter types and required methods
+- Checked `@future` methods with public/global static void signatures and
+  serializable primitive or primitive-collection parameters
+- Deterministic `System.enqueueJob`, `Database.executeBatch`, and
+  `System.schedule` submission with Salesforce-shaped `707` job IDs
+- Enqueue-time deep snapshots for class, collection, and SObject payloads,
+  deterministic FIFO draining, explicit bounds, and catchable `AsyncException`
+  failures
+- Queueable, batch, future, and scheduled execution contexts plus
+  `System.isQueueable`, `isBatch`, `isFuture`, and `isScheduled`
+- Asynchronous `EventBus.publish` delivery to checked after-insert platform
+  event triggers without persisting event records as ordinary SObjects
+- Per-job transaction checkpoints and public queued/started/completed/failed
+  lifecycle events, with parent IDs for work chained by an async job
+- Explicit Apex-test draining through `Test.stopTest`; ordinary execution never
+  starts a background scheduler or implicitly drains queued work
+- A complete M11 example whose two Apex tests exercise all five async forms
+  with 100% production line coverage (26/26), plus seven Rust integration tests
+  covering order, snapshots, explicit draining, lifecycle failures, contracts,
+  limits, and runtime boundaries
 
 ## Immediate target
 
@@ -188,7 +209,7 @@ deterministic runtime state and source-mapped diagnostics.
 
 ## North Star indicators
 
-At M10 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M11 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -267,7 +288,7 @@ compatibility percentages.
 - The default recording host owns an in-memory SQLite database for one
   interpreter. A persistent project database configuration and fixture CLI
   remain future work.
-- Nested types, enums, annotations other than `@IsTest`/`@TestSetup`, explicit
+- Nested types, enums, annotations other than `@IsTest`/`@TestSetup`/`@future`, explicit
   superclass-constructor calls, custom exception classes, and Salesforce-exact
   object string formatting are not implemented.
 - Sharing modifiers are parsed for structural progress but rejected during
@@ -277,8 +298,17 @@ compatibility percentages.
   Salesforce's one-time setup transaction/snapshot optimization is not yet
   reproduced.
 - Test discovery supports annotation-based static void methods only. Legacy
-  `testMethod`, the newer `Assert` class, `Test.startTest`/`stopTest`, and
-  org-backed `SeeAllData=true` remain unsupported.
+  `testMethod`, the newer `Assert` class, and org-backed `SeeAllData=true`
+  remain unsupported.
+- Async execution is a deterministic local profile, not a wall-clock scheduler:
+  only `Test.stopTest` drains queued work, jobs run FIFO with a 100-job drain
+  bound, batch `start` returns `List<T>` rather than `QueryLocator`/`Iterable`,
+  and batch scope sizes are limited to 1–2000. Async jobs share one interpreter
+  execution store, so Salesforce's fully serialized cross-transaction static
+  isolation is not yet claimed. Cron expressions are shape-checked but not
+  calendar-evaluated; job monitoring, abort/reschedule APIs, flex queue
+  behavior, finalizers, future callout options, and platform-event replay or
+  retention are unsupported.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
   claim of Salesforce-exact coverage accounting.

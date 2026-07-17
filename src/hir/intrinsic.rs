@@ -106,6 +106,16 @@ pub enum PlatformIntrinsic {
     TestStartTest,
     TestStopTest,
     TestIsRunningTest,
+    SystemEnqueueJob,
+    SystemSchedule,
+    SystemIsFuture,
+    SystemIsQueueable,
+    SystemIsBatch,
+    SystemIsScheduled,
+    DatabaseExecuteBatch,
+    EventBusPublish,
+    AsyncContextGetJobId,
+    SchedulableContextGetTriggerId,
     LimitsGetQueries,
     LimitsGetLimitQueries,
     LimitsGetDmlStatements,
@@ -162,6 +172,14 @@ impl PlatformIntrinsic {
                 | Self::TestStartTest
                 | Self::TestStopTest
                 | Self::TestIsRunningTest
+                | Self::SystemEnqueueJob
+                | Self::SystemSchedule
+                | Self::SystemIsFuture
+                | Self::SystemIsQueueable
+                | Self::SystemIsBatch
+                | Self::SystemIsScheduled
+                | Self::DatabaseExecuteBatch
+                | Self::EventBusPublish
                 | Self::LimitsGetQueries
                 | Self::LimitsGetLimitQueries
                 | Self::LimitsGetDmlStatements

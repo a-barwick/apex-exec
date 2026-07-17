@@ -79,6 +79,14 @@ responses and can inspect captured requests. Unknown platform calls fail during
 checking with the active `m10-common` profile rather than reaching dynamic
 runtime lookup.
 
+M11 adds checked async interface contracts and future annotations to HIR. The
+interpreter owns a bounded FIFO because it already owns serializable Apex value
+identity, call execution, coverage, and trigger dispatch. Submission deep-copies
+the reachable payload graph into enqueue-time snapshots and emits a structured
+queued event. `Test.stopTest` explicitly drains jobs in deterministic order;
+each job runs inside a nested platform transaction checkpoint and emits
+started/completed/failed events. No worker thread or wall-clock scheduler exists.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -125,6 +133,7 @@ state between interpreters.
 | `platform::sqlite` | Schema migration and transactional SQLite record persistence |
 | `platform::database` | Query execution, aggregates, DML preflight, recycle-bin state, and transaction snapshots |
 | `runtime::database` | Query/DML conversion plus typed bulk trigger context construction and recursive dispatch |
+| `runtime::asynchronous` | Enqueue-time payload snapshots, deterministic FIFO jobs, explicit draining, batch chunking, and platform-event delivery |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -250,8 +259,9 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
-The implemented host surface owns structured debug, query, DML, trigger
-timeline, deterministic context, limits, and mock HTTP callout behavior.
+The implemented host surface owns structured debug, query, DML, trigger and
+async lifecycle timelines, deterministic context, limits, and mock HTTP callout
+behavior.
 `platform::schema` provides a case-insensitive normalized catalog and
 `SchemaProvider`, while `platform::storage` defines storage-neutral records and
 transaction traits. M7 adds metadata import, an additive SQLite adapter, and

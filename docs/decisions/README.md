@@ -44,3 +44,4 @@ history.
 - [0012 — Use checked query plans and a database host](0012-checked-query-plans-and-database-host.md)
 - [0013 — Orchestrate triggers with nested database checkpoints](0013-trigger-dispatch-and-transaction-checkpoints.md)
 - [0014 — Keep curated platform APIs checked and host-backed](0014-checked-curated-platform-services.md)
+- [0015 — Drain asynchronous Apex explicitly and deterministically](0015-explicit-deterministic-async-drain.md)

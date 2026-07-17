@@ -78,6 +78,7 @@ struct Checker {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     queries: HashMap<Span, hir::CheckedQuery>,
+    async_contracts: HashMap<usize, hir::AsyncClassContract>,
     classes: Vec<ClassDeclaration>,
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
@@ -98,6 +99,7 @@ impl Checker {
             references: HashMap::new(),
             members: HashMap::new(),
             queries: HashMap::new(),
+            async_contracts: HashMap::new(),
             classes: Vec::new(),
             class_ids: HashMap::new(),
             current_class: None,
@@ -123,11 +125,14 @@ impl Checker {
         }
         Ok(hir::Program::new(
             program.clone(),
-            self.expression_types,
-            self.calls,
-            self.references,
-            self.members,
-            self.queries,
+            hir::ProgramFacts {
+                expression_types: self.expression_types,
+                calls: self.calls,
+                references: self.references,
+                members: self.members,
+                queries: self.queries,
+                async_contracts: self.async_contracts,
+            },
             self.schema,
         ))
     }
@@ -278,6 +283,15 @@ impl Checker {
                 }
             }
             for interface in &class.interfaces {
+                if is_platform_async_interface(&interface.canonical) {
+                    if class.kind != ClassKind::Class {
+                        return Err(Diagnostic::new(
+                            "platform async interfaces can only be implemented by classes",
+                            interface.span,
+                        ));
+                    }
+                    continue;
+                }
                 let interface_id = self
                     .class_ids
                     .get(&interface.canonical)
@@ -340,6 +354,12 @@ impl Checker {
                         annotation.span,
                     ));
                 }
+                AnnotationKind::Future => {
+                    return Err(Diagnostic::new(
+                        "`@future` is only valid on methods",
+                        annotation.span,
+                    ));
+                }
             }
         }
         if saw_is_test && class.kind != ClassKind::Class {
@@ -354,6 +374,7 @@ impl Checker {
     fn check_class(&mut self, class_id: usize) -> Result<(), Diagnostic> {
         self.validate_class_member_declarations(class_id)?;
         self.validate_class_contracts(class_id)?;
+        self.validate_async_contract(class_id)?;
 
         let saved_class = self.current_class.replace(class_id);
         let saved_static = self.current_static;
@@ -584,6 +605,7 @@ impl Checker {
         method: &MethodDeclaration,
     ) -> Result<(), Diagnostic> {
         let mut test_kind = None;
+        let mut future = None;
         for annotation in &method.annotations {
             let kind_name = match annotation.kind {
                 AnnotationKind::IsTest { see_all_data } => {
@@ -596,6 +618,16 @@ impl Checker {
                     "@IsTest"
                 }
                 AnnotationKind::TestSetup => "@TestSetup",
+                AnnotationKind::Future => {
+                    if future.is_some() {
+                        return Err(Diagnostic::new(
+                            "duplicate `@future` annotation",
+                            annotation.span,
+                        ));
+                    }
+                    future = Some(annotation.span);
+                    continue;
+                }
             };
             if test_kind.is_some() {
                 return Err(Diagnostic::new(
@@ -604,6 +636,40 @@ impl Checker {
                 ));
             }
             test_kind = Some(kind_name);
+        }
+        if let Some(span) = future {
+            if test_kind.is_some() {
+                return Err(Diagnostic::new(
+                    "`@future` cannot be combined with a test annotation",
+                    span,
+                ));
+            }
+            if !method.modifiers.contains(&Modifier::Static)
+                || !(method.modifiers.contains(&Modifier::Public)
+                    || method.modifiers.contains(&Modifier::Global))
+                || method.return_type != ReturnType::Void
+                || method.body.is_none()
+            {
+                return Err(Diagnostic::new(
+                    "`@future` method must be public or global static void with a body",
+                    method.name.span,
+                ));
+            }
+            if let Some(parameter) = method
+                .parameters
+                .iter()
+                .find(|parameter| !is_future_parameter_type(&parameter.ty))
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`@future` parameter `{}` has unsupported type {}; only primitive values and Lists or Sets of primitive values are supported",
+                        parameter.name.spelling,
+                        parameter.ty.apex_name()
+                    ),
+                    parameter.span,
+                ));
+            }
+            return Ok(());
         }
         let Some(kind_name) = test_kind else {
             return Ok(());
@@ -699,6 +765,164 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    fn validate_async_contract(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        let interfaces = self.classes[class_id]
+            .interfaces
+            .iter()
+            .map(|interface| interface.canonical.clone())
+            .collect::<Vec<_>>();
+        let mut contract = hir::AsyncClassContract::default();
+
+        if interfaces
+            .iter()
+            .any(|interface| is_queueable_interface(interface))
+        {
+            contract.queueable = Some(self.require_async_method(
+                class_id,
+                "execute",
+                &[TypeName::QueueableContext],
+                &ReturnType::Void,
+                "Queueable",
+            )?);
+        }
+
+        if interfaces
+            .iter()
+            .any(|interface| is_schedulable_interface(interface))
+        {
+            contract.schedulable = Some(self.require_async_method(
+                class_id,
+                "execute",
+                &[TypeName::SchedulableContext],
+                &ReturnType::Void,
+                "Schedulable",
+            )?);
+        }
+
+        if interfaces
+            .iter()
+            .any(|interface| is_batchable_interface(interface))
+        {
+            let start_candidates = self
+                .async_methods_named(class_id, "start")
+                .collect::<Vec<_>>();
+            let [(start, start_method)] = start_candidates.as_slice() else {
+                return Err(async_contract_error(
+                    &self.classes[class_id],
+                    "Batchable requires exactly one public or global `start(Database.BatchableContext)` method",
+                ));
+            };
+            if start_method.parameters.len() != 1
+                || start_method.parameters[0].ty != TypeName::BatchableContext
+            {
+                return Err(async_contract_error(
+                    &self.classes[class_id],
+                    "Batchable `start` must accept Database.BatchableContext",
+                ));
+            }
+            let ReturnType::Value(TypeName::List(scope_type)) = &start_method.return_type else {
+                return Err(async_contract_error(
+                    &self.classes[class_id],
+                    "Batchable `start` must return List<T> in the supported profile",
+                ));
+            };
+            let scope_type = (**scope_type).clone();
+            let execute = self.require_async_method(
+                class_id,
+                "execute",
+                &[
+                    TypeName::BatchableContext,
+                    TypeName::List(Box::new(scope_type.clone())),
+                ],
+                &ReturnType::Void,
+                "Batchable",
+            )?;
+            let finish = self.require_async_method(
+                class_id,
+                "finish",
+                &[TypeName::BatchableContext],
+                &ReturnType::Void,
+                "Batchable",
+            )?;
+            contract.batch = Some(hir::BatchContract {
+                start: *start,
+                execute,
+                finish,
+                scope_type,
+            });
+        }
+
+        if contract != hir::AsyncClassContract::default() {
+            self.async_contracts.insert(class_id, contract);
+        }
+        Ok(())
+    }
+
+    fn async_methods_named<'a>(
+        &'a self,
+        class_id: usize,
+        canonical: &'a str,
+    ) -> impl Iterator<Item = (ClassMemberId, &'a MethodDeclaration)> + 'a {
+        self.classes[class_id]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(move |(member_id, member)| {
+                let ClassMember::Method(method) = member else {
+                    return None;
+                };
+                (method.name.canonical == canonical
+                    && !method.modifiers.contains(&Modifier::Static)
+                    && (method.modifiers.contains(&Modifier::Public)
+                        || method.modifiers.contains(&Modifier::Global))
+                    && method.body.is_some())
+                .then_some((
+                    ClassMemberId {
+                        class_id,
+                        member_id,
+                    },
+                    method,
+                ))
+            })
+    }
+
+    fn require_async_method(
+        &self,
+        class_id: usize,
+        name: &str,
+        parameters: &[TypeName],
+        return_type: &ReturnType,
+        interface: &str,
+    ) -> Result<ClassMemberId, Diagnostic> {
+        let matches = self
+            .async_methods_named(class_id, name)
+            .filter(|(_, method)| {
+                method.return_type == *return_type
+                    && method
+                        .parameters
+                        .iter()
+                        .map(|parameter| &parameter.ty)
+                        .eq(parameters.iter())
+            })
+            .map(|(target, _)| target)
+            .collect::<Vec<_>>();
+        let [target] = matches.as_slice() else {
+            let signature = parameters
+                .iter()
+                .map(TypeName::apex_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                format!(
+                    "{interface} requires exactly one public or global `{name}({signature})` method returning {}",
+                    return_type.apex_name()
+                ),
+            ));
+        };
+        Ok(*target)
     }
 
     fn parent_class_id(&self, class_id: usize) -> Option<usize> {
@@ -797,6 +1021,9 @@ impl Checker {
                 }
             }
             for interface in &self.classes[id].interfaces {
+                if is_platform_async_interface(&interface.canonical) {
+                    continue;
+                }
                 let interface_id = self.class_ids[&interface.canonical];
                 self.collect_interface_methods(interface_id, &mut required);
             }
@@ -817,6 +1044,9 @@ impl Checker {
             self.collect_interface_methods(parent, required);
         }
         for interface in &self.classes[interface_id].interfaces {
+            if is_platform_async_interface(&interface.canonical) {
+                continue;
+            }
             self.collect_interface_methods(self.class_ids[&interface.canonical], required);
         }
     }
@@ -964,7 +1194,9 @@ impl Checker {
             return true;
         }
         self.classes[actual_id].interfaces.iter().any(|interface| {
-            self.class_is_or_inherits(self.class_ids[&interface.canonical], expected_id)
+            self.class_ids
+                .get(&interface.canonical)
+                .is_some_and(|interface_id| self.class_is_or_inherits(*interface_id, expected_id))
         })
     }
 
@@ -2366,6 +2598,12 @@ impl Checker {
                 )
             } else {
                 match identifier.canonical.as_str() {
+                    "database" if method.canonical == "executebatch" => self
+                        .static_platform_method_type("Database", method, arguments)
+                        .map(|(intrinsic, result)| {
+                            self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+                            result
+                        }),
                     "database" => self.database_method_type(method, arguments, span),
                     "string" | "math" | "system" => {
                         let checked = match identifier.canonical.as_str() {
@@ -2499,6 +2737,9 @@ impl Checker {
             | TypeName::Http
             | TypeName::HttpRequest
             | TypeName::HttpResponse
+            | TypeName::QueueableContext
+            | TypeName::BatchableContext
+            | TypeName::SchedulableContext
             | TypeName::SObjectType
             | TypeName::DescribeSObjectResult => {
                 self.platform_instance_method_type(receiver_type, method, arguments)?
@@ -2920,6 +3161,45 @@ fn class_is_test(class: &ClassDeclaration) -> bool {
         .any(|annotation| annotation.kind.is_test())
 }
 
+fn is_platform_async_interface(name: &str) -> bool {
+    is_queueable_interface(name) || is_batchable_interface(name) || is_schedulable_interface(name)
+}
+
+fn is_queueable_interface(name: &str) -> bool {
+    matches!(name, "queueable" | "system.queueable")
+}
+
+fn is_batchable_interface(name: &str) -> bool {
+    matches!(name, "batchable" | "database.batchable")
+}
+
+fn is_schedulable_interface(name: &str) -> bool {
+    matches!(name, "schedulable" | "system.schedulable")
+}
+
+fn is_future_parameter_type(ty: &TypeName) -> bool {
+    matches!(
+        ty,
+        TypeName::String
+            | TypeName::Boolean
+            | TypeName::Integer
+            | TypeName::Decimal
+            | TypeName::Date
+            | TypeName::Datetime
+            | TypeName::Time
+            | TypeName::Id
+            | TypeName::Blob
+    ) || matches!(
+        ty,
+        TypeName::List(element) | TypeName::Set(element)
+            if is_future_parameter_type(element)
+    )
+}
+
+fn async_contract_error(class: &ClassDeclaration, message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(message, class.name.span)
+}
+
 fn reject_modifiers(
     modifiers: &[Modifier],
     rejected: &[Modifier],
@@ -3029,6 +3309,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "limits"
             | "userinfo"
             | "encodingutil"
+            | "eventbus"
     )
 }
 

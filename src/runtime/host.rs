@@ -5,6 +5,7 @@ use crate::platform::{
 use std::collections::{BTreeMap, VecDeque};
 
 pub const M10_COMPATIBILITY_PROFILE: &str = "m10-common";
+pub const M11_ASYNC_PROFILE: &str = "m11-deterministic-async";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserContext {
@@ -126,6 +127,31 @@ pub enum TransactionEvent {
     Dml(DmlEvent),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsyncJobKind {
+    Queueable,
+    Future,
+    Batch,
+    Scheduled,
+    PlatformEvent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsyncStage {
+    Queued,
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AsyncEvent {
+    pub job_id: String,
+    pub parent_job_id: Option<String>,
+    pub kind: AsyncJobKind,
+    pub stage: AsyncStage,
+}
+
 /// Boundary between language execution and platform-owned side effects.
 ///
 /// The initial host surface is deliberately narrow. M7 can extend this
@@ -203,6 +229,8 @@ pub trait PlatformHost {
     }
 
     fn trigger(&mut self, _event: TriggerEvent) {}
+
+    fn async_event(&mut self, _event: AsyncEvent) {}
 
     /// Deterministic UTC wall clock, represented as Unix epoch milliseconds.
     fn now_millis(&mut self) -> i64 {
@@ -291,6 +319,10 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).trigger(event);
     }
 
+    fn async_event(&mut self, event: AsyncEvent) {
+        (**self).async_event(event);
+    }
+
     fn now_millis(&mut self) -> i64 {
         (**self).now_millis()
     }
@@ -327,6 +359,7 @@ pub struct RecordingHost {
     queries: Vec<QueryEvent>,
     dml: Vec<DmlEvent>,
     triggers: Vec<TriggerEvent>,
+    async_events: Vec<AsyncEvent>,
     timeline: Vec<TransactionEvent>,
     checkpoints: Vec<DatabaseSnapshot>,
     now_millis: i64,
@@ -371,6 +404,10 @@ impl RecordingHost {
         &self.timeline
     }
 
+    pub fn async_events(&self) -> &[AsyncEvent] {
+        &self.async_events
+    }
+
     fn database(&mut self, schema: &SchemaCatalog) -> Result<&mut LocalDatabase, DatabaseError> {
         if self.database.is_none() {
             self.database = Some(LocalDatabase::new(schema.clone())?);
@@ -396,6 +433,7 @@ impl Default for RecordingHost {
             queries: Vec::new(),
             dml: Vec::new(),
             triggers: Vec::new(),
+            async_events: Vec::new(),
             timeline: Vec::new(),
             checkpoints: Vec::new(),
             now_millis: 1_735_689_600_000,
@@ -514,6 +552,10 @@ impl PlatformHost for RecordingHost {
     fn trigger(&mut self, event: TriggerEvent) {
         self.triggers.push(event.clone());
         self.timeline.push(TransactionEvent::Trigger(event));
+    }
+
+    fn async_event(&mut self, event: AsyncEvent) {
+        self.async_events.push(event);
     }
 
     fn now_millis(&mut self) -> i64 {

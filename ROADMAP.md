@@ -231,11 +231,26 @@ outside the curated surface identify the `m10-common` profile explicitly.
 
 ## M11 — Deterministic asynchronous execution
 
-**Status:** Deferred
+**Status:** Complete
 
-Add Queueable, future, batch, scheduled, and event-driven execution only after
-the synchronous platform kernel is stable. Tests must explicitly drain async
-work; background scheduling must not introduce nondeterminism.
+### Scope
+
+- Checked `Queueable`, `Database.Batchable<T>`, and `Schedulable` contracts
+- Checked `@future` methods with serializable primitive collection arguments
+- Deterministic `System.enqueueJob`, `Database.executeBatch`, and
+  `System.schedule`
+- Asynchronous `EventBus.publish` delivery to platform-event triggers
+- Salesforce-shaped job IDs and Queueable, batch, and scheduled contexts
+- Enqueue-time payload snapshots, FIFO execution, per-job transaction
+  checkpoints, bounded draining, and structured lifecycle events
+- Explicit draining through `Test.stopTest`; no background threads or implicit
+  wall-clock scheduling
+
+### Exit criterion
+
+An SFDX project can enqueue Queueable, future, batch, scheduled, and platform
+event work, drain it deterministically inside an Apex test, observe its database
+effects, and reproduce the same job order and IDs on every run.
 
 ## M12 — Debugger, REPL, and editor integration
 

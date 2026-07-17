@@ -61,6 +61,15 @@ impl Parser {
 
     pub(super) fn parse_class_declaration(&mut self) -> Result<ClassDeclaration, Diagnostic> {
         let annotations = self.parse_annotations()?;
+        if let Some(annotation) = annotations
+            .iter()
+            .find(|annotation| annotation.kind.is_future())
+        {
+            return Err(Diagnostic::new(
+                "`@future` is only valid on methods",
+                annotation.span,
+            ));
+        }
         let modifiers = self.parse_modifiers()?;
         let start = self.current().span;
         let kind = if self.check(&TokenKind::Class) {
@@ -373,6 +382,15 @@ impl Parser {
                         ));
                     }
                     AnnotationKind::TestSetup
+                }
+                "future" => {
+                    if self.check(&TokenKind::LeftParen) {
+                        return Err(Diagnostic::new(
+                            "`@future` options are not supported",
+                            self.current().span,
+                        ));
+                    }
+                    AnnotationKind::Future
                 }
                 _ => {
                     return Err(Diagnostic::new(

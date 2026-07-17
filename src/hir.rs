@@ -25,19 +25,20 @@ pub struct Program {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     queries: HashMap<Span, CheckedQuery>,
+    async_contracts: HashMap<usize, AsyncClassContract>,
     schema: SchemaCatalog,
 }
 
 impl Program {
-    pub(crate) fn new(
-        ast: ast::Program,
-        expression_types: HashMap<Span, ExpressionType>,
-        calls: HashMap<Span, CallTarget>,
-        references: HashMap<Span, ReferenceTarget>,
-        members: HashMap<Span, MemberTarget>,
-        queries: HashMap<Span, CheckedQuery>,
-        schema: SchemaCatalog,
-    ) -> Self {
+    pub(crate) fn new(ast: ast::Program, facts: ProgramFacts, schema: SchemaCatalog) -> Self {
+        let ProgramFacts {
+            expression_types,
+            calls,
+            references,
+            members,
+            queries,
+            async_contracts,
+        } = facts;
         Self {
             ast,
             expression_types,
@@ -45,6 +46,7 @@ impl Program {
             references,
             members,
             queries,
+            async_contracts,
             schema,
         }
     }
@@ -73,9 +75,37 @@ impl Program {
         self.queries.get(&span)
     }
 
+    pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
+        self.async_contracts.get(&class_id)
+    }
+
     pub fn schema(&self) -> &SchemaCatalog {
         &self.schema
     }
+}
+
+pub(crate) struct ProgramFacts {
+    pub expression_types: HashMap<Span, ExpressionType>,
+    pub calls: HashMap<Span, CallTarget>,
+    pub references: HashMap<Span, ReferenceTarget>,
+    pub members: HashMap<Span, MemberTarget>,
+    pub queries: HashMap<Span, CheckedQuery>,
+    pub async_contracts: HashMap<usize, AsyncClassContract>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AsyncClassContract {
+    pub queueable: Option<ClassMemberId>,
+    pub batch: Option<BatchContract>,
+    pub schedulable: Option<ClassMemberId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchContract {
+    pub start: ClassMemberId,
+    pub execute: ClassMemberId,
+    pub finish: ClassMemberId,
+    pub scope_type: ast::TypeName,
 }
 
 impl Deref for Program {

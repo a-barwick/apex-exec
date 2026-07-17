@@ -46,7 +46,7 @@ fn parses_and_checks_supported_test_annotations_and_signatures() {
 #[test]
 fn rejects_unsupported_annotations_data_access_and_invalid_test_methods() {
     let unsupported = parse("@Future public class Worker {}").unwrap_err();
-    assert_eq!(unsupported.message, "unsupported annotation `@Future`");
+    assert_eq!(unsupported.message, "`@future` is only valid on methods");
 
     let see_all_data = check("@IsTest(SeeAllData=true) private class DataTest {}").unwrap_err();
     assert!(
