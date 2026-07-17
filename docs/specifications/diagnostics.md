@@ -2,9 +2,11 @@
 
 ## Status
 
-Single-span lexer, parser, and semantic diagnostics are implemented. M4 runtime
+Single-span lexer, parser, and semantic diagnostics are implemented. Runtime
 failures additionally carry an exception type and ordered source call frames.
-Stable diagnostic codes, notes, multiple labels, and recovery remain planned.
+Project diagnostics retain file-aware source identities, and project errors
+expose broad machine-readable error kinds. Stable per-diagnostic codes, notes,
+multiple labels, and recovery remain planned.
 
 ## Requirements
 
@@ -42,22 +44,19 @@ Apex stack trace:
 ```
 
 The public `Diagnostic` exposes `exception_type` and `stack_trace` separately
-from the human renderer. Compile diagnostics leave both empty. Stack frames
-currently identify method call sites in one source file; cross-file names and
-Salesforce-exact formatting depend on M5 project compilation and later
-differential validation.
+from the human renderer. Compile diagnostics leave both empty. Single-source
+rendering maps spans against the supplied source text. Project
+`ProjectError::render()` resolves the primary span and every runtime frame
+independently through its `SourceId`, so one stack may name multiple files.
+Salesforce-exact formatting still requires later differential validation.
 
-## Future diagnostic categories
+## Planned structured diagnostics
 
-- Lexical errors
-- Syntax errors
-- Unsupported syntax
-- Name-resolution errors
-- Type errors
-- Unsupported platform APIs
-- Runtime exceptions
-- Compatibility mismatches
+The renderer already distinguishes lexical, syntax, name/type, unsupported
+platform, and runtime failures in human-readable text. A future stable code
+system should represent those categories plus compatibility mismatches without
+making callers parse wording.
 
-The internal representation should eventually carry a stable category or code,
-primary and secondary spans, notes, and suggested fixes. Human wording may
+The internal representation should eventually carry primary and secondary
+spans, notes, and suggested fixes alongside that code. Human wording may then
 improve without breaking integrations.

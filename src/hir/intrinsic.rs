@@ -1,3 +1,8 @@
+/// Checker-selected target for one supported built-in call.
+///
+/// Semantic analysis records this ID in HIR after validating the receiver,
+/// overload, and argument types. Runtime execution matches the ID directly and
+/// never repeats case-insensitive method lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum IntrinsicId {
@@ -12,6 +17,7 @@ pub enum IntrinsicId {
 }
 
 impl IntrinsicId {
+    /// Whether the call has a static type receiver rather than a runtime value.
     pub fn is_static(self) -> bool {
         matches!(
             self,
@@ -20,6 +26,7 @@ impl IntrinsicId {
     }
 }
 
+/// Supported static methods on the Apex `String` type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StaticStringIntrinsic {
@@ -31,6 +38,7 @@ pub enum StaticStringIntrinsic {
     IsNotEmpty,
 }
 
+/// Supported static methods on the Apex `Math` type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MathIntrinsic {
@@ -40,6 +48,7 @@ pub enum MathIntrinsic {
     Mod,
 }
 
+/// Supported static methods on the Apex `System` type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SystemIntrinsic {
@@ -49,6 +58,7 @@ pub enum SystemIntrinsic {
     AssertNotEquals,
 }
 
+/// Supported methods on an Apex `String` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StringIntrinsic {
@@ -66,6 +76,7 @@ pub enum StringIntrinsic {
     Replace,
 }
 
+/// Supported methods on a core Apex exception value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ExceptionIntrinsic {
@@ -74,6 +85,7 @@ pub enum ExceptionIntrinsic {
     GetStackTraceString,
 }
 
+/// Supported methods on an Apex `List` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ListIntrinsic {
@@ -91,6 +103,7 @@ pub enum ListIntrinsic {
     Sort,
 }
 
+/// Supported methods on an Apex `Set` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SetIntrinsic {
@@ -107,6 +120,7 @@ pub enum SetIntrinsic {
     Size,
 }
 
+/// Supported methods on an Apex `Map` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MapIntrinsic {

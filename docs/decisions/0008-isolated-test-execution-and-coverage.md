@@ -3,14 +3,21 @@
 **Status:** Accepted
 **Date:** 2026-07-14
 
+## Implementation update
+
+M7 interpreters now borrow immutable checked code through `RuntimeImage`, so
+isolated execution no longer clones the complete AST/HIR program. The test
+runner still creates a fresh execution store and default recording host for
+each test; interpreter construction and static initialization remain per-test.
+
 ## Context
 
 M6 needs deterministic per-test state, continued execution after failures,
 parallel scheduling, and coverage without coupling test policy to ordinary Apex
-execution. The current interpreter owns static fields, object and collection
-arenas, output, scopes, and runtime stacks. Sharing one interpreter between
-tests would make order observable and require pervasive reset logic before the
-M7 database transaction model exists.
+execution. At the M6 decision point, the interpreter owned static fields,
+object and collection arenas, output, scopes, and runtime stacks. Sharing one
+interpreter between tests would make order observable and require pervasive
+reset logic before the M7 database transaction model exists.
 
 ## Decision
 
@@ -36,4 +43,4 @@ Test classes are excluded from the production coverage denominator.
 - Coverage is deterministic and source-mapped, but its statement-line and
   conditional-outcome model is deliberately not labeled Salesforce-exact.
 - Interpreter construction and static initialization are repeated per test;
-  snapshotting or immutable runtime images remain future optimizations.
+  snapshotting static/data state remains a future optimization.

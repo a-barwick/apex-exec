@@ -89,6 +89,11 @@ fn source_line_column(source: &str, offset: usize) -> (usize, usize) {
     (line, column)
 }
 
+/// Failure returned by project discovery, compilation, or invocation.
+///
+/// [`ProjectError::render`] includes available source context. Its
+/// [`fmt::Display`] implementation intentionally returns only the concise
+/// message so callers can choose between machine-oriented and rendered output.
 #[derive(Clone, Debug)]
 pub struct ProjectError {
     kind: ProjectErrorKind,
@@ -99,11 +104,15 @@ pub struct ProjectError {
     diagnostic: Option<Box<Diagnostic>>,
 }
 
+/// Broad machine-readable category of a [`ProjectError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProjectErrorKind {
+    /// Invalid project structure, configuration, or invocation request.
     Project,
+    /// Filesystem operation failed.
     Io,
+    /// Lexer, parser, semantic, or runtime diagnostic.
     Diagnostic,
 }
 
@@ -159,14 +168,24 @@ impl ProjectError {
         }
     }
 
+    /// Returns the broad failure category without parsing display text.
     pub fn kind(&self) -> ProjectErrorKind {
         self.kind
     }
 
+    /// Returns the file associated with the primary failure, when available.
+    ///
+    /// Project diagnostics derive this path from the primary span's
+    /// [`SourceId`]. Other stack frames may belong to different files and are
+    /// included by [`ProjectError::render`].
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
+    /// Renders the message with available source highlights and stack frames.
+    ///
+    /// For merged projects, the primary diagnostic and every runtime frame are
+    /// mapped independently to their source files.
     pub fn render(&self) -> String {
         if let (Some(diagnostic), Some(source_map)) = (&self.diagnostic, &self.source_map) {
             return source_map.render_diagnostic(diagnostic);

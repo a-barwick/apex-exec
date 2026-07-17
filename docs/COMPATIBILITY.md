@@ -47,7 +47,7 @@ conformance harness is a later milestone.
 | Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supported |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
-| Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive M3 collection, String, Math, and System surface; checked calls carry typed intrinsic IDs |
+| Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
 | User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
 | Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts; invalid runtime casts throw `TypeException` |
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
@@ -187,9 +187,9 @@ Project tests are discovered and sorted case-insensitively by `Class.method`.
 Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
 interpreter. A bounded worker pool can therefore run tests in parallel without
-sharing static fields, object/collection identity, output, or runtime stacks.
-This models deterministic isolation before M7 adds database transactions and
-setup snapshots.
+sharing static fields, object/collection identity, default recording-host
+output, or runtime stacks. This models deterministic isolation before M7 adds
+database transactions and setup snapshots.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of

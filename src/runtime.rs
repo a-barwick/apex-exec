@@ -130,12 +130,18 @@ pub struct Interpreter<'program, H = RecordingHost> {
 }
 
 impl<'program> Interpreter<'program, RecordingHost> {
+    /// Creates an isolated interpreter with the default buffering debug host.
     pub fn new() -> Self {
         Self::with_host(RecordingHost::default())
     }
 }
 
 impl<'program, H: PlatformHost> Interpreter<'program, H> {
+    /// Creates an isolated interpreter using a caller-provided platform host.
+    ///
+    /// Passing `&mut host` is supported when the caller needs to inspect host
+    /// state after execution. Such a borrowed host may intentionally share
+    /// external state across interpreter instances.
     pub fn with_host(host: H) -> Self {
         Self {
             scopes: vec![HashMap::new()],
@@ -149,6 +155,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    /// Executes the anonymous statements in a checked program.
+    ///
+    /// The returned lines are whatever the configured host drains through
+    /// [`PlatformHost::take_debug_output`]. A streaming host that keeps the
+    /// default implementation returns an empty vector.
     pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
         for statement in &program.statements {
@@ -178,6 +189,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(self.host.take_debug_output())
     }
 
+    /// Invokes one public or global static zero-argument method.
+    ///
+    /// Class and method names are matched case-insensitively. The result
+    /// contains drained host output followed by a deterministic rendering of a
+    /// non-void return value.
     pub fn invoke_static(
         mut self,
         program: &'program Program,

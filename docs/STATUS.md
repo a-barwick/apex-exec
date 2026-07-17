@@ -120,9 +120,10 @@ interpreter directly.
 
 Recommended implementation order:
 
-1. Import custom object and field metadata from ordinary SFDX projects.
-2. Normalize metadata independently from physical storage and generate a local
-   SQLite schema.
+1. Import custom object and field metadata from ordinary SFDX projects into the
+   normalized schema catalog.
+2. Generate and migrate a local SQLite schema from that storage-independent
+   catalog.
 3. Add typed and dynamic SObject values, Salesforce-shaped IDs, and field
    access.
 4. Add isolated transactions, savepoints, rollback, and fast test reset.

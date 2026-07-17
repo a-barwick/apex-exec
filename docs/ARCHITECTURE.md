@@ -6,7 +6,7 @@
 Apex source
     │
     ▼
-  Lexer ──► tokens with byte spans
+  Lexer ──► tokens with file-aware byte spans
     │
     ▼
   Parser ─► immutable untyped AST
@@ -50,10 +50,10 @@ The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
 its own interpreter. Setup methods share that test's interpreter and run before
-the test method. Independent interpreters make static fields, object and
-collection arenas, output, call stacks, and coverage state safe to execute in a
-bounded worker pool. Results are sorted by case-insensitive qualified test name
-after execution so parallel scheduling is never observable in reports.
+the test method. Each test receives a fresh execution store, default recording
+host, call stack, and coverage trace, so the bounded worker pool does not share
+observable runtime state. Results are sorted by case-insensitive qualified test
+name after execution so parallel scheduling is never observable in reports.
 
 The interpreter records executed statement spans and true/false conditional
 outcomes. The test runner maps those observations through the project source
@@ -128,8 +128,10 @@ declarations, and executable anonymous statements separately. Signature and
 class collection are early semantic passes, so cross-file lookup, forward
 calls, and recursion work without source-order dependence. Runtime invocations
 replace the caller's lexical-scope stack with a new parameter scope and restore
-it on every completion path. Collections, class/static state, object arenas,
-and output remain interpreter-owned shared runtime state.
+it on every completion path. Collections, class/static state, and object arenas
+remain in the interpreter's execution store. Debug events flow through the
+configured platform host, whose state may be owned by the interpreter or
+intentionally shared by reference.
 
 Class member targets pair a class index with a member index. Instance calls may
 perform virtual dispatch only within the checked signature selected by the HIR;
@@ -149,11 +151,13 @@ spelling. Adding a built-in requires an explicit checker mapping and runtime
 implementation, so unsupported platform surface cannot silently fall through
 to dynamic dispatch.
 
-## Target compiler pipeline
+## Compiler pipeline evolution
 
-Direct AST walking is appropriate for the current language slice. Before class
-inheritance, overload resolution, and project-scale compilation become large,
-the pipeline should evolve to:
+Direct AST walking remains appropriate for the current language slice.
+Inheritance, overload resolution, and project compilation now use typed HIR
+side tables so execution does not repeat compiler decisions. The next structural
+evolution, when scale or additional language semantics require it, is a lowered
+executable representation:
 
 ```text
 Source
@@ -169,9 +173,9 @@ The typed representation should make conversions, selected overloads, member
 resolution, loop targets, and runtime operations explicit. Execution should not
 repeat compiler reasoning.
 
-The first typed representation is now implemented as immutable syntax plus HIR
-side tables. A lowered executable IR remains a future evolution; it can replace
-this layout without moving semantic state back into parsed nodes.
+The current typed representation is immutable syntax plus HIR side tables. A
+lowered executable IR can replace this layout without moving semantic state
+back into parsed nodes.
 
 ## Target runtime boundaries
 
@@ -249,14 +253,13 @@ explicit runtime profiles. They must not appear as scattered conditionals.
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.
-Project-scale performance will later rely on:
+The current foundation already includes class dependency graphs, parsed-unit
+reuse, isolated parallel test execution, and per-file coverage aggregation.
+Further project-scale performance work will rely on:
 
 - Interned names and types
-- Module/class dependency graphs
-- Incremental parsing and semantic analysis
-- Cached typed IR
-- Isolated parallel test execution
-- Per-file statement-line and conditional-outcome coverage aggregation
+- Dependency-scoped incremental semantic analysis
+- Cached typed or lowered IR
 - Content-addressed CI artifacts
 
 These optimizations must preserve deterministic results and source diagnostics.
