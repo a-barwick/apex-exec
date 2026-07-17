@@ -121,21 +121,8 @@ impl SourceMap {
         rendered
     }
 
-    fn project_error(&self, mut diagnostic: Diagnostic) -> ProjectError {
-        let entry = self.entry_for_offset(diagnostic.span.start);
-        let Some(entry) = entry else {
-            return ProjectError::diagnostic(None, String::new(), diagnostic);
-        };
-        diagnostic.span = local_span(diagnostic.span, entry.start);
-        for frame in &mut diagnostic.stack_trace {
-            if frame.span.start >= entry.start && frame.span.start <= entry.end {
-                frame.span = Span::new(
-                    frame.span.start - entry.start,
-                    frame.span.end.saturating_sub(entry.start),
-                );
-            }
-        }
-        ProjectError::diagnostic(Some(entry.path.clone()), entry.source.clone(), diagnostic)
+    fn project_error(&self, diagnostic: Diagnostic) -> ProjectError {
+        ProjectError::project_diagnostic(self.clone(), diagnostic)
     }
 
     fn location(&self, offset: usize) -> Option<(PathBuf, usize)> {
@@ -180,6 +167,7 @@ pub struct ProjectError {
     message: String,
     path: Option<PathBuf>,
     source: String,
+    source_map: Option<SourceMap>,
     diagnostic: Option<Box<Diagnostic>>,
 }
 
@@ -189,6 +177,7 @@ impl ProjectError {
             message: message.into(),
             path: None,
             source: String::new(),
+            source_map: None,
             diagnostic: None,
         }
     }
@@ -202,11 +191,25 @@ impl ProjectError {
             message: diagnostic.message.clone(),
             path,
             source,
+            source_map: None,
+            diagnostic: Some(Box::new(diagnostic)),
+        }
+    }
+
+    fn project_diagnostic(source_map: SourceMap, diagnostic: Diagnostic) -> Self {
+        Self {
+            message: diagnostic.message.clone(),
+            path: None,
+            source: String::new(),
+            source_map: Some(source_map),
             diagnostic: Some(Box::new(diagnostic)),
         }
     }
 
     pub fn render(&self) -> String {
+        if let (Some(diagnostic), Some(source_map)) = (&self.diagnostic, &self.source_map) {
+            return source_map.render_diagnostic(diagnostic);
+        }
         match (&self.diagnostic, &self.path) {
             (Some(diagnostic), Some(path)) => {
                 diagnostic.render(&path.display().to_string(), &self.source)

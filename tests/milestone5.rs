@@ -276,6 +276,47 @@ fn discovers_compiles_invokes_and_incrementally_rechecks_an_sfdx_project() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn invocation_errors_render_each_stack_frame_against_its_source_file() {
+    let root = temporary_project("cross-file-stack");
+    let classes = root.join("force-app/main/default/classes");
+    fs::create_dir_all(&classes).unwrap();
+    fs::write(
+        root.join("sfdx-project.json"),
+        r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+    )
+    .unwrap();
+    let entry = classes.join("Entry.cls");
+    fs::write(
+        &entry,
+        "public class Entry {
+    public static void run() {
+        Worker.fail();
+    }
+}",
+    )
+    .unwrap();
+    let worker = classes.join("Worker.cls");
+    fs::write(
+        &worker,
+        "public class Worker {
+    public static void fail() {
+        Integer quotient = 1 / 0;
+    }
+}",
+    )
+    .unwrap();
+
+    let compilation = ProjectCompiler::new().compile(&root).unwrap();
+    let rendered = compilation.invoke("Entry.run").unwrap_err().render();
+
+    assert!(rendered.contains(&format!(" --> {}:3:", worker.display())));
+    assert!(rendered.contains(&format!("at fail ({}:3:", worker.display())));
+    assert!(rendered.contains(&format!("at run ({}:3:", entry.display())));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn temporary_project(label: &str) -> PathBuf {
     let unique = format!(
         "apex-exec-{label}-{}-{}",
