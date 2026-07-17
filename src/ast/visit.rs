@@ -265,12 +265,15 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
         }
         Statement::While {
             condition, body, ..
-        }
-        | Statement::DoWhile {
-            condition, body, ..
         } => {
             visitor.visit_expression(condition);
             visitor.visit_statement(body);
+        }
+        Statement::DoWhile {
+            body, condition, ..
+        } => {
+            visitor.visit_statement(body);
+            visitor.visit_expression(condition);
         }
         Statement::For {
             initializer,
@@ -540,5 +543,24 @@ mod tests {
             ["base", "contract", "result", "input", "input", "input"]
         );
         assert!(visitor.expressions >= 8);
+    }
+
+    #[test]
+    fn do_while_traversal_preserves_source_order() {
+        #[derive(Default)]
+        struct IdentifierOrder(Vec<String>);
+
+        impl<'ast> Visitor<'ast> for IdentifierOrder {
+            fn visit_identifier(&mut self, identifier: &'ast Identifier) {
+                self.0.push(identifier.canonical.clone());
+            }
+        }
+
+        let program = crate::parse("do { run(); } while (condition);").unwrap();
+        let mut order = IdentifierOrder::default();
+
+        order.visit_program(&program);
+
+        assert_eq!(order.0, ["run", "condition"]);
     }
 }
