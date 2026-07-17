@@ -176,7 +176,12 @@ impl Parser {
                 }
                 TokenKind::Dot => {
                     self.advance();
-                    let member = self.expect_identifier("expected a member name after `.`")?;
+                    let member = if self.check(&TokenKind::New) {
+                        let token = self.advance();
+                        Identifier::new(token.lexeme, token.span)
+                    } else {
+                        self.expect_identifier("expected a member name after `.`")?
+                    };
                     if self.check(&TokenKind::LeftParen) {
                         let (arguments, end) = self.parse_argument_list()?;
                         let span = expression.span().merge(end);

@@ -32,13 +32,13 @@ pub fn discover(path: impl AsRef<Path>) -> Result<DiscoveredProject, ProjectErro
     source_roots.dedup();
     let mut paths = Vec::new();
     for source_root in &source_roots {
-        collect_class_files(source_root, &mut paths)?;
+        collect_apex_files(source_root, &mut paths)?;
     }
     paths.sort();
     paths.dedup();
     if paths.is_empty() {
         return Err(ProjectError::message(format!(
-            "no `.cls` files found in SFDX project `{}`",
+            "no `.cls` or `.trigger` files found in SFDX project `{}`",
             root.display()
         )));
     }
@@ -76,7 +76,7 @@ fn find_project_root(requested: &Path) -> Result<PathBuf, ProjectError> {
     }
 }
 
-fn collect_class_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
+fn collect_apex_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
     let entries =
         fs::read_dir(directory).map_err(|error| ProjectError::io(directory, "scan", error))?;
     for entry in entries {
@@ -86,12 +86,15 @@ fn collect_class_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(),
             .file_type()
             .map_err(|error| ProjectError::io(&path, "inspect", error))?;
         if file_type.is_dir() {
-            collect_class_files(&path, files)?;
+            collect_apex_files(&path, files)?;
         } else if file_type.is_file()
             && path
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("cls"))
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("cls")
+                        || extension.eq_ignore_ascii_case("trigger")
+                })
         {
             files.push(path);
         }

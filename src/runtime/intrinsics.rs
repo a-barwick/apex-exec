@@ -786,6 +786,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match intrinsic {
             MapIntrinsic::Clear => {
                 expect_no_arguments(arguments, span)?;
+                self.ensure_collection_mutable(id, span)?;
                 let Collection::Map { entries, .. } = self.collection_mut(id) else {
                     unreachable!()
                 };
@@ -869,6 +870,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 let key = typed_value(key.value.clone(), &key_type);
                 let value = typed_value(value.value.clone(), &value_type);
+                self.ensure_collection_mutable(id, span)?;
                 Ok(self.map_put(id, key, value))
             }
             MapIntrinsic::PutAll => {
@@ -888,6 +890,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     } => (key_type.clone(), value_type.clone()),
                     _ => unreachable!(),
                 };
+                self.ensure_collection_mutable(id, span)?;
                 for (key, value) in source_entries {
                     self.map_put(
                         id,
@@ -905,6 +908,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Collection::Map { value_type, .. } => value_type.clone(),
                     _ => unreachable!(),
                 };
+                self.ensure_collection_mutable(id, span)?;
                 if let Some(index) = self.map_key_index(id, &key.value) {
                     let Collection::Map { entries, .. } = self.collection_mut(id) else {
                         unreachable!()

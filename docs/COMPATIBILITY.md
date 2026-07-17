@@ -58,8 +58,11 @@ conformance harness is a later milestone.
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
 | Static SOSL | Yes | Yes | Yes | Simplified | Checked returning clauses with deterministic local String-field matching |
-| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, and delete; undelete fails explicitly pending recycle-bin semantics |
+| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution |
 | `Database` DML methods | Yes | Yes | Yes | Simplified | Common methods are atomic and return void; partial result APIs are unsupported |
+| Apex triggers | Yes | Yes | Yes | Simplified | Schema-checked `.trigger` units, typed contexts, eight before/after DML events, bulk handlers, and bounded recursion |
+| Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
+| Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
@@ -233,7 +236,7 @@ incompatible changes to existing prefixes, types, nullability, or relationship
 targets fail explicitly. Storage supports unconditional create/update, read,
 delete, commit, rollback, named savepoints, fixture replacement, and fast
 record reset. M8 implements DML validation and query semantics above this
-boundary; triggers and broader transaction semantics remain M9 work.
+boundary; M9 adds trigger, recycle-bin, and transaction-checkpoint semantics.
 
 ## M8 SOQL, SOSL, and DML
 
@@ -258,20 +261,50 @@ filters, ordering, and limits. Matching is deterministic case-insensitive
 substring search over stored String fields. It does not claim Salesforce
 tokenization, stemming, wildcard, snippet, division, or relevance behavior.
 
-Scalar and List values support `insert`, `update`, `upsert`, and `delete`
-statements plus the corresponding `Database` methods. Inserts generate
+Scalar and List values support `insert`, `update`, `upsert`, `delete`, and
+`undelete` statements plus the corresponding `Database` methods. Inserts generate
 deterministic Salesforce-shaped Ids and copy them into the original runtime
-SObjects. Each DML call is atomic. The current `Database` methods return
-`void`; SaveResult/DeleteResult APIs and `allOrNone=false` partial results are
-rejected explicitly. `undelete` is recognized but raises `DmlException` until
-M9 adds a recycle bin. External-ID upsert, validation rules, workflows,
-sharing, limits, triggers, and cross-call transaction rollback are not yet
-implemented.
+SObjects. Each DML call is atomic. Delete retains the stored image in a local
+recycle bin, and undelete restores its Id and fields. The current `Database`
+methods return `void`; SaveResult/DeleteResult APIs and `allOrNone=false`
+partial results are rejected explicitly. External-ID upsert, validation rules,
+workflows, sharing, and limits are not yet implemented.
 
 The default recording host owns one lazy in-memory SQLite database per
 interpreter and publishes structured SOQL, SOSL, and DML events. Test setup DML
 is visible to its test, while separate test interpreters remain isolated.
 One-time Salesforce test-setup snapshot optimization is not reproduced.
+
+## M9 triggers and transaction semantics
+
+SFDX discovery loads `.trigger` files alongside classes. Trigger declarations
+validate their schema object and unique event set, then check their bodies
+against typed context values. Supported contexts are `Trigger.new`,
+`Trigger.old`, `Trigger.newMap`, `Trigger.oldMap`, `Trigger.isExecuting`,
+`isBefore`, `isAfter`, `isInsert`, `isUpdate`, `isDelete`, `isUndelete`, and
+`size`. Context spelling is case-insensitive. Lists and maps use the concrete
+SObject type, so common trigger-handler signatures compile without casts.
+
+Before and after insert, update, delete, and undelete run over bulk groups.
+Mixed upserts split into concrete insert and update groups. Before new records
+alias the caller's runtime SObjects and may change persisted fields; old
+records, after new records, and all context collections are read-only and raise
+`FinalException` on mutation. Recursive DML executes triggers synchronously and
+is capped at 16 active trigger levels with an explicit `DmlException`.
+
+Every DML tree owns a nested database checkpoint. A trigger failure caught by
+Apex rolls back that DML and recursive work it started while preserving earlier
+successful DML. An exception escaping anonymous execution, static invocation,
+or a test rolls back the whole entry-point transaction. Checkpoints include
+active records, recycled records, and deterministic Id sequences.
+
+The recording host exposes trigger enter/exit events and DML events in one
+ordered transaction timeline. This is deterministic local ordering, not a
+claim of Salesforce-exact order-of-execution automation. Multiple triggers for
+one object run in deterministic project source order; Salesforce does not
+guarantee an equivalent order. `addError`, merge, validation/workflow/flow
+automation, mixed-SObject bulk lists, and partial DML results remain
+unsupported.
 
 ## Platform surface
 
@@ -280,15 +313,17 @@ One-time Salesforce test-setup snapshot optimization is not reproduced.
 | SFDX project loading | Implemented (simplified) | M5 |
 | Apex unit tests | Implemented (simplified) | M6 |
 | SObject schema | Implemented (simplified metadata importer and catalog) | M7 |
-| Typed/dynamic SObjects | Implemented (in-memory field access; no DML) | M7 |
+| Typed/dynamic SObjects | Implemented (schema-checked fields and DML identity) | M7 |
 | Salesforce-shaped IDs | Implemented (validation, checksum, deterministic generation) | M7 |
 | SQLite storage | Implemented (additive migration, CRUD, transactions, savepoints, fixtures/reset) | M7 |
 | DML | Implemented (simplified atomic scalar/bulk operations) | M8 |
 | SOQL | Implemented (simplified checked static queries) | M8 |
 | SOSL | Implemented (simplified deterministic local search) | M8 |
-| Structured query/DML traces | Implemented | M8 |
-| Triggers | Active | M9 |
-| Common platform APIs | Planned | M10 |
+| Structured query/DML/trigger timelines | Implemented | M9 |
+| Triggers | Implemented (simplified) | M9 |
+| Transaction-wide rollback | Implemented (snapshot-backed) | M9 |
+| Recycle bin / undelete | Implemented (simplified) | M9 |
+| Common platform APIs | Active | M10 |
 | Async Apex | Deferred | M11 |
 | Governor limits | Deferred | Post-core compatibility profile |
 | Sharing/security behavior | Deferred | Post-core compatibility profile |
@@ -317,15 +352,16 @@ One-time Salesforce test-setup snapshot optimization is not reproduced.
   unsupported metadata types, invalid dynamic SObject access, invalid IDs, and
   incompatible SQLite migrations fail explicitly at their owning boundary.
 - Unknown query objects/fields/relationships, incompatible binds and
-  aggregates, invalid DML operands, cardinality failures, and unsupported
-  partial/recycle-bin DML semantics fail explicitly.
+  aggregates, invalid DML operands, cardinality failures, invalid trigger
+  contexts, recursion overflow, and unsupported partial DML semantics fail
+  explicitly.
 - Diagnostics are generated by Apex Exec and are not required to reproduce
   Salesforce's exact wording.
 - `tests/north_star/` contains pinned real-world complexity indicators. Their
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M8 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+At M9 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
 lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
 ordinary members until unsupported `instanceof`; the remaining first blockers
 are safe navigation, null coalescing, ternary syntax, and bitwise operators.

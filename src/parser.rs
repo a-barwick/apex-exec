@@ -22,10 +22,13 @@ impl Parser {
 
     pub fn parse_program(mut self) -> Result<Program, Diagnostic> {
         let mut classes = Vec::new();
+        let mut triggers = Vec::new();
         let mut methods = Vec::new();
         let mut statements = Vec::new();
         while !self.check(&TokenKind::Eof) {
-            if self.is_class_declaration_start() {
+            if self.check_keyword("trigger") {
+                triggers.push(self.parse_trigger_declaration()?);
+            } else if self.is_class_declaration_start() {
                 classes.push(self.parse_class_declaration()?);
             } else if self.is_method_declaration_start() {
                 methods.push(self.parse_method_declaration()?);
@@ -35,6 +38,7 @@ impl Parser {
         }
         Ok(Program {
             classes,
+            triggers,
             methods,
             statements,
         })

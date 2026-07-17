@@ -191,7 +191,7 @@ changes.
 
 ## M9 — Triggers and transaction semantics
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -209,7 +209,7 @@ This is the second major enterprise-value checkpoint.
 
 ## M10 — Curated platform compatibility
 
-**Status:** Planned
+**Status:** Active
 
 Implement the common Apex platform surface based on real project usage rather
 than attempting every Salesforce API. Initial candidates include:

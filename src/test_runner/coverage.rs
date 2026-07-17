@@ -118,6 +118,9 @@ fn collect_coverage_candidates(
             }
         }
     }
+    for trigger in &compilation.program.triggers {
+        visit_statement(&trigger.body, statements, branches);
+    }
 }
 
 fn visit_statement(

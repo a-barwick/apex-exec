@@ -154,6 +154,23 @@ pub enum MemberTarget {
         reference_field_id: usize,
         target_object_id: usize,
     },
+    TriggerContext(TriggerContextVariable),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerContextVariable {
+    New,
+    Old,
+    NewMap,
+    OldMap,
+    IsExecuting,
+    IsBefore,
+    IsAfter,
+    IsInsert,
+    IsUpdate,
+    IsDelete,
+    IsUndelete,
+    Size,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

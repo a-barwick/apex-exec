@@ -1,6 +1,6 @@
 use crate::platform::{
-    DatabaseError, DmlOperation, LocalDatabase, QueryOutcome, SObject, SchemaCatalog, SoqlRequest,
-    SoslRequest,
+    DatabaseError, DatabaseSnapshot, DmlOperation, LocalDatabase, PreparedDmlRecord, QueryOutcome,
+    SObject, SchemaCatalog, SoqlRequest, SoslRequest,
 };
 
 /// A structured debug event emitted by the Apex `System.debug` intrinsic.
@@ -29,6 +29,36 @@ pub struct DmlEvent {
     pub objects: Vec<String>,
     pub records: usize,
     pub succeeded: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerPhase {
+    Before,
+    After,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerStage {
+    Enter,
+    Exit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TriggerEvent {
+    pub trigger: String,
+    pub object: String,
+    pub operation: DmlOperation,
+    pub phase: TriggerPhase,
+    pub stage: TriggerStage,
+    pub depth: usize,
+    pub records: usize,
+    pub succeeded: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransactionEvent {
+    Trigger(TriggerEvent),
+    Dml(DmlEvent),
 }
 
 /// Boundary between language execution and platform-owned side effects.
@@ -70,6 +100,44 @@ pub trait PlatformHost {
     ) -> Result<Vec<SObject>, DatabaseError> {
         Err(DatabaseError::unavailable())
     }
+
+    fn prepare_dml(
+        &mut self,
+        _schema: &SchemaCatalog,
+        operation: DmlOperation,
+        records: &[SObject],
+    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
+        Ok(records
+            .iter()
+            .cloned()
+            .map(|record| {
+                let concrete = match operation {
+                    DmlOperation::Upsert if record.id().is_some() => DmlOperation::Update,
+                    DmlOperation::Upsert => DmlOperation::Insert,
+                    operation => operation,
+                };
+                PreparedDmlRecord {
+                    operation: concrete,
+                    old: (concrete == DmlOperation::Delete).then(|| record.clone()),
+                    new: (concrete != DmlOperation::Delete).then_some(record),
+                }
+            })
+            .collect())
+    }
+
+    fn begin_unit(&mut self, _schema: &SchemaCatalog) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    fn commit_unit(&mut self) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    fn rollback_unit(&mut self) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    fn trigger(&mut self, _event: TriggerEvent) {}
 }
 
 impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
@@ -105,6 +173,31 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
     ) -> Result<Vec<SObject>, DatabaseError> {
         (**self).dml(schema, operation, records)
     }
+
+    fn prepare_dml(
+        &mut self,
+        schema: &SchemaCatalog,
+        operation: DmlOperation,
+        records: &[SObject],
+    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
+        (**self).prepare_dml(schema, operation, records)
+    }
+
+    fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
+        (**self).begin_unit(schema)
+    }
+
+    fn commit_unit(&mut self) -> Result<(), DatabaseError> {
+        (**self).commit_unit()
+    }
+
+    fn rollback_unit(&mut self) -> Result<(), DatabaseError> {
+        (**self).rollback_unit()
+    }
+
+    fn trigger(&mut self, event: TriggerEvent) {
+        (**self).trigger(event);
+    }
 }
 
 /// Default host used by the public convenience APIs.
@@ -114,6 +207,9 @@ pub struct RecordingHost {
     database: Option<LocalDatabase>,
     queries: Vec<QueryEvent>,
     dml: Vec<DmlEvent>,
+    triggers: Vec<TriggerEvent>,
+    timeline: Vec<TransactionEvent>,
+    checkpoints: Vec<DatabaseSnapshot>,
 }
 
 impl RecordingHost {
@@ -123,6 +219,14 @@ impl RecordingHost {
 
     pub fn dml_events(&self) -> &[DmlEvent] {
         &self.dml
+    }
+
+    pub fn trigger_events(&self) -> &[TriggerEvent] {
+        &self.triggers
+    }
+
+    pub fn timeline_events(&self) -> &[TransactionEvent] {
+        &self.timeline
     }
 
     fn database(&mut self, schema: &SchemaCatalog) -> Result<&mut LocalDatabase, DatabaseError> {
@@ -199,13 +303,54 @@ impl PlatformHost for RecordingHost {
             .collect::<Vec<_>>();
         let count = records.len();
         let result = self.database(schema)?.execute_dml(operation, records);
-        self.dml.push(DmlEvent {
+        let event = DmlEvent {
             operation,
             objects,
             records: count,
             succeeded: result.is_ok(),
-        });
+        };
+        self.dml.push(event.clone());
+        self.timeline.push(TransactionEvent::Dml(event));
         result
+    }
+
+    fn prepare_dml(
+        &mut self,
+        schema: &SchemaCatalog,
+        operation: DmlOperation,
+        records: &[SObject],
+    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
+        self.database(schema)?.prepare_dml(operation, records)
+    }
+
+    fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
+        let snapshot = self.database(schema)?.snapshot()?;
+        self.checkpoints.push(snapshot);
+        Ok(())
+    }
+
+    fn commit_unit(&mut self) -> Result<(), DatabaseError> {
+        self.checkpoints
+            .pop()
+            .ok_or_else(|| DatabaseError::new("no active transaction checkpoint"))?;
+        Ok(())
+    }
+
+    fn rollback_unit(&mut self) -> Result<(), DatabaseError> {
+        let snapshot = self
+            .checkpoints
+            .pop()
+            .ok_or_else(|| DatabaseError::new("no active transaction checkpoint"))?;
+        let database = self
+            .database
+            .as_mut()
+            .ok_or_else(|| DatabaseError::new("transaction database is unavailable"))?;
+        database.restore(snapshot)
+    }
+
+    fn trigger(&mut self, event: TriggerEvent) {
+        self.triggers.push(event.clone());
+        self.timeline.push(TransactionEvent::Trigger(event));
     }
 }
 

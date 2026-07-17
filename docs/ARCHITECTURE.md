@@ -61,6 +61,15 @@ interpreter SObjects and storage-neutral platform requests. Filtering,
 ordering, aggregates, relationship hydration, deterministic SOSL matching, and
 atomic DML validation live above SQLite in the platform database service.
 
+M9 adds trigger declarations as project source units and typed trigger-context
+member targets in HIR. The interpreter owns trigger dispatch because it owns
+Apex values, handler calls, and recursive control flow. The platform database
+preflights old/new record images, owns the recycle bin, and snapshots active
+records, recycled records, and ID sequences. Nested host checkpoints make one
+DML tree atomic while an outer entry-point checkpoint provides uncaught
+transaction rollback. Trigger enter/exit and DML events share one deterministic
+host timeline.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -97,6 +106,7 @@ state between interpreters.
 | `hir` | Checked expression types, declaration targets, and intrinsic IDs |
 | `parser` | Grammar façade with declaration, statement, expression, type/lookahead, and test modules |
 | `parser::queries` | Dedicated SOQL/SOSL grammar and DML statement parsing |
+| `parser::declarations` | Class, interface, member, annotation, and trigger declaration grammar |
 | `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
@@ -104,8 +114,8 @@ state between interpreters.
 | `platform::metadata` | SFDX custom-object and field metadata import |
 | `platform::sobject` | Schema-validated typed/dynamic SObject values at the platform boundary |
 | `platform::sqlite` | Schema migration and transactional SQLite record persistence |
-| `platform::database` | Query execution, relationship hydration, aggregates, SOSL search, and atomic DML semantics |
-| `runtime::database` | Bind evaluation and conversion between HIR plans, runtime values, and platform requests/results |
+| `platform::database` | Query execution, aggregates, DML preflight, recycle-bin state, and transaction snapshots |
+| `runtime::database` | Query/DML conversion plus typed bulk trigger context construction and recursive dispatch |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -144,15 +154,15 @@ behavior.
 
 ### Calls and scopes
 
-The parsed `Program` stores classes, backwards-compatible top-level method
-declarations, and executable anonymous statements separately. Signature and
-class collection are early semantic passes, so cross-file lookup, forward
+The parsed `Program` stores classes, triggers, backwards-compatible top-level
+method declarations, and executable anonymous statements separately. Signature
+and class collection are early semantic passes, so cross-file lookup, forward
 calls, and recursion work without source-order dependence. Runtime invocations
 replace the caller's lexical-scope stack with a new parameter scope and restore
 it on every completion path. Collections, class/static state, and object arenas
-remain in the interpreter's execution store. Debug events flow through the
-configured platform host, whose state may be owned by the interpreter or
-intentionally shared by reference.
+remain in the interpreter's execution store. Debug and transaction-timeline
+events flow through the configured platform host, whose state may be owned by
+the interpreter or intentionally shared by reference.
 
 Class member targets pair a class index with a member index. Instance calls may
 perform virtual dispatch only within the checked signature selected by the HIR;
@@ -231,17 +241,19 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
-The implemented host surface owns structured debug, query, and DML output.
+The implemented host surface owns structured debug, query, DML, and trigger
+timeline output.
 `platform::schema` provides a case-insensitive normalized catalog and
 `SchemaProvider`, while `platform::storage` defines storage-neutral records and
 transaction traits. M7 adds metadata import, an additive SQLite adapter, and
 schema-backed interpreter SObjects.
 
 M8 extends that boundary with checked SOQL/SOSL requests and atomic DML
-operations. The default recording host lazily owns one in-memory SQLite
-database per interpreter and records structured query/DML events. In-memory
-SObject field mutation still does not silently persist a record; only an
-explicit DML statement or `Database` method crosses the persistence boundary.
+operations. M9 adds DML preflight, nested transaction checkpoints, and trigger
+timeline events. The default recording host lazily owns one in-memory SQLite
+database per interpreter. In-memory SObject field mutation still does not
+silently persist a record; only explicit DML crosses the persistence boundary,
+including a before-trigger mutation made while that DML is active.
 
 ## Local data architecture
 
@@ -262,12 +274,14 @@ in-memory implementations remain possible. The SQLite adapter owns physical
 tables and an explicit schema registry. Additive migrations preserve records;
 incompatible changes fail rather than rebuilding or coercing data silently.
 Named savepoints, rollback, fixture replacement, and reset implement the
-isolation substrate that M8 can connect to Apex tests.
+storage isolation substrate. M9's default host layers snapshot checkpoints over
+that substrate so nested recursive DML and the outer Apex entry point can roll
+back independently.
 
 The transaction contract deals in storage-neutral records rather than AST or
 runtime `Value` nodes. Interpreter SObjects likewise use checked schema indices
-and in-memory values; DML lowering will perform the explicit conversion at the
-platform boundary.
+and in-memory values; DML execution performs explicit conversion at the
+platform boundary before and after trigger dispatch.
 
 ## Compatibility architecture
 

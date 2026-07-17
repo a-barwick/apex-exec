@@ -5,7 +5,9 @@ use crate::{
         Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
-    hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
+    hir::{
+        CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget, TriggerContextVariable,
+    },
     platform::FieldType,
     span::Span,
 };
@@ -17,7 +19,10 @@ mod image;
 mod intrinsics;
 mod store;
 
-pub use host::{DebugEvent, DmlEvent, PlatformHost, QueryEvent, QueryKind, RecordingHost};
+pub use host::{
+    DebugEvent, DmlEvent, PlatformHost, QueryEvent, QueryKind, RecordingHost, TransactionEvent,
+    TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage,
+};
 use image::RuntimeImage;
 use store::ExecutionStore;
 
@@ -40,13 +45,13 @@ pub(crate) struct TestExecution {
     pub trace: ExecutionTrace,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CollectionId(usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ObjectId(usize);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SObjectId(usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +127,16 @@ struct ActiveCall {
     call_span: Span,
 }
 
+#[derive(Clone, Debug)]
+struct TriggerContext {
+    event: crate::ast::TriggerEvent,
+    new_list: Value,
+    old_list: Value,
+    new_map: Value,
+    old_map: Value,
+    size: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Flow {
     Normal,
@@ -143,6 +158,10 @@ pub struct Interpreter<'program, H = RecordingHost> {
     image: Option<RuntimeImage<'program>>,
     current_receiver: Option<ObjectId>,
     current_declaring_class: Option<usize>,
+    trigger_context: Option<TriggerContext>,
+    trigger_depth: usize,
+    read_only_sobjects: BTreeSet<SObjectId>,
+    read_only_collections: BTreeSet<CollectionId>,
     trace: ExecutionTrace,
 }
 
@@ -168,6 +187,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             image: None,
             current_receiver: None,
             current_declaring_class: None,
+            trigger_context: None,
+            trigger_depth: 0,
+            read_only_sobjects: BTreeSet::new(),
+            read_only_collections: BTreeSet::new(),
             trace: ExecutionTrace::default(),
         }
     }
@@ -179,30 +202,36 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     /// default implementation returns an empty vector.
     pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
-        for statement in &program.statements {
-            match self.execute_statement(statement)? {
-                Flow::Normal => {}
-                Flow::Return(None) => break,
-                Flow::Return(Some(_)) => {
-                    return Err(Diagnostic::new(
-                        "value return escaped semantic validation",
-                        statement.span(),
-                    ));
-                }
-                Flow::Break => {
-                    return Err(Diagnostic::new(
-                        "`break` escaped semantic validation",
-                        statement.span(),
-                    ));
-                }
-                Flow::Continue => {
-                    return Err(Diagnostic::new(
-                        "`continue` escaped semantic validation",
-                        statement.span(),
-                    ));
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = (|| {
+            self.initialize_static_fields()?;
+            for statement in &program.statements {
+                match self.execute_statement(statement)? {
+                    Flow::Normal => {}
+                    Flow::Return(None) => break,
+                    Flow::Return(Some(_)) => {
+                        return Err(Diagnostic::new(
+                            "value return escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Break => {
+                        return Err(Diagnostic::new(
+                            "`break` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Continue => {
+                        return Err(Diagnostic::new(
+                            "`continue` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
                 }
             }
-        }
+            Ok(())
+        })();
+        self.finish_transaction(result, Span::new(0, 0))?;
         Ok(self.host.take_debug_output())
     }
 
@@ -218,6 +247,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = self
+            .initialize_static_fields()
+            .and_then(|_| self.invoke_static_inner(class_name, method_name));
+        let value = self.finish_transaction(result, Span::new(0, 0))?;
+        let mut output = self.host.take_debug_output();
+        if !matches!(value, Value::Void) {
+            output.push(self.display_value(&value));
+        }
+        Ok(output)
+    }
+
+    fn invoke_static_inner(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Value, Diagnostic> {
         let class_id = self
             .classes()
             .iter()
@@ -249,7 +295,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.classes()[class_id].name.span,
             ));
         };
-        let value = self.evaluate_class_method(
+        self.evaluate_class_method(
             ClassMemberId {
                 class_id,
                 member_id: *member_id,
@@ -258,12 +304,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             &[],
             *span,
             false,
-        )?;
-        let mut output = self.host.take_debug_output();
-        if !matches!(value, Value::Void) {
-            output.push(self.display_value(&value));
-        }
-        Ok(output)
+        )
     }
 
     pub(crate) fn run_test(
@@ -273,13 +314,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         test_method: ClassMemberId,
     ) -> TestExecution {
         let result = self.prepare(program).and_then(|_| {
-            for setup_method in setup_methods {
-                let span = self.class_method_span(*setup_method)?;
-                self.evaluate_class_method(*setup_method, None, &[], span, false)?;
-            }
-            let span = self.class_method_span(test_method)?;
-            self.evaluate_class_method(test_method, None, &[], span, false)?;
-            Ok(())
+            self.begin_transaction(Span::new(0, 0))?;
+            let result = (|| {
+                self.initialize_static_fields()?;
+                for setup_method in setup_methods {
+                    let span = self.class_method_span(*setup_method)?;
+                    self.evaluate_class_method(*setup_method, None, &[], span, false)?;
+                }
+                let span = self.class_method_span(test_method)?;
+                self.evaluate_class_method(test_method, None, &[], span, false)?;
+                Ok(())
+            })();
+            self.finish_transaction(result, Span::new(0, 0))
         });
         TestExecution {
             output: self.host.take_debug_output(),
@@ -304,7 +350,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
     fn prepare(&mut self, program: &'program Program) -> Result<(), Diagnostic> {
         self.image = Some(RuntimeImage::new(program));
-        self.initialize_static_fields()
+        Ok(())
+    }
+
+    fn begin_transaction(&mut self, span: Span) -> Result<(), Diagnostic> {
+        let schema = self.program().schema().clone();
+        self.host
+            .begin_unit(&schema)
+            .map_err(|error| runtime_exception("DmlException", error.to_string(), span))
+    }
+
+    fn finish_transaction<T>(
+        &mut self,
+        result: Result<T, Diagnostic>,
+        span: Span,
+    ) -> Result<T, Diagnostic> {
+        match result {
+            Ok(value) => {
+                self.host
+                    .commit_unit()
+                    .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
+                Ok(value)
+            }
+            Err(error) => {
+                if let Err(rollback) = self.host.rollback_unit() {
+                    return Err(runtime_exception(
+                        "DmlException",
+                        format!("{error}; transaction rollback failed: {rollback}"),
+                        span,
+                    ));
+                }
+                Err(error)
+            }
+        }
     }
 
     fn image(&self) -> RuntimeImage<'program> {
@@ -974,7 +1052,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         ))))
                     }))
             }
+            MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
         }
+    }
+
+    fn trigger_context_value(
+        &self,
+        variable: TriggerContextVariable,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let context = self.trigger_context.as_ref().ok_or_else(|| {
+            Diagnostic::new(
+                "Trigger context is unavailable outside trigger execution",
+                span,
+            )
+        })?;
+        let event = context.event;
+        Ok(match variable {
+            TriggerContextVariable::New => context.new_list.clone(),
+            TriggerContextVariable::Old => context.old_list.clone(),
+            TriggerContextVariable::NewMap => context.new_map.clone(),
+            TriggerContextVariable::OldMap => context.old_map.clone(),
+            TriggerContextVariable::IsExecuting => Value::Boolean(true),
+            TriggerContextVariable::IsBefore => Value::Boolean(event.is_before()),
+            TriggerContextVariable::IsAfter => Value::Boolean(!event.is_before()),
+            TriggerContextVariable::IsInsert => {
+                Value::Boolean(event.operation() == crate::ast::DmlOperation::Insert)
+            }
+            TriggerContextVariable::IsUpdate => {
+                Value::Boolean(event.operation() == crate::ast::DmlOperation::Update)
+            }
+            TriggerContextVariable::IsDelete => {
+                Value::Boolean(event.operation() == crate::ast::DmlOperation::Delete)
+            }
+            TriggerContextVariable::IsUndelete => {
+                Value::Boolean(event.operation() == crate::ast::DmlOperation::Undelete)
+            }
+            TriggerContextVariable::Size => {
+                Value::Integer(i64::try_from(context.size).unwrap_or(i64::MAX))
+            }
+        })
     }
 
     fn evaluate_sobject_get(
@@ -1112,6 +1229,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         if instance_object != object_id {
             return Err(Diagnostic::new(
                 "SObject field target does not match runtime object type",
+                span,
+            ));
+        }
+        if self.read_only_sobjects.contains(&receiver) {
+            return Err(runtime_exception(
+                "FinalException",
+                "record is read-only in this trigger context",
                 span,
             ));
         }
@@ -1832,6 +1956,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         "cannot assign a parent relationship value directly",
                         *span,
                     )),
+                    MemberTarget::TriggerContext(_) => Err(Diagnostic::new(
+                        "Trigger context variables are read-only",
+                        *span,
+                    )),
                 }
             }
         }
@@ -2421,6 +2549,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     MemberTarget::SObjectRelationship { .. } => {
                         Err(invalid_runtime_operands(operator_span))
                     }
+                    MemberTarget::TriggerContext(_) => Err(invalid_runtime_operands(operator_span)),
                 }
             }
             Expression::Index {
@@ -2527,6 +2656,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn ensure_collection_mutable(&self, id: CollectionId, span: Span) -> Result<(), Diagnostic> {
+        if self.read_only_collections.contains(&id) {
+            return Err(runtime_exception(
+                "FinalException",
+                "Trigger context collections are read-only",
+                span,
+            ));
+        }
         let iteration_depth = match self.collection(id) {
             Collection::List {
                 iteration_depth, ..

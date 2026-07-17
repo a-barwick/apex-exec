@@ -1,0 +1,7 @@
+<CustomField>
+    <fullName>Status__c</fullName>
+    <label>Status</label>
+    <length>80</length>
+    <required>false</required>
+    <type>Text</type>
+</CustomField>

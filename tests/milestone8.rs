@@ -289,7 +289,7 @@ public class RepositoryDemo {
 }
 
 #[test]
-fn unsupported_partial_dml_and_recycle_bin_semantics_fail_explicitly() {
+fn partial_dml_stays_explicit_while_undelete_uses_the_recycle_bin() {
     let source = r#"
 public class RepositoryDemo {
     public static void run() {
@@ -305,11 +305,8 @@ public class RepositoryDemo {
         }
 
         delete invoice;
-        try {
-            undelete invoice;
-        } catch (DmlException error) {
-            System.debug(error.getMessage());
-        }
+        undelete invoice;
+        System.debug([SELECT COUNT() FROM Invoice__c]);
     }
 }
 "#;
@@ -317,7 +314,7 @@ public class RepositoryDemo {
     let compilation = project::compile(&root).unwrap();
     let output = compilation.invoke("RepositoryDemo.run").unwrap();
     assert!(output[0].contains("allOrNone=false"));
-    assert!(output[1].contains("recycle-bin semantics"));
+    assert_eq!(output[1], "1");
     fs::remove_dir_all(root).unwrap();
 }
 
