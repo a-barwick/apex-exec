@@ -5,3 +5,4 @@ edition = "2024"
 description = "A local Apex compiler and execution runtime"
 
 [dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }

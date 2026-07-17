@@ -5,14 +5,20 @@
 //! [`SchemaProvider`] without knowing which [`Storage`] implementation owns
 //! record data.
 //!
-//! This module is an M7 architectural foundation. The contracts are not yet
-//! populated from SFDX metadata or wired into Apex type checking and execution,
-//! and the crate does not yet provide a SQLite adapter.
+//! SFDX metadata is imported into the normalized catalog, while SObject values
+//! and the SQLite adapter consume the contracts without leaking database types
+//! into compiler-facing schema APIs.
 
+pub mod metadata;
 pub mod schema;
+pub mod sobject;
+pub mod sqlite;
 pub mod storage;
 
+pub use metadata::{MetadataError, import_metadata};
 pub use schema::{
     FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider,
 };
-pub use storage::{DataValue, Record, RecordId, Storage, StorageTransaction};
+pub use sobject::{SObject, SObjectError};
+pub use sqlite::{SqliteError, SqliteStorage, SqliteStorageTransaction};
+pub use storage::{DataValue, Record, RecordId, RecordIdError, Storage, StorageTransaction};

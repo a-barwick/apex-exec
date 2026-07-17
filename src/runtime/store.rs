@@ -1,6 +1,8 @@
-use super::{Collection, CollectionId, ObjectId, ObjectInstance, Slot, Value};
+use super::{
+    Collection, CollectionId, ObjectId, ObjectInstance, SObjectId, SObjectInstance, Slot, Value,
+};
 use crate::hir::ClassMemberId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Mutable language data owned by one isolated execution.
 ///
@@ -11,6 +13,7 @@ use std::collections::HashMap;
 pub(super) struct ExecutionStore {
     collections: Vec<Collection>,
     objects: Vec<ObjectInstance>,
+    sobjects: Vec<SObjectInstance>,
     static_fields: HashMap<ClassMemberId, Slot>,
 }
 
@@ -52,6 +55,27 @@ impl ExecutionStore {
         self.objects
             .get_mut(id.0)
             .expect("runtime object handles are always valid")
+    }
+
+    pub(super) fn allocate_sobject(&mut self, object_id: usize) -> Value {
+        let id = SObjectId(self.sobjects.len());
+        self.sobjects.push(SObjectInstance {
+            object_id,
+            fields: BTreeMap::new(),
+        });
+        Value::SObject(id)
+    }
+
+    pub(super) fn sobject(&self, id: SObjectId) -> &SObjectInstance {
+        self.sobjects
+            .get(id.0)
+            .expect("runtime SObject handles are always valid")
+    }
+
+    pub(super) fn sobject_mut(&mut self, id: SObjectId) -> &mut SObjectInstance {
+        self.sobjects
+            .get_mut(id.0)
+            .expect("runtime SObject handles are always valid")
     }
 
     pub(super) fn insert_static_slot(&mut self, target: ClassMemberId, slot: Slot) {

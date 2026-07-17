@@ -154,7 +154,7 @@ This is the first major enterprise-value checkpoint.
 
 ## M7 — SObject schema and SQLite
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -174,7 +174,7 @@ transactions. Apex query and DML syntax remain M8 work.
 
 ## M8 — SOQL, SOSL, and DML
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

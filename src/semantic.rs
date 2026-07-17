@@ -7,6 +7,7 @@ use crate::{
     },
     diagnostic::Diagnostic,
     hir::{self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget},
+    platform::{FieldType, SchemaCatalog},
     span::Span,
 };
 use std::collections::HashMap;
@@ -19,7 +20,14 @@ use flow::statement_definitely_returns_or_throws;
 use intrinsics::{require_arity, unknown_method};
 
 pub fn check(program: &Program) -> Result<hir::Program, Diagnostic> {
-    Checker::new().check_program(program)
+    Checker::new(SchemaCatalog::new()).check_program(program)
+}
+
+pub fn check_with_schema(
+    program: &Program,
+    schema: &SchemaCatalog,
+) -> Result<hir::Program, Diagnostic> {
+    Checker::new(schema.clone()).check_program(program)
 }
 
 #[derive(Clone)]
@@ -69,10 +77,11 @@ struct Checker {
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
     current_static: bool,
+    schema: SchemaCatalog,
 }
 
 impl Checker {
-    fn new() -> Self {
+    fn new(schema: SchemaCatalog) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             loop_depth: 0,
@@ -86,6 +95,7 @@ impl Checker {
             class_ids: HashMap::new(),
             current_class: None,
             current_static: false,
+            schema,
         }
     }
 
@@ -108,6 +118,7 @@ impl Checker {
             self.calls,
             self.references,
             self.members,
+            self.schema,
         ))
     }
 
@@ -123,6 +134,16 @@ impl Checker {
                     format!(
                         "duplicate type `{}`; first declared as `{}`",
                         class.name.spelling, original.name.spelling
+                    ),
+                    class.name.span,
+                ));
+            }
+            if self.schema.object(&class.name.spelling).is_ok() || class.name.canonical == "sobject"
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "type `{}` conflicts with an SObject schema type",
+                        class.name.spelling
                     ),
                     class.name.span,
                 ));
@@ -819,9 +840,16 @@ impl Checker {
 
     fn validate_type(&self, ty: &TypeName, span: Span) -> Result<(), Diagnostic> {
         match ty {
-            TypeName::Custom(name) if !self.class_ids.contains_key(&name.canonical) => Err(
-                Diagnostic::new(format!("unknown type `{}`", name.spelling), span),
-            ),
+            TypeName::Custom(name)
+                if !self.class_ids.contains_key(&name.canonical)
+                    && self.schema.object(&name.spelling).is_err()
+                    && name.canonical != "sobject" =>
+            {
+                Err(Diagnostic::new(
+                    format!("unknown type `{}`", name.spelling),
+                    span,
+                ))
+            }
             TypeName::List(element) | TypeName::Set(element) => self.validate_type(element, span),
             TypeName::Map(key, value) => {
                 self.validate_type(key, span)?;
@@ -844,6 +872,9 @@ impl Checker {
             return true;
         }
         if *expected == TypeName::Exception && actual.is_exception() {
+            return true;
+        }
+        if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
             return true;
         }
         let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
@@ -1442,6 +1473,39 @@ impl Checker {
                 span,
             ));
         };
+        if let Some(object_id) = self.schema.object_index(&name.spelling) {
+            for argument in arguments {
+                self.expression_type(argument)?;
+            }
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!(
+                        "SObject constructor for `{}` expects no arguments",
+                        name.spelling
+                    ),
+                    arguments[0].span(),
+                ));
+            }
+            self.calls.insert(
+                span,
+                CallTarget::SObjectConstructor {
+                    object_id: Some(object_id),
+                },
+            );
+            return Ok(ExpressionType::Value(ty.clone()));
+        }
+        if name.canonical == "sobject" {
+            if arguments.len() != 1 {
+                return Err(Diagnostic::new(
+                    "dynamic SObject constructor expects one object API name",
+                    span,
+                ));
+            }
+            self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+            self.calls
+                .insert(span, CallTarget::SObjectConstructor { object_id: None });
+            return Ok(ExpressionType::Value(ty.clone()));
+        }
         let class_id = self.class_ids[&name.canonical];
         let class = &self.classes[class_id];
         if class.kind == ClassKind::Interface || class.modifiers.contains(&Modifier::Abstract) {
@@ -1559,6 +1623,62 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
+        let potential_sobject = match receiver {
+            Expression::Variable(identifier)
+                if self.lookup(&identifier.canonical).is_some()
+                    || self.current_class.is_some_and(|class_id| {
+                        self.class_value_member(class_id, &identifier.canonical)
+                            .is_some()
+                    }) =>
+            {
+                match self.expression_type(receiver)? {
+                    ExpressionType::Value(ty) => Some(ty),
+                    ExpressionType::Null | ExpressionType::Void => None,
+                }
+            }
+            Expression::Variable(_) => None,
+            _ => match self.expression_type(receiver)? {
+                ExpressionType::Value(ty) => Some(ty),
+                ExpressionType::Null | ExpressionType::Void => None,
+            },
+        };
+        if let Some(receiver_type) = potential_sobject
+            && (self.is_sobject_type(&receiver_type)
+                || self.is_dynamic_sobject_type(&receiver_type))
+        {
+            let Some(object_id) = self.sobject_object_id(&receiver_type) else {
+                return Err(Diagnostic::new(
+                    "dynamic SObject fields require get/put access",
+                    name.span,
+                ));
+            };
+            let object = self
+                .schema
+                .object_at(object_id)
+                .expect("schema object index is valid");
+            let field_id = object.field_index(&name.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown field `{}` on SObject `{}`",
+                        name.spelling,
+                        object.api_name()
+                    ),
+                    name.span,
+                )
+            })?;
+            let field = object
+                .field_at(field_id)
+                .expect("schema field index is valid");
+            let field_type = apex_field_type(field.data_type());
+            self.members.insert(
+                span,
+                MemberTarget::SObjectField {
+                    object_id,
+                    field_id,
+                },
+            );
+            return Ok(ExpressionType::Value(field_type));
+        }
         let (class_id, static_access) = if let Expression::Variable(identifier) = receiver {
             if let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
                 && (self
@@ -2121,6 +2241,42 @@ impl Checker {
         span: Span,
         super_call: bool,
     ) -> Result<ExpressionType, Diagnostic> {
+        if self.is_sobject_type(receiver_type) || self.is_dynamic_sobject_type(receiver_type) {
+            return match method.canonical.as_str() {
+                "get" => {
+                    require_arity(
+                        receiver_type,
+                        &method.spelling,
+                        arguments.len(),
+                        &[1],
+                        arguments,
+                    )?;
+                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+                    self.calls.insert(span, CallTarget::SObjectGet);
+                    Ok(ExpressionType::Value(TypeName::Object))
+                }
+                "put" => {
+                    require_arity(
+                        receiver_type,
+                        &method.spelling,
+                        arguments.len(),
+                        &[2],
+                        arguments,
+                    )?;
+                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+                    let value_type = self.expression_type(&arguments[1])?;
+                    if value_type == ExpressionType::Void {
+                        return Err(Diagnostic::new(
+                            "SObject.put value cannot be void",
+                            arguments[1].span(),
+                        ));
+                    }
+                    self.calls.insert(span, CallTarget::SObjectPut);
+                    Ok(ExpressionType::Void)
+                }
+                _ => Err(unknown_method(receiver_type, method)),
+            };
+        }
         let (intrinsic, result) = match receiver_type {
             TypeName::List(element) => {
                 self.list_method_type(receiver_type, element, method, arguments)?
@@ -2159,6 +2315,21 @@ impl Checker {
         };
         self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
         Ok(result)
+    }
+
+    fn is_sobject_type(&self, ty: &TypeName) -> bool {
+        matches!(ty, TypeName::Custom(name) if self.schema.object(&name.spelling).is_ok())
+    }
+
+    fn is_dynamic_sobject_type(&self, ty: &TypeName) -> bool {
+        matches!(ty, TypeName::Custom(name) if name.canonical == "sobject")
+    }
+
+    fn sobject_object_id(&self, ty: &TypeName) -> Option<usize> {
+        let TypeName::Custom(name) = ty else {
+            return None;
+        };
+        self.schema.object_index(&name.spelling)
     }
 
     fn select_class_method_call(
@@ -2612,6 +2783,14 @@ fn unknown_variable(identifier: &Identifier) -> Diagnostic {
         format!("unknown variable `{}`", identifier.spelling),
         identifier.span,
     )
+}
+
+fn apex_field_type(field_type: &FieldType) -> TypeName {
+    match field_type {
+        FieldType::Boolean => TypeName::Boolean,
+        FieldType::Integer => TypeName::Integer,
+        FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+    }
 }
 
 #[cfg(test)]

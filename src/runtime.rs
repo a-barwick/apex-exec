@@ -6,6 +6,7 @@ use crate::{
     },
     diagnostic::Diagnostic,
     hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
+    platform::FieldType,
     span::Span,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -44,6 +45,9 @@ struct CollectionId(usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ObjectId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SObjectId(usize);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Value {
     String(String),
@@ -51,6 +55,7 @@ enum Value {
     Integer(i64),
     Collection(CollectionId),
     Object(ObjectId),
+    SObject(SObjectId),
     Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
@@ -91,6 +96,12 @@ struct Slot {
 struct ObjectInstance {
     class_id: usize,
     fields: HashMap<ClassMemberId, Slot>,
+}
+
+#[derive(Clone, Debug)]
+struct SObjectInstance {
+    object_id: usize,
+    fields: BTreeMap<usize, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -733,7 +744,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         "intrinsic target attached to a function call",
                         *span,
                     )),
-                    CallTarget::Constructor { .. } => Err(Diagnostic::new(
+                    CallTarget::Constructor { .. }
+                    | CallTarget::SObjectConstructor { .. }
+                    | CallTarget::SObjectGet
+                    | CallTarget::SObjectPut => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -783,9 +797,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         })?;
                         self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
                     }
-                    Some(CallTarget::TopLevelMethod(_) | CallTarget::Constructor { .. }) => Err(
-                        Diagnostic::new("invalid checked target for member call", *span),
-                    ),
+                    Some(CallTarget::SObjectGet) => {
+                        self.evaluate_sobject_get(receiver, arguments, *span)
+                    }
+                    Some(CallTarget::SObjectPut) => {
+                        self.evaluate_sobject_put(receiver, arguments, *span)
+                    }
+                    Some(
+                        CallTarget::TopLevelMethod(_)
+                        | CallTarget::Constructor { .. }
+                        | CallTarget::SObjectConstructor { .. },
+                    ) => Err(Diagnostic::new(
+                        "invalid checked target for member call",
+                        *span,
+                    )),
                     None => Err(Diagnostic::new(
                         "unresolved method call escaped semantic validation",
                         method.span,
@@ -871,7 +896,179 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 self.read_class_member(target, Some(receiver), span)
             }
+            MemberTarget::SObjectField {
+                object_id,
+                field_id,
+            } => {
+                let receiver = self.evaluate_sobject_receiver(receiver)?;
+                self.read_sobject_field(receiver, object_id, field_id, span)
+            }
         }
+    }
+
+    fn evaluate_sobject_get(
+        &mut self,
+        receiver: &Expression,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [field_name] = arguments else {
+            return Err(Diagnostic::new("invalid checked SObject.get call", span));
+        };
+        let receiver = self.evaluate_sobject_receiver(receiver)?;
+        let field_name = match self.evaluate(field_name)? {
+            Value::String(value) => value,
+            Value::Null(_) => {
+                return Err(runtime_exception(
+                    "IllegalArgumentException",
+                    "SObject field name cannot be null",
+                    field_name.span(),
+                ));
+            }
+            _ => return Err(invalid_runtime_operands(field_name.span())),
+        };
+        let object_id = self.store.sobject(receiver).object_id;
+        let object = self
+            .program()
+            .schema()
+            .object_at(object_id)
+            .expect("runtime SObject schema index is valid");
+        let field_id = object.field_index(&field_name).ok_or_else(|| {
+            runtime_exception(
+                "IllegalArgumentException",
+                format!(
+                    "unknown field `{}` on SObject `{}`",
+                    field_name,
+                    object.api_name()
+                ),
+                span,
+            )
+        })?;
+        self.read_sobject_field(receiver, object_id, field_id, span)
+    }
+
+    fn evaluate_sobject_put(
+        &mut self,
+        receiver: &Expression,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [field_name, value] = arguments else {
+            return Err(Diagnostic::new("invalid checked SObject.put call", span));
+        };
+        let receiver = self.evaluate_sobject_receiver(receiver)?;
+        let field_name_value = self.evaluate(field_name)?;
+        let value = self.evaluate(value)?;
+        let Value::String(field_name) = field_name_value else {
+            return Err(runtime_exception(
+                "IllegalArgumentException",
+                "SObject field name must be a non-null String",
+                field_name.span(),
+            ));
+        };
+        let object_id = self.store.sobject(receiver).object_id;
+        let object = self
+            .program()
+            .schema()
+            .object_at(object_id)
+            .expect("runtime SObject schema index is valid");
+        let field_id = object.field_index(&field_name).ok_or_else(|| {
+            runtime_exception(
+                "IllegalArgumentException",
+                format!(
+                    "unknown field `{}` on SObject `{}`",
+                    field_name,
+                    object.api_name()
+                ),
+                span,
+            )
+        })?;
+        self.write_sobject_field(receiver, object_id, field_id, value, span)?;
+        Ok(Value::Void)
+    }
+
+    fn evaluate_sobject_receiver(
+        &mut self,
+        receiver: &Expression,
+    ) -> Result<SObjectId, Diagnostic> {
+        match self.evaluate(receiver)? {
+            Value::SObject(receiver) => Ok(receiver),
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "SObject receiver is null",
+                receiver.span(),
+            )),
+            _ => Err(invalid_runtime_operands(receiver.span())),
+        }
+    }
+
+    fn read_sobject_field(
+        &self,
+        receiver: SObjectId,
+        object_id: usize,
+        field_id: usize,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let instance = self.store.sobject(receiver);
+        if instance.object_id != object_id {
+            return Err(Diagnostic::new(
+                "SObject field target does not match runtime object type",
+                span,
+            ));
+        }
+        let field = self
+            .program()
+            .schema()
+            .object_at(object_id)
+            .and_then(|object| object.field_at(field_id))
+            .expect("checked SObject field index is valid");
+        Ok(instance
+            .fields
+            .get(&field_id)
+            .cloned()
+            .unwrap_or_else(|| Value::Null(Some(apex_field_type(field.data_type())))))
+    }
+
+    fn write_sobject_field(
+        &mut self,
+        receiver: SObjectId,
+        object_id: usize,
+        field_id: usize,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let instance_object = self.store.sobject(receiver).object_id;
+        if instance_object != object_id {
+            return Err(Diagnostic::new(
+                "SObject field target does not match runtime object type",
+                span,
+            ));
+        }
+        let field = self
+            .program()
+            .schema()
+            .object_at(object_id)
+            .and_then(|object| object.field_at(field_id))
+            .expect("checked SObject field index is valid");
+        let field_type = apex_field_type(field.data_type());
+        if !self.value_has_type(&value, &field_type) {
+            return Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "field `{}` expects {}, found {}",
+                    field.api_name(),
+                    field_type.apex_name(),
+                    self.value_type_name(&value)
+                ),
+                span,
+            ));
+        }
+        let value = typed_value(value, &field_type);
+        self.store
+            .sobject_mut(receiver)
+            .fields
+            .insert(field_id, value.clone());
+        Ok(value)
     }
 
     fn read_class_member(
@@ -1004,13 +1201,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        let target = self
+            .program()
+            .call_target(span)
+            .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?;
+        if let CallTarget::SObjectConstructor { object_id } = target {
+            let object_id = if let Some(object_id) = object_id {
+                if !arguments.is_empty() {
+                    return Err(Diagnostic::new(
+                        "typed SObject constructor received unexpected arguments",
+                        span,
+                    ));
+                }
+                object_id
+            } else {
+                let [object_name] = arguments else {
+                    return Err(Diagnostic::new(
+                        "dynamic SObject constructor requires one API name",
+                        span,
+                    ));
+                };
+                let Value::String(object_name) = self.evaluate(object_name)? else {
+                    return Err(invalid_runtime_operands(object_name.span()));
+                };
+                self.program()
+                    .schema()
+                    .object_index(&object_name)
+                    .ok_or_else(|| {
+                        runtime_exception(
+                            "IllegalArgumentException",
+                            format!("unknown SObject `{object_name}`"),
+                            span,
+                        )
+                    })?
+            };
+            return Ok(self.store.allocate_sobject(object_id));
+        }
         let CallTarget::Constructor {
             class_id,
             member_id,
-        } = self
-            .program()
-            .call_target(span)
-            .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?
+        } = target
         else {
             return Err(Diagnostic::new("invalid constructor target", span));
         };
@@ -1519,6 +1749,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             _ => return Err(invalid_runtime_operands(receiver.span())),
                         };
                         self.write_class_member(target, Some(receiver), value, *span)
+                    }
+                    MemberTarget::SObjectField {
+                        object_id,
+                        field_id,
+                    } => {
+                        let receiver = self.evaluate_sobject_receiver(receiver)?;
+                        self.write_sobject_field(receiver, object_id, field_id, value, *span)
                     }
                 }
             }
@@ -2073,6 +2310,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             operator_span,
                         )
                     }
+                    MemberTarget::SObjectField {
+                        object_id,
+                        field_id,
+                    } => {
+                        let receiver = self.evaluate_sobject_receiver(receiver)?;
+                        let old = match self.read_sobject_field(
+                            receiver,
+                            object_id,
+                            field_id,
+                            operator_span,
+                        )? {
+                            Value::Integer(value) => value,
+                            Value::Null(_) => {
+                                return Err(runtime_exception(
+                                    "NullPointerException",
+                                    "increment/decrement requires a non-null Integer value",
+                                    operator_span,
+                                ));
+                            }
+                            _ => return Err(invalid_runtime_operands(operator_span)),
+                        };
+                        let new = old
+                            .checked_add(delta)
+                            .ok_or_else(|| integer_overflow(operator_span))?;
+                        self.write_sobject_field(
+                            receiver,
+                            object_id,
+                            field_id,
+                            Value::Integer(new),
+                            operator_span,
+                        )?;
+                        Ok(Value::Integer(if return_old { old } else { new }))
+                    }
                 }
             }
             Expression::Index {
@@ -2231,6 +2501,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.collections_equal(*left, *right)
             }
             (Value::Object(left), Value::Object(right)) => left == right,
+            (Value::SObject(left), Value::SObject(right)) => left == right,
             (Value::Exception(left), Value::Exception(right)) => left == right,
             (Value::Null(_), Value::Null(_)) => true,
             (Value::Void, Value::Void) => true,
@@ -2331,6 +2602,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     id.0
                 )
             }
+            Value::SObject(id) => {
+                let instance = self.store.sobject(*id);
+                let object = self
+                    .program()
+                    .schema()
+                    .object_at(instance.object_id)
+                    .expect("runtime SObject schema index is valid");
+                let fields = instance
+                    .fields
+                    .iter()
+                    .map(|(field_id, value)| {
+                        let field = object
+                            .field_at(*field_id)
+                            .expect("runtime SObject field index is valid");
+                        format!("{}={}", field.api_name(), self.display_value(value))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}:{{{fields}}}", object.api_name())
+            }
             Value::Exception(exception) => {
                 let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
                 if exception.message.is_empty() {
@@ -2403,6 +2694,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
                 })
             }
+            Value::SObject(id) => {
+                let TypeName::Custom(target) = target else {
+                    return false;
+                };
+                let actual = self
+                    .program()
+                    .schema()
+                    .object_at(self.store.sobject(*id).object_id)
+                    .expect("runtime SObject schema index is valid");
+                target.canonical == "sobject"
+                    || actual.api_name().eq_ignore_ascii_case(&target.spelling)
+            }
             Value::Exception(exception) => {
                 matches!(target, TypeName::Exception)
                     || exception.exception_type.as_deref() == Some(target.apex_name().as_str())
@@ -2422,6 +2725,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .name
                 .spelling
                 .clone(),
+            Value::SObject(id) => self
+                .program()
+                .schema()
+                .object_at(self.store.sobject(*id).object_id)
+                .expect("runtime SObject schema index is valid")
+                .api_name()
+                .to_owned(),
             Value::Exception(exception) => exception
                 .exception_type
                 .clone()
@@ -2543,6 +2853,14 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
     match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
         value => value,
+    }
+}
+
+fn apex_field_type(field_type: &FieldType) -> TypeName {
+    match field_type {
+        FieldType::Boolean => TypeName::Boolean,
+        FieldType::Integer => TypeName::Integer,
+        FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
     }
 }
 

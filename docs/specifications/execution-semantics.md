@@ -6,8 +6,9 @@ Primitive expressions, lexical scopes, control flow, mutable collections, and
 the fixed M3 built-in call surface are implemented. M4 adds user-defined calls,
 recursion, exception unwinding, runtime casts, and source call stacks. M5 adds
 object/static storage, constructors, properties, inheritance, virtual dispatch,
-and cross-file class execution. Debug output now crosses a platform host;
-Apex database transactions and SObject execution remain later M7/M8 work.
+and cross-file class execution. Debug output crosses a platform host. M7 adds
+schema-backed SObject execution and transactional SQLite storage; Apex
+query/DML syntax remains M8 work.
 
 ## Program execution
 
@@ -82,6 +83,22 @@ concrete override on the runtime object's class. `super` calls bypass virtual
 dispatch and execute the checked base target. User-object equality is identity
 equality. Deterministic debug text uses a local `ClassName@id` shape and is not
 claimed to match Salesforce formatting.
+
+## SObjects
+
+**Implemented for M7, simplified.** Metadata-aware project compilation treats
+imported custom-object API names as concrete SObject types. Construction
+allocates mutable reference identity. Direct fields resolve to checked schema
+indices and retain Boolean, Integer, or String-shaped static types; reads of
+unset fields return a typed null. Typed SObjects widen to the `SObject` root.
+
+`new SObject(apiName)` resolves a dynamic type at runtime. `get(String)` and
+`put(String,Object)` perform case-insensitive schema lookup and raise
+`IllegalArgumentException` for unknown objects or fields. Dynamic writes
+validate the runtime value against the normalized field kind. SObject equality
+is identity equality. Deterministic debug text contains the object API name and
+assigned fields. Field mutation remains in memory until M8 DML explicitly
+crosses the storage boundary.
 
 ## Collections
 
@@ -200,15 +217,17 @@ classes are not yet claimed.
 ## Platform effects
 
 **Partially implemented.** Debug events cross the replaceable `PlatformHost`.
-Normalized schema and transactional storage exist as standalone platform
-contracts but are not yet wired into Apex expressions. Database access, time,
-IDs, randomness, async scheduling, callouts, and user context still require
-deterministic host services that tests can replace or control.
+Normalized schema is wired into checked HIR and in-memory SObject execution.
+SQLite implements the standalone transactional storage contract. Apex DML does
+not yet connect interpreter values to that adapter. Time, randomness, async
+scheduling, callouts, and user context still require deterministic host
+services that tests can replace or control.
 
 ## Transactions
 
-**Foundation only for M7.** `platform::storage` defines storage-neutral
-begin/read/write/delete/commit/rollback contracts, but no SQLite adapter or Apex
-DML integration exists. M7 must add the SQLite adapter, isolated test data, and
-fast reset. M8–M9 must make DML and triggers execute inside a transaction and
-roll back unhandled failures.
+**Implemented below DML for M7.** `platform::storage` defines storage-neutral
+begin/read/write/delete/commit/rollback plus named-savepoint contracts.
+`SqliteStorage` migrates normalized object tables, performs CRUD, replaces
+fixtures transactionally, and resets all record data without rebuilding schema.
+M8–M9 must place Apex DML and triggers inside these transactions and roll back
+unhandled failures.

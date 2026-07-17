@@ -54,6 +54,8 @@ conformance harness is a later milestone.
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
 | Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
+| Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
+| Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
@@ -187,14 +189,45 @@ Project tests are discovered and sorted case-insensitively by `Class.method`.
 Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
 interpreter. A bounded worker pool can therefore run tests in parallel without
-sharing static fields, object/collection identity, default recording-host
-output, or runtime stacks. This models deterministic isolation before M7 adds
-database transactions and setup snapshots.
+sharing static fields, object/collection/SObject identity, default
+recording-host output, or runtime stacks. M7 supplies isolated database
+transactions; connecting setup execution to storage snapshots remains M8
+test-runner integration.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of
 `if`, `while`, `do`/`while`, and condition-bearing `for` branches. These counts
 are deterministic local coverage, not Salesforce-exact coverage accounting.
+
+## M7 SObject schema and SQLite
+
+Project compilation imports custom-object metadata from SFDX package
+directories. Decomposed `.object-meta.xml`/`.field-meta.xml` layouts and
+monolithic `.object` files normalize into one case-insensitive catalog.
+Supported field kinds are Checkbox, zero-scale Number, common String-shaped
+types, Id, Lookup, and MasterDetail. Every imported object receives an Id field;
+custom name-field metadata adds Name. Unsupported types and nonzero Number
+scales fail explicitly.
+
+Imported custom-object API names are valid Apex types in project compilation.
+They support zero-argument construction and statically checked field reads,
+writes, and integer increment/decrement. A typed custom object widens to the
+dynamic `SObject` root, whose `get` and `put` methods validate object and field
+names at runtime. SObjects have mutable reference identity and deterministic
+debug formatting. Id and relationship fields currently surface as `String` in
+Apex; the storage layer retains validated `RecordId` values.
+
+`RecordId` validates 15- or 18-character ASCII-alphanumeric Salesforce ID
+shapes, verifies 18-character case checksums, and deterministically generates
+18-character IDs from an object key prefix and sequence.
+
+The SQLite adapter creates one physical table per normalized object plus schema
+registry tables. Migrations add new objects and fields while preserving data;
+incompatible changes to existing prefixes, types, nullability, or relationship
+targets fail explicitly. Storage supports unconditional create/update, read,
+delete, commit, rollback, named savepoints, fixture replacement, and fast
+record reset. DML validation, automatic interpreter persistence, query
+semantics, and triggers remain above this boundary in M8–M9.
 
 ## Platform surface
 
@@ -202,8 +235,10 @@ are deterministic local coverage, not Salesforce-exact coverage accounting.
 |---|---|---|
 | SFDX project loading | Implemented (simplified) | M5 |
 | Apex unit tests | Implemented (simplified) | M6 |
-| SObject schema | Foundation only (normalized catalog/provider; no metadata import) | M7 |
-| SQLite storage | Planned (storage-neutral transaction contract exists; no adapter) | M7 |
+| SObject schema | Implemented (simplified metadata importer and catalog) | M7 |
+| Typed/dynamic SObjects | Implemented (in-memory field access; no DML) | M7 |
+| Salesforce-shaped IDs | Implemented (validation, checksum, deterministic generation) | M7 |
+| SQLite storage | Implemented (additive migration, CRUD, transactions, savepoints, fixtures/reset) | M7 |
 | DML | Planned | M8 |
 | SOQL | Planned | M8 |
 | SOSL | Planned | M8 |
@@ -233,13 +268,16 @@ are deterministic local coverage, not Salesforce-exact coverage accounting.
 - Unsupported annotations and invalid test/setup signatures are rejected
   before discovery; runtime and assertion failures become structured test
   failures without aborting the remaining suite.
+- Unknown metadata objects/fields, incompatible custom-field assignments,
+  unsupported metadata types, invalid dynamic SObject access, invalid IDs, and
+  incompatible SQLite migrations fail explicitly at their owning boundary.
 - Diagnostics are generated by Apex Exec and are not required to reproduce
   Salesforce's exact wording.
 - `tests/north_star/` contains pinned real-world complexity indicators. Their
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M6 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+At M7 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
 lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
 ordinary members until unsupported `instanceof`; the remaining first blockers
 are safe navigation, null coalescing, ternary syntax, and bitwise operators.

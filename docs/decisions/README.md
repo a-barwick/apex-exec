@@ -40,3 +40,4 @@ history.
 - [0008 — Isolate test execution by interpreter](0008-isolated-test-execution-and-coverage.md)
 - [0009 — Give every source unit an explicit identity](0009-file-aware-source-identity.md)
 - [0010 — Keep normalized schema independent from record storage](0010-separate-schema-from-storage.md)
+- [0011 — Use an additive SQLite schema registry](0011-additive-sqlite-schema-registry.md)

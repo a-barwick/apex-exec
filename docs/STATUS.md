@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M7 — SObject schema and SQLite
+M8 — SOQL, SOSL, and DML
 
 ## Completed
 
@@ -107,32 +107,43 @@ M7 — SObject schema and SQLite
   transactional record interfaces establish the M7 schema/storage boundary
 - Project discovery, dependency analysis, and diagnostic mapping are isolated
   modules; callers can inspect typed project error categories
+- Decomposed and monolithic SFDX custom-object metadata import into the
+  case-insensitive normalized schema catalog, including standard Id/Name,
+  Boolean, integer Number, String-shaped, and relationship fields
+- Schema-backed custom object names, constructors, statically typed field
+  access, dynamic `SObject` construction, and case-insensitive `get`/`put`
+  execution in ordinary SFDX projects
+- Deterministic Salesforce-shaped 18-character record ID generation plus
+  15/18-character validation and checksum verification
+- SQLite schema generation and additive migration with explicit rejection of
+  incompatible key-prefix or field-definition changes
+- SQLite-backed create/read/update/delete, transactions, named savepoints,
+  rollback, fixture replacement, and fast data reset behind the
+  storage-neutral platform contract
+- A complete M7 example project whose imported `Invoice__c` metadata compiles
+  and executes through both typed and dynamic SObject access
 
 ## Immediate target
 
-Implement M7 SObject schema and SQLite on the isolated project/test runtime
-established in M6.
-
-The normalized schema, storage transaction, and platform host seams are now in
-place. The next slice should populate them from real SFDX metadata and provide
-the first SQLite adapter rather than adding storage behavior to the compiler or
-interpreter directly.
+Implement M8 SOQL, SOSL, and DML against the normalized schema and SQLite
+transaction kernel completed in M7.
 
 Recommended implementation order:
 
-1. Import custom object and field metadata from ordinary SFDX projects into the
-   normalized schema catalog.
-2. Generate and migrate a local SQLite schema from that storage-independent
-   catalog.
-3. Add typed and dynamic SObject values, Salesforce-shaped IDs, and field
-   access.
-4. Add isolated transactions, savepoints, rollback, and fast test reset.
-5. Add executable schema/data fixtures without coupling semantic analysis to
-   SQLite.
+1. Add dedicated SOQL grammar nodes without treating queries as ordinary Apex
+   expressions.
+2. Validate static object/field references and bind expressions against the M7
+   schema catalog.
+3. Lower common filters, ordering, limits, aggregates, and relationship queries
+   onto the SQLite adapter.
+4. Add Apex DML statements and common `Database` methods above the
+   unconditional M7 record-storage operations.
+5. Emit structured query/DML traces and connect test setup snapshots to the
+   database transaction host.
 
 ## North Star indicators
 
-At M6 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M7 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -175,24 +186,36 @@ compatibility percentages.
   source identities. A changed unit computes dependency invalidation and reuses
   unchanged parsed ASTs, while the cross-file semantic link currently reruns
   project-wide.
-- The normalized schema catalog and transaction traits are architectural M7
-  foundations only. Custom metadata import, SQLite persistence, SObject runtime
-  values, Salesforce-shaped ID validation/generation, and DML remain pending.
+- Custom metadata import supports Checkbox, zero-scale Number, common
+  String-shaped fields, Id, Lookup, and MasterDetail. Decimal Number, date/time,
+  geolocation, address, calculated fields, and the broader metadata surface are
+  rejected explicitly.
+- SQLite migrations are additive. Removing/renaming physical columns and
+  changing an existing field type, nullability, relationship target, or key
+  prefix require an explicit future migration policy.
+- Typed custom-object field access is available in metadata-aware project
+  compilation. Id and relationship fields currently appear as `String` in
+  Apex execution while the storage boundary uses validated `RecordId` values;
+  the dedicated Apex `Id` type remains M10 work.
+- Dynamic `SObject.get`/`put` and typed field access execute in memory.
+  SOQL, SOSL, Apex DML statements, `Database` methods, and automatic persistence
+  of interpreter SObjects begin in M8.
 - Nested types, enums, annotations other than `@IsTest`/`@TestSetup`, explicit
   superclass-constructor calls, custom exception classes, and Salesforce-exact
   object string formatting are not implemented.
 - Sharing modifiers are parsed for structural progress but rejected during
   checking because sharing/security semantics remain deferred.
 - Test setup methods run before every isolated test interpreter. This provides
-  deterministic state today; Salesforce's one-time setup transaction followed
-  by database snapshots requires the M7 data host.
+  deterministic language state today; connecting Salesforce's one-time setup
+  transaction and database snapshot behavior to the M7 storage host is M8 test
+  runner work.
 - Test discovery supports annotation-based static void methods only. Legacy
   `testMethod`, the newer `Assert` class, `Test.startTest`/`stopTest`, and
   org-backed `SeeAllData=true` remain unsupported.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
   claim of Salesforce-exact coverage accounting.
-- SOQL, SOSL, DML, and SObjects are not implemented.
+- SOQL, SOSL, and DML are not implemented.
 
 ## Handoff checklist
 

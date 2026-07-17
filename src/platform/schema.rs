@@ -49,19 +49,41 @@ impl FieldSchema {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectSchema {
     api_name: String,
+    key_prefix: String,
     fields: BTreeMap<String, FieldSchema>,
 }
 
 impl ObjectSchema {
     pub fn new(api_name: impl Into<String>) -> Self {
+        let api_name = api_name.into();
+        let key_prefix = deterministic_key_prefix(&api_name);
         Self {
-            api_name: api_name.into(),
+            api_name,
+            key_prefix,
             fields: BTreeMap::new(),
         }
     }
 
+    pub fn with_key_prefix(
+        api_name: impl Into<String>,
+        key_prefix: impl Into<String>,
+    ) -> Result<Self, SchemaError> {
+        let api_name = api_name.into();
+        let key_prefix = key_prefix.into();
+        validate_key_prefix(&api_name, &key_prefix)?;
+        Ok(Self {
+            api_name,
+            key_prefix,
+            fields: BTreeMap::new(),
+        })
+    }
+
     pub fn api_name(&self) -> &str {
         &self.api_name
+    }
+
+    pub fn key_prefix(&self) -> &str {
+        &self.key_prefix
     }
 
     pub fn insert_field(&mut self, field: FieldSchema) -> Result<(), SchemaError> {
@@ -87,6 +109,15 @@ impl ObjectSchema {
 
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &FieldSchema> {
         self.fields.values()
+    }
+
+    pub fn field_index(&self, api_name: &str) -> Option<usize> {
+        let canonical = canonical_name(api_name);
+        self.fields.keys().position(|name| name == &canonical)
+    }
+
+    pub fn field_at(&self, index: usize) -> Option<&FieldSchema> {
+        self.fields.values().nth(index)
     }
 }
 
@@ -118,6 +149,17 @@ impl SchemaCatalog {
                 object: object.api_name().to_owned(),
             });
         }
+        if let Some(existing) = self
+            .objects
+            .values()
+            .find(|existing| existing.key_prefix() == object.key_prefix())
+        {
+            return Err(SchemaError::DuplicateKeyPrefix {
+                prefix: object.key_prefix().to_owned(),
+                first_object: existing.api_name().to_owned(),
+                object: object.api_name().to_owned(),
+            });
+        }
         self.objects.insert(canonical, object);
         Ok(())
     }
@@ -140,6 +182,15 @@ impl SchemaCatalog {
 
     pub fn objects(&self) -> impl ExactSizeIterator<Item = &ObjectSchema> {
         self.objects.values()
+    }
+
+    pub fn object_index(&self, api_name: &str) -> Option<usize> {
+        let canonical = canonical_name(api_name);
+        self.objects.keys().position(|name| name == &canonical)
+    }
+
+    pub fn object_at(&self, index: usize) -> Option<&ObjectSchema> {
+        self.objects.values().nth(index)
     }
 }
 
@@ -166,10 +217,29 @@ impl SchemaProvider for SchemaCatalog {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SchemaError {
-    DuplicateObject { object: String },
-    UnknownObject { object: String },
-    DuplicateField { object: String, field: String },
-    UnknownField { object: String, field: String },
+    DuplicateObject {
+        object: String,
+    },
+    UnknownObject {
+        object: String,
+    },
+    DuplicateField {
+        object: String,
+        field: String,
+    },
+    UnknownField {
+        object: String,
+        field: String,
+    },
+    InvalidKeyPrefix {
+        object: String,
+        prefix: String,
+    },
+    DuplicateKeyPrefix {
+        prefix: String,
+        first_object: String,
+        object: String,
+    },
 }
 
 impl fmt::Display for SchemaError {
@@ -185,6 +255,18 @@ impl fmt::Display for SchemaError {
             Self::UnknownField { object, field } => {
                 write!(formatter, "unknown field `{field}` on SObject `{object}`")
             }
+            Self::InvalidKeyPrefix { object, prefix } => write!(
+                formatter,
+                "SObject `{object}` has invalid key prefix `{prefix}`; expected three ASCII alphanumeric characters"
+            ),
+            Self::DuplicateKeyPrefix {
+                prefix,
+                first_object,
+                object,
+            } => write!(
+                formatter,
+                "SObject key prefix `{prefix}` is shared by `{first_object}` and `{object}`"
+            ),
         }
     }
 }
@@ -193,6 +275,31 @@ impl Error for SchemaError {}
 
 fn canonical_name(name: &str) -> String {
     name.to_ascii_lowercase()
+}
+
+fn validate_key_prefix(object: &str, prefix: &str) -> Result<(), SchemaError> {
+    if prefix.len() == 3 && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        Ok(())
+    } else {
+        Err(SchemaError::InvalidKeyPrefix {
+            object: object.to_owned(),
+            prefix: prefix.to_owned(),
+        })
+    }
+}
+
+fn deterministic_key_prefix(api_name: &str) -> String {
+    const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let hash = api_name.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0193)
+    });
+    let mut value = usize::try_from(hash).expect("u32 fits usize on supported targets");
+    let mut prefix = String::with_capacity(3);
+    for _ in 0..3 {
+        prefix.push(char::from(ALPHABET[value % ALPHABET.len()]));
+        value /= ALPHABET.len();
+    }
+    prefix
 }
 
 #[cfg(test)]
@@ -216,6 +323,7 @@ mod tests {
 
         let account = catalog.object("aCcOuNt").unwrap();
         assert_eq!(account.api_name(), "Account");
+        assert_eq!(account.key_prefix().len(), 3);
         let name = catalog.field("ACCOUNT", "name").unwrap();
         assert_eq!(name.api_name(), "Name");
         assert_eq!(name.data_type(), &FieldType::String);
@@ -277,5 +385,40 @@ mod tests {
 
         let catalog = SchemaCatalog::from_objects([account_schema()]).unwrap();
         assert_eq!(resolve_name(&catalog).api_name(), "Name");
+    }
+
+    #[test]
+    fn explicit_key_prefixes_are_validated() {
+        assert_eq!(
+            ObjectSchema::with_key_prefix("Account", "01").unwrap_err(),
+            SchemaError::InvalidKeyPrefix {
+                object: "Account".to_owned(),
+                prefix: "01".to_owned(),
+            }
+        );
+        assert_eq!(
+            ObjectSchema::with_key_prefix("Account", "001")
+                .unwrap()
+                .key_prefix(),
+            "001"
+        );
+    }
+
+    #[test]
+    fn duplicate_key_prefixes_are_rejected() {
+        let mut catalog = SchemaCatalog::new();
+        catalog
+            .insert_object(ObjectSchema::with_key_prefix("First__c", "a01").unwrap())
+            .unwrap();
+        assert_eq!(
+            catalog
+                .insert_object(ObjectSchema::with_key_prefix("Second__c", "a01").unwrap())
+                .unwrap_err(),
+            SchemaError::DuplicateKeyPrefix {
+                prefix: "a01".to_owned(),
+                first_object: "First__c".to_owned(),
+                object: "Second__c".to_owned(),
+            }
+        );
     }
 }
