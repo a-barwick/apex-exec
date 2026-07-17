@@ -145,8 +145,8 @@ fn statement_completions(statement: &Statement) -> Completions {
             }
             result
         }
-        Statement::VariableDeclaration { .. } | Statement::Expression { .. } => {
-            Completions::normal()
-        }
+        Statement::VariableDeclaration { .. }
+        | Statement::Expression { .. }
+        | Statement::Dml { .. } => Completions::normal(),
     }
 }

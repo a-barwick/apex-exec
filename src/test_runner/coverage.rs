@@ -195,6 +195,7 @@ fn visit_statement(
         | Statement::Break { .. }
         | Statement::Continue { .. }
         | Statement::Throw { .. }
-        | Statement::Return { .. } => {}
+        | Statement::Return { .. }
+        | Statement::Dml { .. } => {}
     }
 }

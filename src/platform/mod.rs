@@ -9,12 +9,18 @@
 //! and the SQLite adapter consume the contracts without leaking database types
 //! into compiler-facing schema APIs.
 
+mod database;
 pub mod metadata;
 pub mod schema;
 pub mod sobject;
 pub mod sqlite;
 pub mod storage;
 
+pub use database::{
+    AggregateFunction, DatabaseError, DmlOperation, LocalDatabase, NullOrder, QueryComparison,
+    QueryCondition, QueryField, QueryInValues, QueryLogical, QueryOrder, QueryOutcome, QueryRecord,
+    QueryRelationship, QuerySelect, SoqlRequest, SortOrder, SoslRequest, SoslReturningRequest,
+};
 pub use metadata::{MetadataError, import_metadata};
 pub use schema::{
     FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider,

@@ -1,0 +1,8 @@
+<CustomObject>
+    <label>Customer</label>
+    <pluralLabel>Customers</pluralLabel>
+    <nameField>
+        <label>Customer Name</label>
+        <type>Text</type>
+    </nameField>
+</CustomObject>

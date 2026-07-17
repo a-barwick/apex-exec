@@ -15,6 +15,7 @@ use std::collections::HashMap;
 mod flow;
 mod intrinsics;
 mod overload;
+mod queries;
 
 use flow::statement_definitely_returns_or_throws;
 use intrinsics::{require_arity, unknown_method};
@@ -73,6 +74,7 @@ struct Checker {
     calls: HashMap<Span, CallTarget>,
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
+    queries: HashMap<Span, hir::CheckedQuery>,
     classes: Vec<ClassDeclaration>,
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
@@ -91,6 +93,7 @@ impl Checker {
             calls: HashMap::new(),
             references: HashMap::new(),
             members: HashMap::new(),
+            queries: HashMap::new(),
             classes: Vec::new(),
             class_ids: HashMap::new(),
             current_class: None,
@@ -118,6 +121,7 @@ impl Checker {
             self.calls,
             self.references,
             self.members,
+            self.queries,
             self.schema,
         ))
     }
@@ -305,7 +309,8 @@ impl Checker {
                         self.validate_type(&field.ty, field.name.span)?;
                         self.current_static = field.modifiers.contains(&Modifier::Static);
                         if let Some(initializer) = &field.initializer {
-                            let actual = self.expression_type(initializer)?;
+                            let actual =
+                                self.expression_type_for_expected(initializer, &field.ty)?;
                             self.require_assignable(&field.ty, &actual, initializer.span())?;
                         }
                     }
@@ -1095,7 +1100,7 @@ impl Checker {
                         name.span,
                     ));
                 }
-                let initializer_type = self.expression_type(initializer)?;
+                let initializer_type = self.expression_type_for_expected(initializer, ty)?;
                 self.require_assignable(ty, &initializer_type, initializer.span())?;
                 self.current_scope_mut()
                     .insert(name.canonical.clone(), ty.clone());
@@ -1242,6 +1247,7 @@ impl Checker {
                     ))
                 }
             }
+            Statement::Dml { value, .. } => self.check_dml_value(value),
             Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
         }
     }
@@ -1299,7 +1305,7 @@ impl Checker {
                 return_span,
             )),
             (Some(ReturnType::Value(expected)), Some(value)) => {
-                let actual = self.expression_type(value)?;
+                let actual = self.expression_type_for_expected(value, &expected)?;
                 if self.is_assignable(&expected, &actual) {
                     Ok(())
                 } else {
@@ -1322,6 +1328,18 @@ impl Checker {
         Ok(ty)
     }
 
+    fn expression_type_for_expected(
+        &mut self,
+        expression: &Expression,
+        expected: &TypeName,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if let Expression::Soql(query) = expression {
+            self.soql_type(query, Some(expected))
+        } else {
+            self.expression_type(expression)
+        }
+    }
+
     fn expression_type_inner(
         &mut self,
         expression: &Expression,
@@ -1331,10 +1349,12 @@ impl Checker {
             Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
             Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
             Expression::NullLiteral(..) => Ok(ExpressionType::Null),
+            Expression::Soql(query) => self.soql_type(query, None),
+            Expression::Sosl(query) => self.sosl_type(query),
             Expression::Variable(identifier) => self.variable_type(identifier),
             Expression::Assignment { target, value, .. } => {
                 let expected = self.assignment_target_type(target)?;
-                let actual = self.expression_type(value)?;
+                let actual = self.expression_type_for_expected(value, &expected)?;
                 self.require_assignable(&expected, &actual, value.span())?;
                 Ok(ExpressionType::Value(expected))
             }
@@ -1656,16 +1676,41 @@ impl Checker {
                 .schema
                 .object_at(object_id)
                 .expect("schema object index is valid");
-            let field_id = object.field_index(&name.spelling).ok_or_else(|| {
-                Diagnostic::new(
+            let Some(field_id) = object.field_index(&name.spelling) else {
+                if let Some((reference_field_id, target_object_id)) =
+                    self.sobject_relationship_target(object_id, &name.spelling)
+                {
+                    if for_write {
+                        return Err(Diagnostic::new(
+                            "parent relationship fields are read-only",
+                            name.span,
+                        ));
+                    }
+                    self.members.insert(
+                        span,
+                        MemberTarget::SObjectRelationship {
+                            object_id,
+                            reference_field_id,
+                            target_object_id,
+                        },
+                    );
+                    let target = self
+                        .schema
+                        .object_at(target_object_id)
+                        .expect("relationship target object index is valid");
+                    return Ok(ExpressionType::Value(TypeName::Custom(
+                        crate::ast::NamedType::new(target.api_name().to_owned(), name.span),
+                    )));
+                }
+                return Err(Diagnostic::new(
                     format!(
                         "unknown field `{}` on SObject `{}`",
                         name.spelling,
                         object.api_name()
                     ),
                     name.span,
-                )
-            })?;
+                ));
+            };
             let field = object
                 .field_at(field_id)
                 .expect("schema field index is valid");
@@ -2182,6 +2227,7 @@ impl Checker {
                 )
             } else {
                 match identifier.canonical.as_str() {
+                    "database" => self.database_method_type(method, arguments, span),
                     "string" | "math" | "system" => {
                         let checked = match identifier.canonical.as_str() {
                             "string" => self.static_string_method_type(method, arguments),
@@ -2276,6 +2322,14 @@ impl Checker {
                 }
                 _ => Err(unknown_method(receiver_type, method)),
             };
+        }
+        if receiver_type == &TypeName::AggregateResult {
+            if method.canonical != "get" || arguments.len() != 1 {
+                return Err(unknown_method(receiver_type, method));
+            }
+            self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+            self.calls.insert(span, CallTarget::AggregateResultGet);
+            return Ok(ExpressionType::Value(TypeName::Object));
         }
         let (intrinsic, result) = match receiver_type {
             TypeName::List(element) => {

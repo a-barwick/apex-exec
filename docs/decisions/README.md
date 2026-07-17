@@ -41,3 +41,4 @@ history.
 - [0009 — Give every source unit an explicit identity](0009-file-aware-source-identity.md)
 - [0010 — Keep normalized schema independent from record storage](0010-separate-schema-from-storage.md)
 - [0011 — Use an additive SQLite schema registry](0011-additive-sqlite-schema-registry.md)
+- [0012 — Use checked query plans and a database host](0012-checked-query-plans-and-database-host.md)

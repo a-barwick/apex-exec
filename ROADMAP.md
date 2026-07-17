@@ -174,7 +174,7 @@ transactions. Apex query and DML syntax remain M8 work.
 
 ## M8 — SOQL, SOSL, and DML
 
-**Status:** Active
+**Status:** Complete
 
 ### Scope
 
@@ -191,7 +191,7 @@ changes.
 
 ## M9 — Triggers and transaction semantics
 
-**Status:** Planned
+**Status:** Active
 
 ### Scope
 

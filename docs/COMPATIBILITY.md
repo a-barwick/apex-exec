@@ -56,6 +56,11 @@ conformance harness is a later milestone.
 | Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
+| Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
+| Static SOSL | Yes | Yes | Yes | Simplified | Checked returning clauses with deterministic local String-field matching |
+| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, and delete; undelete fails explicitly pending recycle-bin semantics |
+| `Database` DML methods | Yes | Yes | Yes | Simplified | Common methods are atomic and return void; partial result APIs are unsupported |
+| `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
@@ -122,8 +127,9 @@ the pending result.
 
 The implemented exception types are `Exception`, `NullPointerException`,
 `ListException`, `MathException`, `TypeException`, `StringException`,
-`IllegalArgumentException`, `FinalException`, and `AssertException`. They support zero- or
-one-String-argument construction and `getMessage()`, `getTypeName()`, and
+`IllegalArgumentException`, `FinalException`, `AssertException`,
+`QueryException`, and `DmlException`. They support zero- or one-String-argument
+construction and `getMessage()`, `getTypeName()`, and
 `getStackTraceString()`. Catch matching recognizes each concrete type and the
 `Exception` root. Custom exception classes, causes, a broader built-in
 hierarchy, and Salesforce-exact message and stack formatting are not yet
@@ -190,9 +196,9 @@ Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
 interpreter. A bounded worker pool can therefore run tests in parallel without
 sharing static fields, object/collection/SObject identity, default
-recording-host output, or runtime stacks. M7 supplies isolated database
-transactions; connecting setup execution to storage snapshots remains M8
-test-runner integration.
+recording-host output, runtime stacks, or database records. M8 makes setup DML
+visible inside that test interpreter. One-time setup snapshot optimization
+remains future work.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of
@@ -226,8 +232,46 @@ registry tables. Migrations add new objects and fields while preserving data;
 incompatible changes to existing prefixes, types, nullability, or relationship
 targets fail explicitly. Storage supports unconditional create/update, read,
 delete, commit, rollback, named savepoints, fixture replacement, and fast
-record reset. DML validation, automatic interpreter persistence, query
-semantics, and triggers remain above this boundary in M8–M9.
+record reset. M8 implements DML validation and query semantics above this
+boundary; triggers and broader transaction semantics remain M9 work.
+
+## M8 SOQL, SOSL, and DML
+
+SOQL and SOSL are dedicated grammar nodes rather than ordinary Apex expressions
+or runtime query strings. Static queries validate object names, selected and
+filtered fields, aggregate arguments, grouping, ordering, parent relationship
+paths, and bind types against imported metadata. Checked HIR stores
+schema-indexed plans; bind values are evaluated once at runtime.
+
+SOQL supports direct fields and one custom parent relationship level through
+`__r`, comparison operators, `LIKE`, literal or collection-bound `IN`/`NOT IN`,
+`AND`/`OR`/`NOT`, `ORDER BY` with direction and null placement, `LIMIT`,
+`OFFSET`, list results, contextual single-record results, and scalar
+`COUNT()`. Aggregate results support grouped direct fields plus `COUNT`,
+`SUM`, `MIN`, and `MAX`; aliases are read through `AggregateResult.get`.
+Child subqueries, `HAVING`, `TYPEOF`, date literals, polymorphic relationships,
+and the broader SOQL surface remain unsupported.
+
+SOSL supports a String literal or bind after `FIND`, `IN ALL FIELDS` and
+`IN NAME FIELDS`, and one or more checked `RETURNING` clauses with fields,
+filters, ordering, and limits. Matching is deterministic case-insensitive
+substring search over stored String fields. It does not claim Salesforce
+tokenization, stemming, wildcard, snippet, division, or relevance behavior.
+
+Scalar and List values support `insert`, `update`, `upsert`, and `delete`
+statements plus the corresponding `Database` methods. Inserts generate
+deterministic Salesforce-shaped Ids and copy them into the original runtime
+SObjects. Each DML call is atomic. The current `Database` methods return
+`void`; SaveResult/DeleteResult APIs and `allOrNone=false` partial results are
+rejected explicitly. `undelete` is recognized but raises `DmlException` until
+M9 adds a recycle bin. External-ID upsert, validation rules, workflows,
+sharing, limits, triggers, and cross-call transaction rollback are not yet
+implemented.
+
+The default recording host owns one lazy in-memory SQLite database per
+interpreter and publishes structured SOQL, SOSL, and DML events. Test setup DML
+is visible to its test, while separate test interpreters remain isolated.
+One-time Salesforce test-setup snapshot optimization is not reproduced.
 
 ## Platform surface
 
@@ -239,10 +283,11 @@ semantics, and triggers remain above this boundary in M8–M9.
 | Typed/dynamic SObjects | Implemented (in-memory field access; no DML) | M7 |
 | Salesforce-shaped IDs | Implemented (validation, checksum, deterministic generation) | M7 |
 | SQLite storage | Implemented (additive migration, CRUD, transactions, savepoints, fixtures/reset) | M7 |
-| DML | Planned | M8 |
-| SOQL | Planned | M8 |
-| SOSL | Planned | M8 |
-| Triggers | Planned | M9 |
+| DML | Implemented (simplified atomic scalar/bulk operations) | M8 |
+| SOQL | Implemented (simplified checked static queries) | M8 |
+| SOSL | Implemented (simplified deterministic local search) | M8 |
+| Structured query/DML traces | Implemented | M8 |
+| Triggers | Active | M9 |
 | Common platform APIs | Planned | M10 |
 | Async Apex | Deferred | M11 |
 | Governor limits | Deferred | Post-core compatibility profile |
@@ -271,13 +316,16 @@ semantics, and triggers remain above this boundary in M8–M9.
 - Unknown metadata objects/fields, incompatible custom-field assignments,
   unsupported metadata types, invalid dynamic SObject access, invalid IDs, and
   incompatible SQLite migrations fail explicitly at their owning boundary.
+- Unknown query objects/fields/relationships, incompatible binds and
+  aggregates, invalid DML operands, cardinality failures, and unsupported
+  partial/recycle-bin DML semantics fail explicitly.
 - Diagnostics are generated by Apex Exec and are not required to reproduce
   Salesforce's exact wording.
 - `tests/north_star/` contains pinned real-world complexity indicators. Their
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M7 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+At M8 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
 lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
 ordinary members until unsupported `instanceof`; the remaining first blockers
 are safe navigation, null coalescing, ternary syntax, and bitwise operators.

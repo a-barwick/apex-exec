@@ -237,6 +237,7 @@ impl Parser {
                 return Ok(Expression::Variable(name));
             }
             TokenKind::New => return self.parse_new_expression(),
+            TokenKind::LeftBracket => return self.parse_query_expression(),
             TokenKind::LeftParen => {
                 if self.is_cast_start() {
                     let start = self.advance();

@@ -1,0 +1,8 @@
+<CustomField>
+    <fullName>Customer__c</fullName>
+    <label>Customer</label>
+    <referenceTo>Customer__c</referenceTo>
+    <relationshipName>Customer</relationshipName>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>

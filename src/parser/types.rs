@@ -187,7 +187,10 @@ impl Parser {
             | "stringexception"
             | "illegalargumentexception"
             | "finalexception"
-            | "assertexception" => {}
+            | "assertexception"
+            | "queryexception"
+            | "dmlexception"
+            | "aggregateresult" => {}
             "list" | "set" => {
                 if !matches!(self.token_at(end).kind, TokenKind::Less) {
                     return None;

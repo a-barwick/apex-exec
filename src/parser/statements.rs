@@ -1,6 +1,6 @@
 use super::Parser;
 use crate::{
-    ast::{CatchClause, Statement},
+    ast::{CatchClause, DmlOperation, Statement},
     diagnostic::Diagnostic,
     token::TokenKind,
 };
@@ -18,9 +18,39 @@ impl Parser {
             TokenKind::Try => self.parse_try(),
             TokenKind::Throw => self.parse_throw(),
             TokenKind::Return => self.parse_return(),
+            _ if self.is_dml_start() => self.parse_dml(),
             _ if self.is_declaration_start() => self.parse_variable_declaration(true),
             _ => self.parse_expression_statement(true),
         }
+    }
+
+    fn is_dml_start(&self) -> bool {
+        matches!(
+            &self.current().kind,
+            TokenKind::Identifier(spelling)
+                if ["insert", "update", "upsert", "delete", "undelete"]
+                    .iter()
+                    .any(|keyword| spelling.eq_ignore_ascii_case(keyword))
+        )
+    }
+
+    fn parse_dml(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.advance();
+        let operation = match start.lexeme.to_ascii_lowercase().as_str() {
+            "insert" => DmlOperation::Insert,
+            "update" => DmlOperation::Update,
+            "upsert" => DmlOperation::Upsert,
+            "delete" => DmlOperation::Delete,
+            "undelete" => DmlOperation::Undelete,
+            _ => unreachable!("DML start was checked"),
+        };
+        let value = self.parse_expression()?;
+        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after DML statement")?;
+        Ok(Statement::Dml {
+            operation,
+            value,
+            span: start.span.merge(end.span),
+        })
     }
 
     pub(super) fn parse_variable_declaration(
