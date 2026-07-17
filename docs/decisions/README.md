@@ -38,3 +38,4 @@ history.
 - [0006 — Keep typed HIR facts beside immutable parsed syntax](0006-typed-hir-side-tables.md)
 - [0007 — Rebase cached source units into a project span space](0007-project-span-space-and-incremental-cache.md)
 - [0008 — Isolate test execution by interpreter](0008-isolated-test-execution-and-coverage.md)
+- [0009 — Give every source unit an explicit identity](0009-file-aware-source-identity.md)
