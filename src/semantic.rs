@@ -1798,10 +1798,13 @@ impl Checker {
             .iter()
             .copied()
             .filter(|candidate| {
-                !applicable
-                    .iter()
-                    .copied()
-                    .any(|other| other.id != candidate.id && method_more_specific(other, candidate))
+                !applicable.iter().copied().any(|other| {
+                    other.id != candidate.id
+                        && self.parameter_types_more_specific(
+                            &other.parameter_types,
+                            &candidate.parameter_types,
+                        )
+                })
             })
             .collect::<Vec<_>>();
         let [best] = most_specific.as_slice() else {
@@ -3291,26 +3294,6 @@ fn push_unique_signature(
     }
 }
 
-fn method_more_specific(left: &MethodSignature, right: &MethodSignature) -> bool {
-    let mut strictly_more_specific = false;
-    for (left, right) in left.parameter_types.iter().zip(&right.parameter_types) {
-        if left == right {
-            continue;
-        }
-        if type_more_specific(left, right) {
-            strictly_more_specific = true;
-        } else {
-            return false;
-        }
-    }
-    strictly_more_specific
-}
-
-fn type_more_specific(left: &TypeName, right: &TypeName) -> bool {
-    *right == TypeName::Object
-        || (*right == TypeName::Exception && left.is_exception() && *left != TypeName::Exception)
-}
-
 fn is_statement_expression(expression: &Expression) -> bool {
     matches!(
         expression,
@@ -3844,6 +3827,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("ambiguous overload"));
+    }
+
+    #[test]
+    fn ranks_top_level_overloads_using_user_type_subtyping() {
+        check_source(
+            "public virtual class Parent {} \
+             public class Child extends Parent {} \
+             String pick(Parent value) { return 'parent'; } \
+             String pick(Child value) { return 'child'; } \
+             Child child = new Child(); \
+             String result = pick(child);",
+        )
+        .unwrap();
     }
 
     #[test]
