@@ -8,17 +8,12 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first seven milestones support primitive expressions, assignment, lexical
-scopes, common control flow, typed collections, single-file user-defined
-methods, recursion, overloads, casts, catchable core exceptions, `finally`, and
-source-mapped runtime call stacks. M5 adds classes, interfaces, inheritance,
-checked instance/static members, and incremental SFDX project compilation. M6
-adds annotation-based Apex test discovery, assertions, isolated parallel
-execution, filtering, JUnit reports, and line/branch coverage.
-M7 imports SFDX custom-object metadata, compiles typed and dynamic SObjects,
-validates Salesforce-shaped IDs, and provides migrated SQLite CRUD,
-transactions, savepoints, fixtures, and fast reset. M8 SOQL/SOSL and DML work
-is active.
+The first ten milestones provide the core language, typed collections,
+exceptions, classes and inheritance, SFDX project compilation, isolated Apex
+tests with coverage, metadata-backed SObjects, SQLite transactions, checked
+SOQL/SOSL and DML, triggers with rollback, and a curated platform API profile.
+That profile includes date/time/decimal/ID/Blob values, JSON, regex, schema
+describe, deterministic context and limits, and host-mocked HTTP callouts.
 Apex identifiers, types, and method names are case-insensitive.
 
 ```console
@@ -78,6 +73,16 @@ Approved
 125
 ```
 
+The M10 sample combines value types, JSON, regex, describe, deterministic
+services, limits, and four isolated Apex tests:
+
+```console
+$ cargo run -- invoke examples/milestone10-project PlatformDemo.run
+2026-07-18 | 2026-07-17 10:00:00 | 10 | 12.25 | bWlsZXN0b25lLTEw | 10 | true | BYg
+$ cargo run -- test examples/milestone10-project
+Summary: 4 passed, 0 failed, 4 total; 13/13 lines (100.00%), 0/0 branches (100.00%)
+```
+
 Compiler stages can be inspected independently:
 
 ```console
@@ -87,11 +92,10 @@ $ cargo run -- check examples/hello.apex
 $ cargo run -- run examples/hello.apex
 ```
 
-This is an early implementation. Backwards-compatible top-level methods remain
-available to anonymous scripts, while project code uses ordinary classes. The
-standard-library, test, and exception surfaces are deliberately curated.
-SObject field execution and SQLite storage are implemented, while automatic
-persistence, SOQL, SOSL, and DML syntax remain M8 work.
+This remains an early compatibility implementation. Backwards-compatible
+top-level methods remain available to anonymous scripts, while project code
+uses ordinary classes. Platform, test, and exception surfaces are deliberately
+curated; unsupported behavior is rejected explicitly.
 
 ## Project documentation
 

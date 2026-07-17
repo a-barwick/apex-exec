@@ -43,3 +43,4 @@ history.
 - [0011 — Use an additive SQLite schema registry](0011-additive-sqlite-schema-registry.md)
 - [0012 — Use checked query plans and a database host](0012-checked-query-plans-and-database-host.md)
 - [0013 — Orchestrate triggers with nested database checkpoints](0013-trigger-dispatch-and-transaction-checkpoints.md)
+- [0014 — Keep curated platform APIs checked and host-backed](0014-checked-curated-platform-services.md)
