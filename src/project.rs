@@ -1,7 +1,7 @@
 use crate::{
     ast::{
-        AssignmentTarget, ClassDeclaration, ClassMember, CollectionInitializer, Expression,
-        Program as AstProgram, ReturnType, Statement, TypeName,
+        AssignmentTarget, Expression, NamedType, Program as AstProgram,
+        visit::{self, Visitor},
     },
     diagnostic::Diagnostic,
     hir,
@@ -592,10 +592,7 @@ fn build_dependency_graph(
         .collect::<HashMap<_, _>>();
     let mut edges = BTreeMap::new();
     for file in files {
-        let mut names = BTreeSet::new();
-        for class in &units[&file.path].ast.classes {
-            collect_class_dependencies(class, &owners, &mut names);
-        }
+        let names = DependencyCollector::collect(&units[&file.path].ast);
         let dependencies = names
             .into_iter()
             .filter_map(|name| owners.get(&name).cloned())
@@ -619,280 +616,47 @@ fn dependent_closure(changed: &BTreeSet<PathBuf>, graph: &DependencyGraph) -> BT
     result
 }
 
-fn collect_class_dependencies(
-    class: &ClassDeclaration,
-    owners: &HashMap<String, PathBuf>,
-    dependencies: &mut BTreeSet<String>,
-) {
-    if let Some(parent) = &class.superclass {
-        dependencies.insert(parent.canonical.clone());
+#[derive(Default)]
+struct DependencyCollector {
+    names: BTreeSet<String>,
+}
+
+impl DependencyCollector {
+    fn collect(program: &AstProgram) -> BTreeSet<String> {
+        let mut collector = Self::default();
+        collector.visit_program(program);
+        collector.names
     }
-    dependencies.extend(class.interfaces.iter().map(|name| name.canonical.clone()));
-    for member in &class.members {
-        match member {
-            ClassMember::Field(field) => {
-                collect_type_dependency(&field.ty, dependencies);
-                if let Some(initializer) = &field.initializer {
-                    collect_expression_dependencies(initializer, owners, dependencies);
-                }
-            }
-            ClassMember::Property(property) => {
-                collect_type_dependency(&property.ty, dependencies);
-                for accessor in &property.accessors {
-                    if let Some(body) = &accessor.body {
-                        collect_statement_dependencies(body, owners, dependencies);
-                    }
-                }
-            }
-            ClassMember::Constructor(constructor) => {
-                for parameter in &constructor.parameters {
-                    collect_type_dependency(&parameter.ty, dependencies);
-                }
-                collect_statement_dependencies(&constructor.body, owners, dependencies);
-            }
-            ClassMember::Method(method) => {
-                if let ReturnType::Value(ty) = &method.return_type {
-                    collect_type_dependency(ty, dependencies);
-                }
-                for parameter in &method.parameters {
-                    collect_type_dependency(&parameter.ty, dependencies);
-                }
-                if let Some(body) = &method.body {
-                    collect_statement_dependencies(body, owners, dependencies);
-                }
-            }
-        }
+
+    fn record_reference(&mut self, canonical: &str) {
+        self.names.insert(canonical.to_owned());
     }
 }
 
-fn collect_type_dependency(ty: &TypeName, dependencies: &mut BTreeSet<String>) {
-    match ty {
-        TypeName::Custom(name) => {
-            dependencies.insert(name.canonical.clone());
-        }
-        TypeName::List(element) | TypeName::Set(element) => {
-            collect_type_dependency(element, dependencies)
-        }
-        TypeName::Map(key, value) => {
-            collect_type_dependency(key, dependencies);
-            collect_type_dependency(value, dependencies);
-        }
-        _ => {}
+impl<'ast> Visitor<'ast> for DependencyCollector {
+    fn visit_named_type(&mut self, named_type: &'ast NamedType) {
+        self.record_reference(&named_type.canonical);
     }
-}
 
-fn collect_statement_dependencies(
-    statement: &Statement,
-    owners: &HashMap<String, PathBuf>,
-    dependencies: &mut BTreeSet<String>,
-) {
-    match statement {
-        Statement::VariableDeclaration {
-            ty, initializer, ..
-        } => {
-            collect_type_dependency(ty, dependencies);
-            collect_expression_dependencies(initializer, owners, dependencies);
+    fn visit_expression(&mut self, expression: &'ast Expression) {
+        if let Expression::Variable(identifier) = expression {
+            self.record_reference(&identifier.canonical);
         }
-        Statement::Expression { expression, .. } => {
-            collect_expression_dependencies(expression, owners, dependencies)
-        }
-        Statement::Block { statements, .. } => {
-            for statement in statements {
-                collect_statement_dependencies(statement, owners, dependencies);
-            }
-        }
-        Statement::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_expression_dependencies(condition, owners, dependencies);
-            collect_statement_dependencies(then_branch, owners, dependencies);
-            if let Some(else_branch) = else_branch {
-                collect_statement_dependencies(else_branch, owners, dependencies);
-            }
-        }
-        Statement::While {
-            condition, body, ..
-        }
-        | Statement::DoWhile {
-            condition, body, ..
-        } => {
-            collect_expression_dependencies(condition, owners, dependencies);
-            collect_statement_dependencies(body, owners, dependencies);
-        }
-        Statement::For {
-            initializer,
-            condition,
-            update,
-            body,
-            ..
-        } => {
-            if let Some(initializer) = initializer {
-                collect_statement_dependencies(initializer, owners, dependencies);
-            }
-            if let Some(condition) = condition {
-                collect_expression_dependencies(condition, owners, dependencies);
-            }
-            if let Some(update) = update {
-                collect_statement_dependencies(update, owners, dependencies);
-            }
-            collect_statement_dependencies(body, owners, dependencies);
-        }
-        Statement::ForEach {
-            element_type,
-            iterable,
-            body,
-            ..
-        } => {
-            collect_type_dependency(element_type, dependencies);
-            collect_expression_dependencies(iterable, owners, dependencies);
-            collect_statement_dependencies(body, owners, dependencies);
-        }
-        Statement::Try {
-            try_block,
-            catches,
-            finally_block,
-            ..
-        } => {
-            collect_statement_dependencies(try_block, owners, dependencies);
-            for catch in catches {
-                collect_type_dependency(&catch.exception_type, dependencies);
-                collect_statement_dependencies(&catch.body, owners, dependencies);
-            }
-            if let Some(finally_block) = finally_block {
-                collect_statement_dependencies(finally_block, owners, dependencies);
-            }
-        }
-        Statement::Throw { value, .. } => {
-            collect_expression_dependencies(value, owners, dependencies)
-        }
-        Statement::Return { value, .. } => {
-            if let Some(value) = value {
-                collect_expression_dependencies(value, owners, dependencies);
-            }
-        }
-        Statement::Break { .. } | Statement::Continue { .. } => {}
+        visit::walk_expression(self, expression);
     }
-}
 
-fn collect_expression_dependencies(
-    expression: &Expression,
-    owners: &HashMap<String, PathBuf>,
-    dependencies: &mut BTreeSet<String>,
-) {
-    match expression {
-        Expression::Variable(identifier) => {
-            if owners.contains_key(&identifier.canonical) {
-                dependencies.insert(identifier.canonical.clone());
-            }
+    fn visit_assignment_target(&mut self, target: &'ast AssignmentTarget) {
+        if let AssignmentTarget::Variable(identifier) = target {
+            self.record_reference(&identifier.canonical);
         }
-        Expression::Assignment { target, value, .. } => {
-            match target {
-                AssignmentTarget::Variable(identifier) => {
-                    if owners.contains_key(&identifier.canonical) {
-                        dependencies.insert(identifier.canonical.clone());
-                    }
-                }
-                AssignmentTarget::Index {
-                    collection, index, ..
-                } => {
-                    collect_expression_dependencies(collection, owners, dependencies);
-                    collect_expression_dependencies(index, owners, dependencies);
-                }
-                AssignmentTarget::Member { receiver, .. } => {
-                    collect_expression_dependencies(receiver, owners, dependencies)
-                }
-            }
-            collect_expression_dependencies(value, owners, dependencies);
-        }
-        Expression::NewCollection {
-            ty, initializer, ..
-        } => {
-            collect_type_dependency(ty, dependencies);
-            match initializer {
-                CollectionInitializer::Arguments(values)
-                | CollectionInitializer::Elements(values) => {
-                    for value in values {
-                        collect_expression_dependencies(value, owners, dependencies);
-                    }
-                }
-                CollectionInitializer::MapEntries(entries) => {
-                    for entry in entries {
-                        collect_expression_dependencies(&entry.key, owners, dependencies);
-                        collect_expression_dependencies(&entry.value, owners, dependencies);
-                    }
-                }
-                CollectionInitializer::SizedArray(size) => {
-                    collect_expression_dependencies(size, owners, dependencies)
-                }
-            }
-        }
-        Expression::NewException {
-            exception_type,
-            arguments,
-            ..
-        }
-        | Expression::NewObject {
-            ty: exception_type,
-            arguments,
-            ..
-        } => {
-            collect_type_dependency(exception_type, dependencies);
-            for argument in arguments {
-                collect_expression_dependencies(argument, owners, dependencies);
-            }
-        }
-        Expression::Index {
-            collection, index, ..
-        } => {
-            collect_expression_dependencies(collection, owners, dependencies);
-            collect_expression_dependencies(index, owners, dependencies);
-        }
-        Expression::FunctionCall { arguments, .. } => {
-            for argument in arguments {
-                collect_expression_dependencies(argument, owners, dependencies);
-            }
-        }
-        Expression::MethodCall {
-            receiver,
-            arguments,
-            ..
-        } => {
-            collect_expression_dependencies(receiver, owners, dependencies);
-            for argument in arguments {
-                collect_expression_dependencies(argument, owners, dependencies);
-            }
-        }
-        Expression::MemberAccess { receiver, .. }
-        | Expression::Cast {
-            expression: receiver,
-            ..
-        }
-        | Expression::Unary {
-            operand: receiver, ..
-        }
-        | Expression::Postfix {
-            operand: receiver, ..
-        } => collect_expression_dependencies(receiver, owners, dependencies),
-        Expression::Binary { left, right, .. } => {
-            collect_expression_dependencies(left, owners, dependencies);
-            collect_expression_dependencies(right, owners, dependencies);
-        }
-        Expression::StringLiteral(..)
-        | Expression::BooleanLiteral(..)
-        | Expression::IntegerLiteral(..)
-        | Expression::NullLiteral(..) => {}
-    }
-    if let Expression::Cast { ty, .. } = expression {
-        collect_type_dependency(ty, dependencies);
+        visit::walk_assignment_target(self, target);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{ClassMember, Statement};
 
     #[test]
     fn merged_units_keep_local_offsets_distinct_by_source_identity() {
