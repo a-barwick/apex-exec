@@ -37,12 +37,14 @@ instance, super, field, and property targets in side tables keyed by source
 span. The runtime executes those targets directly. Dynamic values never repeat
 or change compiler overload/member resolution.
 
-Project compilation discovers SFDX package directories, caches parsed source
-units, rebases their spans into a project coordinate space, builds class
-dependency edges, and checks one merged cross-file program. An unchanged input
-set reuses the complete checked program; after a change, unchanged parsed units
-are retained and reverse dependents are identified before project-wide semantic
-linking.
+Project compilation discovers SFDX package directories, assigns each cached
+path a stable `SourceId`, and keeps every parsed span local to its own file.
+The project façade delegates discovery, dependency collection, and diagnostic
+mapping to focused modules. Dependency collection uses the shared AST visitor,
+and the source map resolves diagnostics, coverage, and individual runtime stack
+frames by source identity. An unchanged input set reuses the complete checked
+program; after a change, unchanged parsed units are retained and reverse
+dependents are identified before project-wide semantic linking.
 
 The CLI is a thin adapter over those functions.
 
@@ -59,19 +61,30 @@ map, excludes `@IsTest` classes from the production denominator, and owns
 console/JUnit rendering. Test policy and report formats do not leak into parser,
 semantic, or ordinary execution entry points.
 
+Checked built-in calls carry a typed `IntrinsicId` in HIR, just like
+user-defined calls carry a selected declaration target. Runtime dispatch
+therefore never repeats case-insensitive built-in lookup. An interpreter
+borrows immutable checked code through a `RuntimeImage`; its execution scopes
+and traces remain isolated, while an `ExecutionStore` owns its collection
+arena, object arena, and static slots. `System.debug` crosses a structured
+`PlatformHost` boundary whose default owned host records output for the
+existing convenience APIs. A custom host may intentionally share external
+state between interpreters.
+
 ## Current modules
 
 | Module | Responsibility |
 |---|---|
-| `span` | Source byte ranges |
+| `span` | File-aware source identities and local byte ranges |
 | `token` | Token kinds and lexical spelling |
 | `lexer` | Source-to-token conversion and lexical errors |
-| `ast` | Parsed program representation |
-| `hir` | Checked expression types and resolved execution targets |
-| `parser` | Grammar and syntax diagnostics |
-| `semantic` | Name lookup and primitive type validation |
-| `runtime` | AST execution, environments, and values |
-| `project` | SFDX discovery, source-unit caching, dependency graphs, and source mapping |
+| `ast` | Parsed program representation and shared immutable visitor |
+| `hir` | Checked expression types, declaration targets, and intrinsic IDs |
+| `parser` | Grammar façade with declaration, statement, expression, type/lookahead, and test modules |
+| `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
+| `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
+| `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
+| `platform` | Storage-independent normalized schema and transactional record-storage contracts |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -130,6 +143,12 @@ of pending completion. The interpreter tracks active calls; when an exception
 first reaches a handler or escapes a method, it snapshots frames that pair the
 leaf method with the origin and each caller method with its nested call site.
 
+Built-in calls use the same rule: semantic analysis records a typed intrinsic
+target, and runtime execution matches that closed ID rather than method
+spelling. Adding a built-in requires an explicit checker mapping and runtime
+implementation, so unsupported platform surface cannot silently fall through
+to dynamic dispatch.
+
 ## Target compiler pipeline
 
 Direct AST walking is appropriate for the current language slice. Before class
@@ -187,6 +206,13 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
+The implemented host surface currently owns structured debug output.
+`platform::schema` provides a case-insensitive normalized catalog and
+`SchemaProvider`, while `platform::storage` defines storage-neutral records and
+transaction traits. They are deliberately not wired into Apex expressions yet;
+metadata import, SQLite adaptation, and SObject runtime values are the next M7
+layers.
+
 ## Local data architecture
 
 SQLite will eventually provide persistent local org state. The logical model
@@ -203,6 +229,10 @@ SFDX metadata
 
 Schema normalization must remain separate from SQLite DDL so alternate storage
 or in-memory implementations remain possible.
+
+That separation now exists in code: normalized schema types have no SQLite
+dependency, and the transaction contract deals in storage-neutral records
+rather than AST or runtime `Value` nodes.
 
 ## Compatibility architecture
 

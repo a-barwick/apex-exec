@@ -6,8 +6,8 @@ Primitive expressions, lexical scopes, control flow, mutable collections, and
 the fixed M3 built-in call surface are implemented. M4 adds user-defined calls,
 recursion, exception unwinding, runtime casts, and source call stacks. M5 adds
 object/static storage, constructors, properties, inheritance, virtual dispatch,
-and cross-file class execution. Transactions and platform effects remain later
-work.
+and cross-file class execution. Debug output now crosses a platform host;
+database transactions and SObject execution remain later M7/M8 work.
 
 ## Program execution
 
@@ -28,9 +28,11 @@ process-global state.
 ## Debug output
 
 **Implemented, simplified.** `System.debug(expression)` converts every
-supported value to deterministic text and appends one output line. Lists,
-Sets, and Maps render recursively in their deterministic local order. The CLI
-prints each line to stdout without Salesforce log metadata.
+supported value to deterministic text and emits one structured debug event.
+Lists, Sets, and Maps render recursively in their deterministic local order.
+The default `RecordingHost` buffers each message as one returned output line,
+and the CLI prints those lines without Salesforce log metadata. Custom runtime
+hosts can consume or stream events without changing language execution.
 
 ## Expressions
 
@@ -43,7 +45,9 @@ respectively.
 Method-call receivers are evaluated once, followed by arguments from left to
 right, each exactly once. Static built-ins do not evaluate a runtime receiver.
 Unsupported dispatch does not fall back to runtime approximation because calls
-are validated before execution.
+are validated before execution. Every supported built-in call is recorded as a
+typed HIR intrinsic ID; runtime dispatch does not repeat receiver-family or
+case-insensitive method-name resolution.
 
 User-defined call arguments are also evaluated left to right exactly once.
 Each invocation replaces the caller's lexical scopes with an isolated parameter
@@ -51,6 +55,13 @@ scope while sharing runtime collections and debug output. The statically
 selected HIR target is executed directly, so runtime values do not repeat
 overload or member resolution. Return values unwind blocks and loops to the
 caller; recursive calls use the same isolation rules.
+
+Interpreter preparation borrows the immutable checked program through a
+runtime image. It does not clone the full AST, method list, class list, or HIR
+tables. A per-interpreter execution store owns collection/object identity and
+static slots; scopes, call state, traces, and host state remain isolated with
+that interpreter when the host is owned. A custom host reference may
+intentionally share external state.
 
 ## Classes and objects
 

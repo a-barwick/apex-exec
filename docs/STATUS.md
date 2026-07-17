@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-16
 
 ## Active milestone
 
@@ -53,6 +53,10 @@ M7 — SObject schema and SQLite
   CLI
 - Typed HIR side tables own checked expression types and selected call/member
   targets; parsed syntax no longer carries semantic mutation
+- Built-in calls resolve to typed HIR intrinsic IDs during checking; runtime
+  execution does not repeat method-name or receiver-family resolution
+- Top-level, constructor, and class-member overloads share one most-specific
+  candidate algorithm and the supported user-type subtype relation
 - Class and interface declarations with case-insensitive user-defined types
 - Constructors, default field initialization, instance/static fields, and
   automatic or custom properties
@@ -68,6 +72,12 @@ M7 — SObject schema and SQLite
   validation, and cross-file semantic resolution
 - Cross-file dependency graphs, cached parsed units, dependent invalidation,
   and complete-build reuse when project inputs are unchanged
+- Stable per-file source identities keep cached AST spans local, eliminate
+  project-wide span rebasing, and map every runtime stack frame independently
+- A shared AST visitor owns syntax traversal; project dependency collection no
+  longer maintains a duplicate recursive walker
+- Parser, project, semantic intrinsic, runtime intrinsic, and test-runner
+  responsibilities are organized behind stable module façades
 - Project-aware `check` and public static zero-argument `invoke` CLI workflows
 - A three-file SFDX service-layer example that compiles and runs locally
 - A pinned seven-file, 14,740-line open-source Apex North Star corpus with
@@ -87,11 +97,26 @@ M7 — SObject schema and SQLite
   coverage
 - A two-file SFDX test project that passes through `apex-exec test`, including
   parallel execution, setup isolation, assertions, and full sample coverage
+- Runtime preparation borrows immutable checked code through a `RuntimeImage`
+  instead of cloning the complete program, methods, and classes
+- An `ExecutionStore` isolates collection/object arenas and static member slots
+  from checked code and interpreter control-flow state
+- Structured debug events cross a replaceable platform host while preserving
+  the existing convenience execution APIs
+- A case-insensitive normalized SObject schema catalog and storage-neutral
+  transactional record interfaces establish the M7 schema/storage boundary
+- Project discovery, dependency analysis, and diagnostic mapping are isolated
+  modules; callers can inspect typed project error categories
 
 ## Immediate target
 
 Implement M7 SObject schema and SQLite on the isolated project/test runtime
 established in M6.
+
+The normalized schema, storage transaction, and platform host seams are now in
+place. The next slice should populate them from real SFDX metadata and provide
+the first SQLite adapter rather than adding storage behavior to the compiler or
+interpreter directly.
 
 Recommended implementation order:
 
@@ -145,9 +170,13 @@ compatibility percentages.
 - SFDX discovery reads package-directory paths but does not yet interpret the
   full Salesforce DX configuration or metadata surface. Each `.cls` file must
   contain exactly one matching top-level class or interface.
-- Parsed source units and unchanged complete builds are cached. A changed unit
-  computes dependency invalidation and reuses unchanged parsed ASTs, while the
-  cross-file semantic link currently reruns project-wide.
+- Parsed source units and unchanged complete builds are cached with stable
+  source identities. A changed unit computes dependency invalidation and reuses
+  unchanged parsed ASTs, while the cross-file semantic link currently reruns
+  project-wide.
+- The normalized schema catalog and transaction traits are architectural M7
+  foundations only. Custom metadata import, SQLite persistence, SObject runtime
+  values, Salesforce-shaped ID validation/generation, and DML remain pending.
 - Nested types, enums, annotations other than `@IsTest`/`@TestSetup`, explicit
   superclass-constructor calls, custom exception classes, and Salesforce-exact
   object string formatting are not implemented.
