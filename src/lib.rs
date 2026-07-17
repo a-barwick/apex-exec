@@ -3,6 +3,7 @@ pub mod diagnostic;
 pub mod hir;
 pub mod lexer;
 pub mod parser;
+pub mod platform;
 pub mod project;
 pub mod runtime;
 pub mod semantic;
