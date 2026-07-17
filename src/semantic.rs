@@ -11,6 +11,8 @@ use crate::{
 };
 use std::collections::HashMap;
 
+mod overload;
+
 pub fn check(program: &Program) -> Result<hir::Program, Diagnostic> {
     Checker::new().check_program(program)
 }
@@ -1522,33 +1524,27 @@ impl Checker {
         &self,
         applicable: &[&'a (ClassMemberId, ConstructorDeclaration)],
     ) -> Option<&'a (ClassMemberId, ConstructorDeclaration)> {
-        let most_specific = applicable
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                !applicable.iter().copied().any(|other| {
-                    other.0 != candidate.0
-                        && self.parameter_types_more_specific(
-                            &other
-                                .1
-                                .parameters
-                                .iter()
-                                .map(|parameter| parameter.ty.clone())
-                                .collect::<Vec<_>>(),
-                            &candidate
-                                .1
-                                .parameters
-                                .iter()
-                                .map(|parameter| parameter.ty.clone())
-                                .collect::<Vec<_>>(),
-                        )
-                })
-            })
-            .collect::<Vec<_>>();
-        let [selected] = most_specific.as_slice() else {
-            return None;
-        };
-        Some(*selected)
+        let selected = overload::unique_most_specific(
+            applicable,
+            |left, right| left.0 == right.0,
+            |left, right| {
+                self.parameter_types_more_specific(
+                    &left
+                        .1
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect::<Vec<_>>(),
+                    &right
+                        .1
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect::<Vec<_>>(),
+                )
+            },
+        )?;
+        Some(applicable[selected])
     }
 
     fn member_access_type(
@@ -1794,20 +1790,14 @@ impl Checker {
             ));
         }
 
-        let most_specific = applicable
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                !applicable.iter().copied().any(|other| {
-                    other.id != candidate.id
-                        && self.parameter_types_more_specific(
-                            &other.parameter_types,
-                            &candidate.parameter_types,
-                        )
-                })
-            })
-            .collect::<Vec<_>>();
-        let [best] = most_specific.as_slice() else {
+        let Some(best) = overload::unique_most_specific(
+            &applicable,
+            |left, right| left.id == right.id,
+            |left, right| {
+                self.parameter_types_more_specific(&left.parameter_types, &right.parameter_types)
+            },
+        )
+        .map(|index| applicable[index]) else {
             return Err(Diagnostic::new(
                 format!("ambiguous overload for method `{}`", name.spelling),
                 name.span,
@@ -2192,19 +2182,14 @@ impl Checker {
                 method.span,
             ));
         }
-        let most_specific = applicable
-            .iter()
-            .filter(|candidate| {
-                !applicable.iter().any(|other| {
-                    other.target != candidate.target
-                        && self.parameter_types_more_specific(
-                            &other.parameter_types,
-                            &candidate.parameter_types,
-                        )
-                })
-            })
-            .collect::<Vec<_>>();
-        let [best] = most_specific.as_slice() else {
+        let Some(best) = overload::unique_most_specific(
+            &applicable,
+            |left, right| left.target == right.target,
+            |left, right| {
+                self.parameter_types_more_specific(&left.parameter_types, &right.parameter_types)
+            },
+        )
+        .map(|index| &applicable[index]) else {
             return Err(Diagnostic::new(
                 format!("ambiguous overload for method `{}`", method.spelling),
                 method.span,
