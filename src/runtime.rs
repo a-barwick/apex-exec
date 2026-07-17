@@ -5,7 +5,11 @@ use crate::{
         Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
-    hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
+    hir::{
+        CallTarget, ClassMemberId, ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic,
+        MathIntrinsic, MemberTarget, Program, ReferenceTarget, SetIntrinsic, StaticStringIntrinsic,
+        StringIntrinsic, SystemIntrinsic,
+    },
     span::Span,
 };
 use std::{
@@ -103,19 +107,6 @@ struct EvaluatedArgument {
 struct ActiveCall {
     method: String,
     call_span: Span,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StaticReceiver {
-    String,
-    Math,
-    System,
-}
-
-#[derive(Clone, Debug)]
-enum CallReceiver {
-    Static(StaticReceiver),
-    Value(Value),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -725,6 +716,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         })?;
                         self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
                     }
+                    CallTarget::Intrinsic(_) => Err(Diagnostic::new(
+                        "intrinsic target attached to a function call",
+                        *span,
+                    )),
                     CallTarget::Constructor { .. } => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
@@ -749,6 +744,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             } => {
                 let target = self.program().call_target(*span);
                 match target {
+                    Some(CallTarget::Intrinsic(intrinsic)) => {
+                        self.evaluate_intrinsic_call(intrinsic, receiver, method, arguments, *span)
+                    }
                     Some(CallTarget::StaticMethod(target)) => {
                         self.evaluate_class_method(target, None, arguments, *span, false)
                     }
@@ -775,7 +773,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Some(CallTarget::TopLevelMethod(_) | CallTarget::Constructor { .. }) => Err(
                         Diagnostic::new("invalid checked target for member call", *span),
                     ),
-                    None => self.evaluate_method_call(receiver, method, arguments, *span),
+                    None => Err(Diagnostic::new(
+                        "unresolved method call escaped semantic validation",
+                        method.span,
+                    )),
                 }
             }
             Expression::MemberAccess {
@@ -1798,31 +1799,68 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(value)
     }
 
-    fn evaluate_method_call(
+    fn evaluate_intrinsic_call(
         &mut self,
+        intrinsic: IntrinsicId,
         receiver: &Expression,
         method: &Identifier,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let receiver_span = receiver.span();
-        let receiver_value = if let Expression::Variable(identifier) = receiver {
-            if let Some(slot) = self.lookup_canonical(&identifier.canonical) {
-                CallReceiver::Value(slot.value.clone())
-            } else if let Some(static_receiver) = static_receiver(identifier) {
-                CallReceiver::Static(static_receiver)
-            } else {
-                return Err(unknown_variable(identifier));
-            }
+        let receiver = if intrinsic.is_static() {
+            None
         } else {
-            CallReceiver::Value(self.evaluate(receiver)?)
+            Some(self.evaluate(receiver)?)
         };
         let arguments = self.evaluate_arguments(arguments)?;
-        match receiver_value {
-            CallReceiver::Static(receiver) => self.call_static(receiver, method, &arguments, span),
-            CallReceiver::Value(receiver) => {
-                self.call_instance(receiver, receiver_span, method, &arguments, span)
+        match intrinsic {
+            IntrinsicId::StaticString(intrinsic) => {
+                self.call_static_string(intrinsic, &arguments, span)
             }
+            IntrinsicId::Math(intrinsic) => self.call_math(intrinsic, &arguments, span),
+            IntrinsicId::System(intrinsic) => self.call_system(intrinsic, &arguments, span),
+            IntrinsicId::String(intrinsic) => match receiver {
+                Some(Value::String(receiver)) => {
+                    self.call_string_instance(receiver, intrinsic, &arguments, span)
+                }
+                Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
+                _ => Err(invalid_runtime_operands(receiver_span)),
+            },
+            IntrinsicId::Exception(intrinsic) => match receiver {
+                Some(Value::Exception(exception)) => {
+                    self.call_exception_instance(&exception, intrinsic, &arguments, span)
+                }
+                Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
+                _ => Err(invalid_runtime_operands(receiver_span)),
+            },
+            IntrinsicId::List(intrinsic) => match receiver {
+                Some(Value::Collection(id))
+                    if matches!(self.collection(id), Collection::List { .. }) =>
+                {
+                    self.call_list(id, intrinsic, &arguments, span)
+                }
+                Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
+                _ => Err(invalid_runtime_operands(receiver_span)),
+            },
+            IntrinsicId::Set(intrinsic) => match receiver {
+                Some(Value::Collection(id))
+                    if matches!(self.collection(id), Collection::Set { .. }) =>
+                {
+                    self.call_set(id, intrinsic, &arguments, span)
+                }
+                Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
+                _ => Err(invalid_runtime_operands(receiver_span)),
+            },
+            IntrinsicId::Map(intrinsic) => match receiver {
+                Some(Value::Collection(id))
+                    if matches!(self.collection(id), Collection::Map { .. }) =>
+                {
+                    self.call_map(id, intrinsic, &arguments, span)
+                }
+                Some(Value::Null(_)) => Err(null_method_receiver(method, receiver_span)),
+                _ => Err(invalid_runtime_operands(receiver_span)),
+            },
         }
     }
 
@@ -1841,28 +1879,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .collect()
     }
 
-    fn call_static(
-        &mut self,
-        receiver: StaticReceiver,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match receiver {
-            StaticReceiver::String => self.call_static_string(method, arguments, span),
-            StaticReceiver::Math => self.call_math(method, arguments, span),
-            StaticReceiver::System => self.call_system(method, arguments, span),
-        }
-    }
-
     fn call_static_string(
         &mut self,
-        method: &Identifier,
+        intrinsic: StaticStringIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "valueof" => {
+        match intrinsic {
+            StaticStringIntrinsic::ValueOf => {
                 let [argument] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1874,7 +1898,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Value::String(self.display_value(&argument.value)))
             }
-            "join" => {
+            StaticStringIntrinsic::Join => {
                 let [iterable, separator] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1888,7 +1912,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .join(separator);
                 Ok(Value::String(joined))
             }
-            "isblank" | "isnotblank" | "isempty" | "isnotempty" => {
+            StaticStringIntrinsic::IsBlank
+            | StaticStringIntrinsic::IsNotBlank
+            | StaticStringIntrinsic::IsEmpty
+            | StaticStringIntrinsic::IsNotEmpty => {
                 let [argument] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1897,27 +1924,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Value::Null(_) => (true, true),
                     _ => return Err(invalid_runtime_operands(argument.span)),
                 };
-                let value = match method.canonical.as_str() {
-                    "isblank" => blank,
-                    "isnotblank" => !blank,
-                    "isempty" => empty,
-                    "isnotempty" => !empty,
-                    _ => unreachable!(),
+                let value = match intrinsic {
+                    StaticStringIntrinsic::IsBlank => blank,
+                    StaticStringIntrinsic::IsNotBlank => !blank,
+                    StaticStringIntrinsic::IsEmpty => empty,
+                    StaticStringIntrinsic::IsNotEmpty => !empty,
+                    StaticStringIntrinsic::ValueOf | StaticStringIntrinsic::Join => unreachable!(),
                 };
                 Ok(Value::Boolean(value))
             }
-            _ => Err(unsupported_method("String", method)),
         }
     }
 
     fn call_math(
         &mut self,
-        method: &Identifier,
+        intrinsic: MathIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "abs" => {
+        match intrinsic {
+            MathIntrinsic::Abs => {
                 let [argument] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1926,19 +1952,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(Value::Integer)
                     .ok_or_else(|| integer_overflow(span))
             }
-            "max" | "min" => {
+            MathIntrinsic::Max | MathIntrinsic::Min => {
                 let [left, right] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
                 let left = expect_integer(&left.value, left.span)?;
                 let right = expect_integer(&right.value, right.span)?;
-                Ok(Value::Integer(if method.canonical == "max" {
+                Ok(Value::Integer(if intrinsic == MathIntrinsic::Max {
                     left.max(right)
                 } else {
                     left.min(right)
                 }))
             }
-            "mod" => {
+            MathIntrinsic::Mod => {
                 let [left, right] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1956,18 +1982,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(Value::Integer)
                     .ok_or_else(|| integer_overflow(span))
             }
-            _ => Err(unsupported_method("Math", method)),
         }
     }
 
     fn call_system(
         &mut self,
-        method: &Identifier,
+        intrinsic: SystemIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "debug" => {
+        match intrinsic {
+            SystemIntrinsic::Debug => {
                 let [argument] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1978,7 +2003,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.host.debug(DebugEvent { message });
                 Ok(Value::Void)
             }
-            "assert" => {
+            SystemIntrinsic::Assert => {
                 let ([condition] | [condition, _]) = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -1994,12 +2019,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     condition.span,
                 ))
             }
-            "assertequals" | "assertnotequals" => {
+            SystemIntrinsic::AssertEquals | SystemIntrinsic::AssertNotEquals => {
                 let ([expected, actual] | [expected, actual, _]) = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
                 let equal = self.values_equal(&expected.value, &actual.value);
-                let passed = if method.canonical == "assertequals" {
+                let passed = if intrinsic == SystemIntrinsic::AssertEquals {
                     equal
                 } else {
                     !equal
@@ -2007,7 +2032,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 if passed {
                     return Ok(Value::Void);
                 }
-                let detail = if method.canonical == "assertequals" {
+                let detail = if intrinsic == SystemIntrinsic::AssertEquals {
                     format!(
                         "expected {}, actual {}",
                         self.display_value(&expected.value),
@@ -2025,59 +2050,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     actual.span,
                 ))
             }
-            _ => Err(unsupported_method("System", method)),
-        }
-    }
-
-    fn call_instance(
-        &mut self,
-        receiver: Value,
-        receiver_span: Span,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match receiver {
-            Value::String(value) => self.call_string_instance(value, method, arguments, span),
-            Value::Collection(id) => self.call_collection(id, method, arguments, span),
-            Value::Object(_) => Err(unsupported_method("class instance", method)),
-            Value::Exception(exception) => {
-                self.call_exception_instance(&exception, method, arguments, span)
-            }
-            Value::Null(_) => Err(runtime_exception(
-                "NullPointerException",
-                format!(
-                    "attempt to de-reference a null value while calling `{}`",
-                    method.spelling
-                ),
-                receiver_span,
-            )),
-            Value::Boolean(_) => Err(unsupported_method("Boolean", method)),
-            Value::Integer(_) => Err(unsupported_method("Integer", method)),
-            Value::Void => Err(Diagnostic::new(
-                "cannot call a method on void",
-                receiver_span,
-            )),
         }
     }
 
     fn call_exception_instance(
         &self,
         exception: &Diagnostic,
-        method: &Identifier,
+        intrinsic: ExceptionIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
         expect_no_arguments(arguments, span)?;
-        match method.canonical.as_str() {
-            "getmessage" => Ok(Value::String(exception.message.clone())),
-            "gettypename" => Ok(Value::String(
+        match intrinsic {
+            ExceptionIntrinsic::GetMessage => Ok(Value::String(exception.message.clone())),
+            ExceptionIntrinsic::GetTypeName => Ok(Value::String(
                 exception
                     .exception_type
                     .clone()
                     .unwrap_or_else(|| "Exception".to_owned()),
             )),
-            "getstacktracestring" => Ok(Value::String(
+            ExceptionIntrinsic::GetStackTraceString => Ok(Value::String(
                 exception
                     .stack_trace
                     .iter()
@@ -2090,19 +2082,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .collect::<Vec<_>>()
                     .join("\n"),
             )),
-            _ => Err(unsupported_method("Exception", method)),
         }
     }
 
     fn call_string_instance(
         &mut self,
         receiver: String,
-        method: &Identifier,
+        intrinsic: StringIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "length" => {
+        match intrinsic {
+            StringIntrinsic::Length => {
                 let [] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2111,25 +2102,34 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 })?;
                 Ok(Value::Integer(length))
             }
-            "contains" | "startswith" | "endswith" | "equals" | "equalsignorecase" | "indexof" => {
+            StringIntrinsic::Contains
+            | StringIntrinsic::StartsWith
+            | StringIntrinsic::EndsWith
+            | StringIntrinsic::Equals
+            | StringIntrinsic::EqualsIgnoreCase
+            | StringIntrinsic::IndexOf => {
                 let [argument] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
-                if matches!(method.canonical.as_str(), "equals" | "equalsignorecase")
-                    && matches!(argument.value, Value::Null(_))
+                if matches!(
+                    intrinsic,
+                    StringIntrinsic::Equals | StringIntrinsic::EqualsIgnoreCase
+                ) && matches!(argument.value, Value::Null(_))
                 {
                     return Ok(Value::Boolean(false));
                 }
                 let argument = expect_string(&argument.value, argument.span)?;
-                match method.canonical.as_str() {
-                    "contains" => Ok(Value::Boolean(receiver.contains(argument))),
-                    "startswith" => Ok(Value::Boolean(receiver.starts_with(argument))),
-                    "endswith" => Ok(Value::Boolean(receiver.ends_with(argument))),
-                    "equals" => Ok(Value::Boolean(receiver == argument)),
-                    "equalsignorecase" => Ok(Value::Boolean(
+                match intrinsic {
+                    StringIntrinsic::Contains => Ok(Value::Boolean(receiver.contains(argument))),
+                    StringIntrinsic::StartsWith => {
+                        Ok(Value::Boolean(receiver.starts_with(argument)))
+                    }
+                    StringIntrinsic::EndsWith => Ok(Value::Boolean(receiver.ends_with(argument))),
+                    StringIntrinsic::Equals => Ok(Value::Boolean(receiver == argument)),
+                    StringIntrinsic::EqualsIgnoreCase => Ok(Value::Boolean(
                         receiver.to_lowercase() == argument.to_lowercase(),
                     )),
-                    "indexof" => {
+                    StringIntrinsic::IndexOf => {
                         let index = receiver.find(argument).map_or(-1, |byte_index| {
                             i64::try_from(receiver[..byte_index].encode_utf16().count())
                                 .expect("String index fits in i64 when String length does")
@@ -2139,20 +2139,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => unreachable!(),
                 }
             }
-            "substring" => self.string_substring(&receiver, arguments, span),
-            "trim" | "tolowercase" | "touppercase" => {
+            StringIntrinsic::Substring => self.string_substring(&receiver, arguments, span),
+            StringIntrinsic::Trim | StringIntrinsic::ToLowerCase | StringIntrinsic::ToUpperCase => {
                 let [] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
-                let value = match method.canonical.as_str() {
-                    "trim" => receiver.trim().to_owned(),
-                    "tolowercase" => receiver.to_lowercase(),
-                    "touppercase" => receiver.to_uppercase(),
+                let value = match intrinsic {
+                    StringIntrinsic::Trim => receiver.trim().to_owned(),
+                    StringIntrinsic::ToLowerCase => receiver.to_lowercase(),
+                    StringIntrinsic::ToUpperCase => receiver.to_uppercase(),
                     _ => unreachable!(),
                 };
                 Ok(Value::String(value))
             }
-            "replace" => {
+            StringIntrinsic::Replace => {
                 let [target, replacement] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2160,7 +2160,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let replacement = expect_string(&replacement.value, replacement.span)?;
                 Ok(Value::String(receiver.replace(target, replacement)))
             }
-            _ => Err(unsupported_method("String", method)),
         }
     }
 
@@ -2210,29 +2209,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(Value::String(receiver[start_byte..end_byte].to_owned()))
     }
 
-    fn call_collection(
-        &mut self,
-        id: CollectionId,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match self.collection(id) {
-            Collection::List { .. } => self.call_list(id, method, arguments, span),
-            Collection::Set { .. } => self.call_set(id, method, arguments, span),
-            Collection::Map { .. } => self.call_map(id, method, arguments, span),
-        }
-    }
-
     fn call_list(
         &mut self,
         id: CollectionId,
-        method: &Identifier,
+        intrinsic: ListIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" => match arguments {
+        match intrinsic {
+            ListIntrinsic::Add => match arguments {
                 [value] => {
                     self.ensure_collection_mutable(id, span)?;
                     let element_type = self.list_type(id).clone();
@@ -2264,7 +2249,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 _ => Err(invalid_call_arguments(span)),
             },
-            "addall" => {
+            ListIntrinsic::AddAll => {
                 let [source] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2282,7 +2267,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 elements.extend(values);
                 Ok(Value::Void)
             }
-            "clear" => {
+            ListIntrinsic::Clear => {
                 expect_no_arguments(arguments, span)?;
                 self.ensure_collection_mutable(id, span)?;
                 let Collection::List { elements, .. } = self.collection_mut(id) else {
@@ -2291,7 +2276,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 elements.clear();
                 Ok(Value::Void)
             }
-            "clone" => {
+            ListIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
                 let (element_type, elements) = match self.collection(id) {
                     Collection::List {
@@ -2307,7 +2292,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            "contains" => {
+            ListIntrinsic::Contains => {
                 let [needle] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2320,13 +2305,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         .any(|value| self.values_equal(value, &needle.value)),
                 ))
             }
-            "get" => {
+            ListIntrinsic::Get => {
                 let [index] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
                 self.list_get(id, &index.value, index.span)
             }
-            "indexof" => {
+            ListIntrinsic::IndexOf => {
                 let [needle] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2339,14 +2324,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map_or(-1, |index| i64::try_from(index).unwrap_or(i64::MAX));
                 Ok(Value::Integer(index))
             }
-            "isempty" => {
+            ListIntrinsic::IsEmpty => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::List { elements, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Boolean(elements.is_empty()))
             }
-            "remove" => {
+            ListIntrinsic::Remove => {
                 let [index] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2362,7 +2347,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 Ok(elements.remove(index))
             }
-            "set" => {
+            ListIntrinsic::Set => {
                 let [index, value] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2384,14 +2369,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 elements[index] = value;
                 Ok(Value::Void)
             }
-            "size" => {
+            ListIntrinsic::Size => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::List { elements, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Integer(collection_size(elements.len(), span)?))
             }
-            "sort" => {
+            ListIntrinsic::Sort => {
                 expect_no_arguments(arguments, span)?;
                 self.ensure_collection_mutable(id, span)?;
                 let mut elements = match self.collection(id) {
@@ -2408,19 +2393,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 *stored = elements;
                 Ok(Value::Void)
             }
-            _ => Err(unsupported_method("List", method)),
         }
     }
 
     fn call_set(
         &mut self,
         id: CollectionId,
-        method: &Identifier,
+        intrinsic: SetIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" => {
+        match intrinsic {
+            SetIntrinsic::Add => {
                 let [value] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2443,7 +2427,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Value::Boolean(changed))
             }
-            "addall" => {
+            SetIntrinsic::AddAll => {
                 let [source] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2472,7 +2456,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 *elements = current;
                 Ok(Value::Boolean(changed))
             }
-            "clear" => {
+            SetIntrinsic::Clear => {
                 expect_no_arguments(arguments, span)?;
                 self.ensure_collection_mutable(id, span)?;
                 let Collection::Set { elements, .. } = self.collection_mut(id) else {
@@ -2481,7 +2465,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 elements.clear();
                 Ok(Value::Void)
             }
-            "clone" => {
+            SetIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
                 let (element_type, elements) = match self.collection(id) {
                     Collection::Set {
@@ -2497,7 +2481,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            "contains" => {
+            SetIntrinsic::Contains => {
                 let [needle] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2510,7 +2494,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         .any(|value| self.values_equal(value, &needle.value)),
                 ))
             }
-            "containsall" => {
+            SetIntrinsic::ContainsAll => {
                 let [source] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2525,14 +2509,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         .any(|value| self.values_equal(value, needle))
                 })))
             }
-            "isempty" => {
+            SetIntrinsic::IsEmpty => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::Set { elements, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Boolean(elements.is_empty()))
             }
-            "remove" => {
+            SetIntrinsic::Remove => {
                 let [needle] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2555,7 +2539,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Ok(Value::Boolean(false))
                 }
             }
-            "removeall" | "retainall" => {
+            SetIntrinsic::RemoveAll | SetIntrinsic::RetainAll => {
                 let [source] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2566,7 +2550,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Collection::Set { elements, .. } => elements.clone(),
                     _ => unreachable!(),
                 };
-                let retain_matches = method.canonical == "retainall";
+                let retain_matches = intrinsic == SetIntrinsic::RetainAll;
                 let retained: Vec<Value> = current
                     .iter()
                     .filter(|value| {
@@ -2582,26 +2566,25 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 *elements = retained;
                 Ok(Value::Boolean(changed))
             }
-            "size" => {
+            SetIntrinsic::Size => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::Set { elements, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Integer(collection_size(elements.len(), span)?))
             }
-            _ => Err(unsupported_method("Set", method)),
         }
     }
 
     fn call_map(
         &mut self,
         id: CollectionId,
-        method: &Identifier,
+        intrinsic: MapIntrinsic,
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "clear" => {
+        match intrinsic {
+            MapIntrinsic::Clear => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::Map { entries, .. } = self.collection_mut(id) else {
                     unreachable!()
@@ -2609,7 +2592,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 entries.clear();
                 Ok(Value::Void)
             }
-            "clone" => {
+            MapIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
                 let (key_type, value_type, entries) = match self.collection(id) {
                     Collection::Map {
@@ -2625,13 +2608,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     entries,
                 }))
             }
-            "containskey" => {
+            MapIntrinsic::ContainsKey => {
                 let [key] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
                 Ok(Value::Boolean(self.map_key_index(id, &key.value).is_some()))
             }
-            "get" => {
+            MapIntrinsic::Get => {
                 let [key] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2648,14 +2631,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(|index| entries[index].1.clone())
                     .unwrap_or_else(|| Value::Null(Some(value_type.clone()))))
             }
-            "isempty" => {
+            MapIntrinsic::IsEmpty => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::Map { entries, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Boolean(entries.is_empty()))
             }
-            "keyset" => {
+            MapIntrinsic::KeySet => {
                 expect_no_arguments(arguments, span)?;
                 let (key_type, elements) = match self.collection(id) {
                     Collection::Map {
@@ -2672,7 +2655,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            "put" => {
+            MapIntrinsic::Put => {
                 let [key, value] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2688,7 +2671,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let value = typed_value(value.value.clone(), &value_type);
                 Ok(self.map_put(id, key, value))
             }
-            "putall" => {
+            MapIntrinsic::PutAll => {
                 let [source] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2714,7 +2697,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Value::Void)
             }
-            "remove" => {
+            MapIntrinsic::Remove => {
                 let [key] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
@@ -2731,14 +2714,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Ok(Value::Null(Some(value_type)))
                 }
             }
-            "size" => {
+            MapIntrinsic::Size => {
                 expect_no_arguments(arguments, span)?;
                 let Collection::Map { entries, .. } = self.collection(id) else {
                     unreachable!()
                 };
                 Ok(Value::Integer(collection_size(entries.len(), span)?))
             }
-            "values" => {
+            MapIntrinsic::Values => {
                 expect_no_arguments(arguments, span)?;
                 let (value_type, elements) = match self.collection(id) {
                     Collection::Map {
@@ -2757,7 +2740,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            _ => Err(unsupported_method("Map", method)),
         }
     }
 
@@ -3467,17 +3449,19 @@ impl<'program> Default for Interpreter<'program, RecordingHost> {
     }
 }
 
-fn static_receiver(identifier: &Identifier) -> Option<StaticReceiver> {
-    match identifier.canonical.as_str() {
-        "string" => Some(StaticReceiver::String),
-        "math" => Some(StaticReceiver::Math),
-        "system" => Some(StaticReceiver::System),
-        _ => None,
-    }
-}
-
 fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::runtime_exception(exception_type, message, span)
+}
+
+fn null_method_receiver(method: &Identifier, span: Span) -> Diagnostic {
+    runtime_exception(
+        "NullPointerException",
+        format!(
+            "attempt to de-reference a null value while calling `{}`",
+            method.spelling
+        ),
+        span,
+    )
 }
 
 fn assertion_failure_message(message: Option<&str>, detail: &str) -> String {
@@ -3660,17 +3644,6 @@ fn unknown_variable(identifier: &Identifier) -> Diagnostic {
     Diagnostic::new(
         format!("unknown variable `{}`", identifier.spelling),
         identifier.span,
-    )
-}
-
-fn unsupported_method(receiver: &str, method: &Identifier) -> Diagnostic {
-    runtime_exception(
-        "TypeException",
-        format!(
-            "unsupported {receiver} method `{}` escaped semantic validation",
-            method.spelling
-        ),
-        method.span,
     )
 }
 

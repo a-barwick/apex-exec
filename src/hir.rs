@@ -1,6 +1,13 @@
 use crate::{ast, span::Span};
 use std::{collections::HashMap, ops::Deref};
 
+mod intrinsic;
+
+pub use intrinsic::{
+    ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic, MathIntrinsic, SetIntrinsic,
+    StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
+};
+
 /// The checked program consumed by execution.
 ///
 /// Parsed syntax stays immutable and free of semantic annotations. Resolution
@@ -87,6 +94,7 @@ pub enum CallTarget {
     StaticMethod(ClassMemberId),
     InstanceMethod(ClassMemberId),
     SuperMethod(ClassMemberId),
+    Intrinsic(IntrinsicId),
     Constructor {
         class_id: usize,
         member_id: Option<usize>,
@@ -141,5 +149,30 @@ mod tests {
             checked.call_target(*span),
             Some(CallTarget::TopLevelMethod(0))
         );
+    }
+
+    #[test]
+    fn intrinsic_targets_are_stable_across_case_insensitive_spelling() {
+        let parsed =
+            crate::parse("Integer first = MaTh.AbS(1); Integer second = math.abs(2);").unwrap();
+        let spans = parsed
+            .statements
+            .iter()
+            .map(|statement| {
+                let Statement::VariableDeclaration { initializer, .. } = statement else {
+                    panic!("expected variable declaration");
+                };
+                let Expression::MethodCall { span, .. } = initializer else {
+                    panic!("expected method call");
+                };
+                *span
+            })
+            .collect::<Vec<_>>();
+
+        let checked = crate::semantic::check(&parsed).unwrap();
+        let expected = Some(CallTarget::Intrinsic(IntrinsicId::Math(MathIntrinsic::Abs)));
+
+        assert_eq!(checked.call_target(spans[0]), expected);
+        assert_eq!(checked.call_target(spans[1]), expected);
     }
 }

@@ -6,7 +6,11 @@ use crate::{
         Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
-    hir::{self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, ReferenceTarget},
+    hir::{
+        self, CallTarget, ClassMemberId, ExceptionIntrinsic, ExpressionType, IntrinsicId,
+        ListIntrinsic, MapIntrinsic, MathIntrinsic, MemberTarget, ReferenceTarget, SetIntrinsic,
+        StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
+    },
     span::Span,
 };
 use std::collections::HashMap;
@@ -2057,9 +2061,18 @@ impl Checker {
                 )
             } else {
                 match identifier.canonical.as_str() {
-                    "string" => self.static_string_method_type(method, arguments),
-                    "math" => self.static_math_method_type(method, arguments),
-                    "system" => self.static_system_method_type(method, arguments),
+                    "string" | "math" | "system" => {
+                        let checked = match identifier.canonical.as_str() {
+                            "string" => self.static_string_method_type(method, arguments),
+                            "math" => self.static_math_method_type(method, arguments),
+                            "system" => self.static_system_method_type(method, arguments),
+                            _ => unreachable!(),
+                        };
+                        checked.map(|(intrinsic, result)| {
+                            self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+                            result
+                        })
+                    }
                     _ => {
                         let receiver_type = self.variable_type(identifier)?;
                         let ExpressionType::Value(receiver_type) = receiver_type else {
@@ -2107,19 +2120,19 @@ impl Checker {
         span: Span,
         super_call: bool,
     ) -> Result<ExpressionType, Diagnostic> {
-        match receiver_type {
+        let (intrinsic, result) = match receiver_type {
             TypeName::List(element) => {
-                self.list_method_type(receiver_type, element, method, arguments)
+                self.list_method_type(receiver_type, element, method, arguments)?
             }
             TypeName::Set(element) => {
-                self.set_method_type(receiver_type, element, method, arguments)
+                self.set_method_type(receiver_type, element, method, arguments)?
             }
             TypeName::Map(key, value) => {
-                self.map_method_type(receiver_type, key, value, method, arguments)
+                self.map_method_type(receiver_type, key, value, method, arguments)?
             }
-            TypeName::String => self.string_instance_method_type(method, arguments),
+            TypeName::String => self.string_instance_method_type(method, arguments)?,
             ty if ty.is_exception() => {
-                self.exception_instance_method_type(receiver_type, method, arguments)
+                self.exception_instance_method_type(receiver_type, method, arguments)?
             }
             TypeName::Custom(name) => {
                 let class_id = self.class_ids[&name.canonical];
@@ -2128,7 +2141,7 @@ impl Checker {
                     .map(|argument| self.expression_type(argument))
                     .collect::<Result<Vec<_>, _>>()?;
                 let candidates = self.class_methods_named(class_id, &method.canonical);
-                self.select_class_method_call(
+                return self.select_class_method_call(
                     class_id,
                     method,
                     &argument_types,
@@ -2139,10 +2152,12 @@ impl Checker {
                         ClassCallKind::Instance
                     },
                     span,
-                )
+                );
             }
-            _ => Err(unknown_method(receiver_type, method)),
-        }
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+        Ok(result)
     }
 
     fn select_class_method_call(
@@ -2215,20 +2230,24 @@ impl Checker {
         receiver_type: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "getmessage" | "gettypename" | "getstacktracestring" => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[0],
-                    arguments,
-                )?;
-                Ok(ExpressionType::Value(TypeName::String))
-            }
-            _ => Err(unknown_method(receiver_type, method)),
-        }
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "getmessage" => ExceptionIntrinsic::GetMessage,
+            "gettypename" => ExceptionIntrinsic::GetTypeName,
+            "getstacktracestring" => ExceptionIntrinsic::GetStackTraceString,
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[0],
+            arguments,
+        )?;
+        Ok((
+            IntrinsicId::Exception(intrinsic),
+            ExpressionType::Value(TypeName::String),
+        ))
     }
 
     fn list_method_type(
@@ -2237,9 +2256,24 @@ impl Checker {
         element: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" => {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "add" => ListIntrinsic::Add,
+            "addall" => ListIntrinsic::AddAll,
+            "clear" => ListIntrinsic::Clear,
+            "clone" => ListIntrinsic::Clone,
+            "contains" => ListIntrinsic::Contains,
+            "get" => ListIntrinsic::Get,
+            "indexof" => ListIntrinsic::IndexOf,
+            "isempty" => ListIntrinsic::IsEmpty,
+            "remove" => ListIntrinsic::Remove,
+            "set" => ListIntrinsic::Set,
+            "size" => ListIntrinsic::Size,
+            "sort" => ListIntrinsic::Sort,
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        let result = match intrinsic {
+            ListIntrinsic::Add => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2273,7 +2307,7 @@ impl Checker {
                 }
                 Ok(ExpressionType::Void)
             }
-            "addall" => {
+            ListIntrinsic::AddAll => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2290,7 +2324,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            "clear" => {
+            ListIntrinsic::Clear => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2300,7 +2334,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            "clone" => {
+            ListIntrinsic::Clone => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2310,7 +2344,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(receiver_type.clone()))
             }
-            "contains" => {
+            ListIntrinsic::Contains => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2321,7 +2355,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "get" => {
+            ListIntrinsic::Get => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2338,7 +2372,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(element.clone()))
             }
-            "indexof" => {
+            ListIntrinsic::IndexOf => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2349,7 +2383,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            "isempty" => {
+            ListIntrinsic::IsEmpty => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2359,7 +2393,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "remove" => {
+            ListIntrinsic::Remove => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2376,7 +2410,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(element.clone()))
             }
-            "set" => {
+            ListIntrinsic::Set => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2394,7 +2428,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 1, &arguments[1], element)?;
                 Ok(ExpressionType::Void)
             }
-            "size" => {
+            ListIntrinsic::Size => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2404,7 +2438,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            "sort" => {
+            ListIntrinsic::Sort => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2423,8 +2457,8 @@ impl Checker {
                 }
                 Ok(ExpressionType::Void)
             }
-            _ => Err(unknown_method(receiver_type, method)),
-        }
+        }?;
+        Ok((IntrinsicId::List(intrinsic), result))
     }
 
     fn set_method_type(
@@ -2433,9 +2467,23 @@ impl Checker {
         element: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" | "contains" | "remove" => {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "add" => SetIntrinsic::Add,
+            "addall" => SetIntrinsic::AddAll,
+            "clear" => SetIntrinsic::Clear,
+            "clone" => SetIntrinsic::Clone,
+            "contains" => SetIntrinsic::Contains,
+            "containsall" => SetIntrinsic::ContainsAll,
+            "isempty" => SetIntrinsic::IsEmpty,
+            "remove" => SetIntrinsic::Remove,
+            "removeall" => SetIntrinsic::RemoveAll,
+            "retainall" => SetIntrinsic::RetainAll,
+            "size" => SetIntrinsic::Size,
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        let result = match intrinsic {
+            SetIntrinsic::Add | SetIntrinsic::Contains | SetIntrinsic::Remove => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2446,7 +2494,10 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], element)?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "addall" | "containsall" | "removeall" | "retainall" => {
+            SetIntrinsic::AddAll
+            | SetIntrinsic::ContainsAll
+            | SetIntrinsic::RemoveAll
+            | SetIntrinsic::RetainAll => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2463,7 +2514,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "clear" => {
+            SetIntrinsic::Clear => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2473,7 +2524,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            "clone" => {
+            SetIntrinsic::Clone => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2483,7 +2534,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(receiver_type.clone()))
             }
-            "isempty" => {
+            SetIntrinsic::IsEmpty => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2493,7 +2544,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "size" => {
+            SetIntrinsic::Size => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2503,8 +2554,8 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            _ => Err(unknown_method(receiver_type, method)),
-        }
+        }?;
+        Ok((IntrinsicId::Set(intrinsic), result))
     }
 
     fn map_method_type(
@@ -2514,9 +2565,23 @@ impl Checker {
         value: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "clear" => {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "clear" => MapIntrinsic::Clear,
+            "clone" => MapIntrinsic::Clone,
+            "containskey" => MapIntrinsic::ContainsKey,
+            "get" => MapIntrinsic::Get,
+            "isempty" => MapIntrinsic::IsEmpty,
+            "keyset" => MapIntrinsic::KeySet,
+            "put" => MapIntrinsic::Put,
+            "putall" => MapIntrinsic::PutAll,
+            "remove" => MapIntrinsic::Remove,
+            "size" => MapIntrinsic::Size,
+            "values" => MapIntrinsic::Values,
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        let result = match intrinsic {
+            MapIntrinsic::Clear => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2526,7 +2591,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            "clone" => {
+            MapIntrinsic::Clone => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2536,7 +2601,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(receiver_type.clone()))
             }
-            "containskey" => {
+            MapIntrinsic::ContainsKey => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2547,7 +2612,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "get" => {
+            MapIntrinsic::Get => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2558,7 +2623,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
                 Ok(ExpressionType::Value(value.clone()))
             }
-            "isempty" => {
+            MapIntrinsic::IsEmpty => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2568,7 +2633,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "keyset" => {
+            MapIntrinsic::KeySet => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2578,7 +2643,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Set(Box::new(key.clone()))))
             }
-            "put" => {
+            MapIntrinsic::Put => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2590,7 +2655,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 1, &arguments[1], value)?;
                 Ok(ExpressionType::Value(value.clone()))
             }
-            "putall" => {
+            MapIntrinsic::PutAll => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2607,7 +2672,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            "remove" => {
+            MapIntrinsic::Remove => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2618,7 +2683,7 @@ impl Checker {
                 self.require_argument(receiver_type, &method.spelling, 0, &arguments[0], key)?;
                 Ok(ExpressionType::Value(value.clone()))
             }
-            "size" => {
+            MapIntrinsic::Size => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2628,7 +2693,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            "values" => {
+            MapIntrinsic::Values => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -2640,22 +2705,31 @@ impl Checker {
                     value.clone(),
                 ))))
             }
-            _ => Err(unknown_method(receiver_type, method)),
-        }
+        }?;
+        Ok((IntrinsicId::Map(intrinsic), result))
     }
 
     fn static_string_method_type(
         &mut self,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "valueof" => {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "valueof" => StaticStringIntrinsic::ValueOf,
+            "join" => StaticStringIntrinsic::Join,
+            "isblank" => StaticStringIntrinsic::IsBlank,
+            "isnotblank" => StaticStringIntrinsic::IsNotBlank,
+            "isempty" => StaticStringIntrinsic::IsEmpty,
+            "isnotempty" => StaticStringIntrinsic::IsNotEmpty,
+            _ => return Err(unknown_static_method("String", method)),
+        };
+        let result = match intrinsic {
+            StaticStringIntrinsic::ValueOf => {
                 require_static_arity("String", method, arguments.len(), &[1], arguments)?;
                 self.require_non_void_argument("String", &method.spelling, 0, &arguments[0])?;
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            "join" => {
+            StaticStringIntrinsic::Join => {
                 require_static_arity("String", method, arguments.len(), &[2], arguments)?;
                 self.require_list_or_set_argument(
                     &TypeName::String,
@@ -2673,7 +2747,10 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            "isblank" | "isnotblank" | "isempty" | "isnotempty" => {
+            StaticStringIntrinsic::IsBlank
+            | StaticStringIntrinsic::IsNotBlank
+            | StaticStringIntrinsic::IsEmpty
+            | StaticStringIntrinsic::IsNotEmpty => {
                 require_static_arity("String", method, arguments.len(), &[1], arguments)?;
                 self.require_argument(
                     &TypeName::String,
@@ -2684,18 +2761,33 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            _ => Err(unknown_static_method("String", method)),
-        }
+        }?;
+        Ok((IntrinsicId::StaticString(intrinsic), result))
     }
 
     fn string_instance_method_type(
         &mut self,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
         let receiver_type = TypeName::String;
-        match method.canonical.as_str() {
-            "length" => {
+        let intrinsic = match method.canonical.as_str() {
+            "length" => StringIntrinsic::Length,
+            "contains" => StringIntrinsic::Contains,
+            "startswith" => StringIntrinsic::StartsWith,
+            "endswith" => StringIntrinsic::EndsWith,
+            "equals" => StringIntrinsic::Equals,
+            "equalsignorecase" => StringIntrinsic::EqualsIgnoreCase,
+            "indexof" => StringIntrinsic::IndexOf,
+            "substring" => StringIntrinsic::Substring,
+            "trim" => StringIntrinsic::Trim,
+            "tolowercase" => StringIntrinsic::ToLowerCase,
+            "touppercase" => StringIntrinsic::ToUpperCase,
+            "replace" => StringIntrinsic::Replace,
+            _ => return Err(unknown_method(&receiver_type, method)),
+        };
+        let result = match intrinsic {
+            StringIntrinsic::Length => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2705,7 +2797,11 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            "contains" | "startswith" | "endswith" | "equals" | "equalsignorecase" => {
+            StringIntrinsic::Contains
+            | StringIntrinsic::StartsWith
+            | StringIntrinsic::EndsWith
+            | StringIntrinsic::Equals
+            | StringIntrinsic::EqualsIgnoreCase => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2722,7 +2818,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
-            "indexof" => {
+            StringIntrinsic::IndexOf => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2739,7 +2835,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
-            "substring" => {
+            StringIntrinsic::Substring => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2758,7 +2854,7 @@ impl Checker {
                 }
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            "trim" | "tolowercase" | "touppercase" => {
+            StringIntrinsic::Trim | StringIntrinsic::ToLowerCase | StringIntrinsic::ToUpperCase => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2768,7 +2864,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            "replace" => {
+            StringIntrinsic::Replace => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -2787,19 +2883,25 @@ impl Checker {
                 }
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            _ => Err(unknown_method(&receiver_type, method)),
-        }
+        }?;
+        Ok((IntrinsicId::String(intrinsic), result))
     }
 
     fn static_math_method_type(
         &mut self,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        let arity = match method.canonical.as_str() {
-            "abs" => 1,
-            "max" | "min" | "mod" => 2,
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "abs" => MathIntrinsic::Abs,
+            "max" => MathIntrinsic::Max,
+            "min" => MathIntrinsic::Min,
+            "mod" => MathIntrinsic::Mod,
             _ => return Err(unknown_static_method("Math", method)),
+        };
+        let arity = match intrinsic {
+            MathIntrinsic::Abs => 1,
+            MathIntrinsic::Max | MathIntrinsic::Min | MathIntrinsic::Mod => 2,
         };
         require_static_arity("Math", method, arguments.len(), &[arity], arguments)?;
         for (index, argument) in arguments.iter().enumerate() {
@@ -2811,21 +2913,31 @@ impl Checker {
                 &TypeName::Integer,
             )?;
         }
-        Ok(ExpressionType::Value(TypeName::Integer))
+        Ok((
+            IntrinsicId::Math(intrinsic),
+            ExpressionType::Value(TypeName::Integer),
+        ))
     }
 
     fn static_system_method_type(
         &mut self,
         method: &Identifier,
         arguments: &[Expression],
-    ) -> Result<ExpressionType, Diagnostic> {
-        match method.canonical.as_str() {
-            "debug" => {
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let intrinsic = match method.canonical.as_str() {
+            "debug" => SystemIntrinsic::Debug,
+            "assert" => SystemIntrinsic::Assert,
+            "assertequals" => SystemIntrinsic::AssertEquals,
+            "assertnotequals" => SystemIntrinsic::AssertNotEquals,
+            _ => return Err(unknown_static_method("System", method)),
+        };
+        let result = match intrinsic {
+            SystemIntrinsic::Debug => {
                 require_static_arity("System", method, arguments.len(), &[1], arguments)?;
                 self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
                 Ok(ExpressionType::Void)
             }
-            "assert" => {
+            SystemIntrinsic::Assert => {
                 require_static_arity("System", method, arguments.len(), &[1, 2], arguments)?;
                 self.require_named_argument(
                     "System",
@@ -2839,7 +2951,7 @@ impl Checker {
                 }
                 Ok(ExpressionType::Void)
             }
-            "assertequals" | "assertnotequals" => {
+            SystemIntrinsic::AssertEquals | SystemIntrinsic::AssertNotEquals => {
                 require_static_arity("System", method, arguments.len(), &[2, 3], arguments)?;
                 self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
                 self.require_non_void_argument("System", &method.spelling, 1, &arguments[1])?;
@@ -2848,8 +2960,8 @@ impl Checker {
                 }
                 Ok(ExpressionType::Void)
             }
-            _ => Err(unknown_static_method("System", method)),
-        }
+        }?;
+        Ok((IntrinsicId::System(intrinsic), result))
     }
 
     fn require_argument(
