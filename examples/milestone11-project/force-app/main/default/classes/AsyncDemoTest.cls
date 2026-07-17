@@ -18,6 +18,7 @@ private class AsyncDemoTest {
         AsyncQueueJob queue = new AsyncQueueJob('original');
         AsyncNotice__e notice = new AsyncNotice__e();
         notice.Message__c = 'event';
+        List<AsyncNotice__e> notices = new List<AsyncNotice__e>{notice};
 
         Test.startTest();
         Id queueId = System.enqueueJob(queue);
@@ -28,7 +29,7 @@ private class AsyncDemoTest {
             '0 0 0 * * ? 2099',
             new AsyncScheduledJob()
         );
-        EventBus.publish(notice);
+        EventBus.publish(notices);
         queue.label = 'mutated after enqueue';
         Test.stopTest();
 

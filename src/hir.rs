@@ -30,16 +30,15 @@ pub struct Program {
 }
 
 impl Program {
-    pub(crate) fn new(
-        ast: ast::Program,
-        expression_types: HashMap<Span, ExpressionType>,
-        calls: HashMap<Span, CallTarget>,
-        references: HashMap<Span, ReferenceTarget>,
-        members: HashMap<Span, MemberTarget>,
-        queries: HashMap<Span, CheckedQuery>,
-        async_contracts: HashMap<usize, AsyncClassContract>,
-        schema: SchemaCatalog,
-    ) -> Self {
+    pub(crate) fn new(ast: ast::Program, facts: ProgramFacts, schema: SchemaCatalog) -> Self {
+        let ProgramFacts {
+            expression_types,
+            calls,
+            references,
+            members,
+            queries,
+            async_contracts,
+        } = facts;
         Self {
             ast,
             expression_types,
@@ -83,6 +82,15 @@ impl Program {
     pub fn schema(&self) -> &SchemaCatalog {
         &self.schema
     }
+}
+
+pub(crate) struct ProgramFacts {
+    pub expression_types: HashMap<Span, ExpressionType>,
+    pub calls: HashMap<Span, CallTarget>,
+    pub references: HashMap<Span, ReferenceTarget>,
+    pub members: HashMap<Span, MemberTarget>,
+    pub queries: HashMap<Span, CheckedQuery>,
+    pub async_contracts: HashMap<usize, AsyncClassContract>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

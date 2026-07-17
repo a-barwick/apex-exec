@@ -73,7 +73,12 @@ conformance harness is a later milestone.
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
-| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; other annotations and `SeeAllData=true` are explicit errors |
+| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; `SeeAllData=true` is explicit |
+| `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
+| Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
+| Batch Apex | Yes | Yes | Via drain | Simplified | Checked `Database.Batchable<T>` contract with List-returning `start`, deterministic chunking, context job ID, and `finish` |
+| Scheduled Apex | Yes | Yes | Via drain | Simplified | Checked Schedulable contract, seven-field cron shape validation, deterministic submission, and trigger ID |
+| Platform events | Yes | Yes | Via drain | Simplified | `EventBus.publish` queues imported `__e` records for after-insert trigger delivery; no retention or replay |
 | JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization and recursive untyped deserialization |
 | Regex | Yes | Yes | Yes | Compatible | `Pattern.compile`/`quote` and stateful `Matcher` match/find/group/start/end |
 | Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
@@ -141,7 +146,7 @@ the pending result.
 The implemented exception types are `Exception`, `NullPointerException`,
 `ListException`, `MathException`, `TypeException`, `StringException`,
 `IllegalArgumentException`, `FinalException`, `AssertException`,
-`QueryException`, and `DmlException`. They support zero- or one-String-argument
+`QueryException`, `DmlException`, and `AsyncException`. They support zero- or one-String-argument
 construction and `getMessage()`, `getTypeName()`, and
 `getStackTraceString()`. Catch matching recognizes each concrete type and the
 `Exception` root. Custom exception classes, causes, a broader built-in
@@ -354,6 +359,38 @@ credentials, and namespace-qualified `System.JSON` syntax remain unsupported.
 SObject Id/reference fields retain their earlier String surface; standalone
 `Id` values are validated but full field-level integration is future work.
 
+## M11 deterministic asynchronous execution
+
+Classes may implement the checked built-in `Queueable`,
+`Database.Batchable<T>`, and `Schedulable` contracts. The checker records their
+execute/start/finish targets in HIR, validates context and scope types, and
+rejects incomplete contracts before runtime. `@future` methods must be
+public/global static void methods and accept only supported primitive values or
+Lists/Sets of those primitives.
+
+`System.enqueueJob`, future calls, `Database.executeBatch`, `System.schedule`,
+and `EventBus.publish` append work to one interpreter-owned FIFO. Submission
+returns deterministic Salesforce-shaped `707` IDs where Apex exposes an ID.
+Class, collection, and SObject payloads are deep-snapshotted at enqueue so later
+synchronous mutation is not visible to the job. Queueable, batch, and scheduled
+contexts expose their job/trigger ID, and `System.isFuture`, `isQueueable`,
+`isBatch`, and `isScheduled` identify the active job.
+
+Queued work never runs on a background thread. `Test.stopTest` is the explicit
+drain point and processes work in submission order, including work chained by a
+running job, up to a deterministic 100-job bound. Each job uses a nested
+database checkpoint and publishes structured queued, started, completed, or
+failed lifecycle events. A failure rolls back that job and fails the drain.
+
+Batch `start` currently returns `List<T>`; `QueryLocator`, `Iterable`, stateful
+serialization between chunks, flex-queue policy, monitoring, abort, and
+rescheduling are not implemented. Scheduled cron text is checked for seven
+fields but is not evaluated against a clock. Platform-event delivery supports
+imported `__e` records and after-insert triggers without retention, replay IDs,
+publish result objects, or subscriber retry policy. Async work shares its
+interpreter's static store, so Salesforce-exact cross-transaction static
+isolation is not claimed.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
@@ -372,7 +409,7 @@ SObject Id/reference fields retain their earlier String surface; standalone
 | Transaction-wide rollback | Implemented (snapshot-backed) | M9 |
 | Recycle bin / undelete | Implemented (simplified) | M9 |
 | Common platform APIs | Implemented (`m10-common` profile) | M10 |
-| Async Apex | Deferred | M11 |
+| Async Apex | Implemented (simplified deterministic drain profile) | M11 |
 | Governor limits | Deferred | Post-core compatibility profile |
 | Sharing/security behavior | Deferred | Post-core compatibility profile |
 | API-version differences | Deferred | Post-core compatibility profile |
@@ -396,6 +433,9 @@ SObject Id/reference fields retain their earlier String surface; standalone
 - Unsupported annotations and invalid test/setup signatures are rejected
   before discovery; runtime and assertion failures become structured test
   failures without aborting the remaining suite.
+- Invalid async annotations, interface contracts, submission types, cron
+  shapes, batch sizes, non-serializable payloads, and drain overflow fail
+  explicitly at the checker or runtime boundary.
 - Unknown metadata objects/fields, incompatible custom-field assignments,
   unsupported metadata types, invalid dynamic SObject access, invalid IDs, and
   incompatible SQLite migrations fail explicitly at their owning boundary.
@@ -409,7 +449,7 @@ SObject Id/reference fields retain their earlier String surface; standalone
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M10 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
+At M11 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
 lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
 ordinary members until unsupported `instanceof`; the remaining first blockers
 are safe navigation, null coalescing, ternary syntax, and bitwise operators.

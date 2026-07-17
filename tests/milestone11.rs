@@ -11,13 +11,19 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
         r#"
         public class QueueWork implements Queueable {
             public String message;
+            public Set<String> tags;
+            public Map<String,String> labels;
 
             public QueueWork(String message) {
                 this.message = message;
+                this.tags = new Set<String>{message};
+                this.labels = new Map<String,String>{'key' => message};
             }
 
             public void execute(QueueableContext context) {
                 System.debug('queue:' + message);
+                System.debug(tags.size());
+                System.debug(labels.get('key'));
                 System.debug(context.getJobId().to15().startsWith('707'));
                 System.debug(System.isQueueable());
             }
@@ -25,8 +31,9 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
 
         public class FutureWork {
             @future
-            public static void run(List<String> messages) {
+            public static void run(List<String> messages, Blob bytes) {
                 System.debug('future:' + messages.get(0));
+                System.debug(bytes.size());
                 System.debug(System.isFuture());
             }
         }
@@ -60,7 +67,7 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
 
         Test.startTest();
         Id queueId = System.enqueueJob(queue);
-        FutureWork.run(messages);
+        FutureWork.run(messages, Blob.valueOf('data'));
         Id batchId = Database.executeBatch(new BatchWork(), 2);
         Id scheduleId = System.schedule(
             'nightly',
@@ -68,6 +75,8 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
             new ScheduledWork()
         );
         queue.message = 'mutated';
+        queue.tags.add('mutated');
+        queue.labels.put('key', 'mutated');
         messages.set(0, 'mutated');
         Test.stopTest();
 
@@ -82,9 +91,12 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
         output,
         [
             "queue:snapshot",
+            "1",
+            "snapshot",
             "true",
             "true",
             "future:snapshot",
+            "4",
             "true",
             "true",
             "batch:2",
@@ -100,6 +112,85 @@ fn queueable_future_batch_and_scheduled_jobs_drain_in_fifo_order() {
             "true",
         ]
     );
+}
+
+#[test]
+fn chained_queueables_drain_to_quiescence_and_record_parent_ids() {
+    let checked = check(
+        r#"
+        public class ChainedWork implements Queueable {
+            public Integer depth;
+
+            public ChainedWork(Integer depth) {
+                this.depth = depth;
+            }
+
+            public void execute(QueueableContext context) {
+                System.debug(depth);
+                if (depth < 2) {
+                    System.enqueueJob(new ChainedWork(depth + 1));
+                }
+            }
+        }
+
+        Test.startTest();
+        System.enqueueJob(new ChainedWork(0));
+        Test.stopTest();
+        "#,
+    )
+    .unwrap();
+    let mut host = RecordingHost::default();
+    let output = Interpreter::with_host(&mut host).execute(&checked).unwrap();
+    let queued = host
+        .async_events()
+        .iter()
+        .filter(|event| event.stage == AsyncStage::Queued)
+        .collect::<Vec<_>>();
+
+    assert_eq!(output, ["0", "1", "2"]);
+    assert_eq!(queued.len(), 3);
+    assert_eq!(queued[0].parent_job_id, None);
+    assert_eq!(
+        queued[1].parent_job_id.as_deref(),
+        Some(queued[0].job_id.as_str())
+    );
+    assert_eq!(
+        queued[2].parent_job_id.as_deref(),
+        Some(queued[1].job_id.as_str())
+    );
+    assert_eq!(
+        host.async_events()
+            .iter()
+            .filter(|event| event.stage == AsyncStage::Completed)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn empty_batch_uses_the_default_scope_and_still_finishes() {
+    let output = execute(
+        r#"
+        public class EmptyBatch implements Database.Batchable<Integer> {
+            public List<Integer> start(Database.BatchableContext context) {
+                return new List<Integer>();
+            }
+            public void execute(Database.BatchableContext context, List<Integer> scope) {
+                System.debug('unexpected');
+            }
+            public void finish(Database.BatchableContext context) {
+                System.debug('finished');
+            }
+        }
+
+        Test.startTest();
+        Database.executeBatch(new EmptyBatch());
+        Test.stopTest();
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(output, ["finished"]);
 }
 
 #[test]
@@ -208,6 +299,50 @@ fn checker_and_runtime_reject_invalid_async_boundaries_explicitly() {
     .unwrap_err();
     assert_eq!(error.exception_type.as_deref(), Some("AsyncException"));
     assert!(error.message.contains("scope size"));
+
+    let error = execute(
+        r#"
+        public class NullQueue implements Queueable {
+            public void execute(QueueableContext context) {}
+        }
+        NullQueue job = null;
+        System.enqueueJob(job);
+        "#,
+    )
+    .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("AsyncException"));
+    assert!(error.message.contains("non-null"));
+
+    let error = execute(
+        r#"
+        public class InvalidPayload implements Queueable {
+            public HttpRequest request;
+            public InvalidPayload() {
+                request = new HttpRequest();
+            }
+            public void execute(QueueableContext context) {}
+        }
+        System.enqueueJob(new InvalidPayload());
+        "#,
+    )
+    .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("AsyncException"));
+    assert!(error.message.contains("non-serializable platform value"));
+
+    let error = execute(
+        r#"
+        public class CronWork implements Schedulable {
+            public void execute(SchedulableContext context) {}
+        }
+        System.schedule('bad cron', '0 0', new CronWork());
+        "#,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.exception_type.as_deref(),
+        Some("IllegalArgumentException")
+    );
+    assert!(error.message.contains("7 fields"));
 }
 
 #[test]

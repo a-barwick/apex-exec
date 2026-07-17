@@ -125,12 +125,14 @@ impl Checker {
         }
         Ok(hir::Program::new(
             program.clone(),
-            self.expression_types,
-            self.calls,
-            self.references,
-            self.members,
-            self.queries,
-            self.async_contracts,
+            hir::ProgramFacts {
+                expression_types: self.expression_types,
+                calls: self.calls,
+                references: self.references,
+                members: self.members,
+                queries: self.queries,
+                async_contracts: self.async_contracts,
+            },
             self.schema,
         ))
     }
