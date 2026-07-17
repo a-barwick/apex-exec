@@ -3,6 +3,7 @@ pub mod diagnostic;
 pub mod hir;
 pub mod lexer;
 pub mod parser;
+pub mod platform;
 pub mod project;
 pub mod runtime;
 pub mod semantic;
@@ -12,14 +13,27 @@ pub mod token;
 
 use ast::Program;
 use diagnostic::Diagnostic;
+use span::SourceId;
 use token::Token;
 
 pub fn tokenize(source: &str) -> Result<Vec<Token>, Diagnostic> {
     lexer::Lexer::new(source).tokenize()
 }
 
+pub(crate) fn tokenize_with_source(
+    source: &str,
+    source_id: SourceId,
+) -> Result<Vec<Token>, Diagnostic> {
+    lexer::Lexer::with_source(source, source_id).tokenize()
+}
+
 pub fn parse(source: &str) -> Result<Program, Diagnostic> {
     let tokens = tokenize(source)?;
+    parser::Parser::new(tokens).parse_program()
+}
+
+pub(crate) fn parse_with_source(source: &str, source_id: SourceId) -> Result<Program, Diagnostic> {
+    let tokens = tokenize_with_source(source, source_id)?;
     parser::Parser::new(tokens).parse_program()
 }
 
@@ -31,4 +45,15 @@ pub fn check(source: &str) -> Result<hir::Program, Diagnostic> {
 pub fn execute(source: &str) -> Result<Vec<String>, Diagnostic> {
     let program = check(source)?;
     runtime::Interpreter::new().execute(&program)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_parse_retains_anonymous_source_identity() {
+        let program = parse("Integer value = 1;").unwrap();
+        assert_eq!(program.statements[0].span().source_id, SourceId::ANONYMOUS);
+    }
 }

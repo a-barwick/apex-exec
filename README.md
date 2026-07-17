@@ -15,6 +15,9 @@ source-mapped runtime call stacks. M5 adds classes, interfaces, inheritance,
 checked instance/static members, and incremental SFDX project compilation. M6
 adds annotation-based Apex test discovery, assertions, isolated parallel
 execution, filtering, JUnit reports, and line/branch coverage.
+The active M7 foundation separates normalized SObject schema, transactional
+record-storage contracts, and runtime platform hosting; metadata import,
+SQLite, and executable SObjects are still in progress.
 Apex identifiers, types, and method names are case-insensitive.
 
 ```console

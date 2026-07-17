@@ -6,7 +6,7 @@
 Apex source
     │
     ▼
-  Lexer ──► tokens with byte spans
+  Lexer ──► tokens with file-aware byte spans
     │
     ▼
   Parser ─► immutable untyped AST
@@ -37,21 +37,23 @@ instance, super, field, and property targets in side tables keyed by source
 span. The runtime executes those targets directly. Dynamic values never repeat
 or change compiler overload/member resolution.
 
-Project compilation discovers SFDX package directories, caches parsed source
-units, rebases their spans into a project coordinate space, builds class
-dependency edges, and checks one merged cross-file program. An unchanged input
-set reuses the complete checked program; after a change, unchanged parsed units
-are retained and reverse dependents are identified before project-wide semantic
-linking.
+Project compilation discovers SFDX package directories, assigns each cached
+path a stable `SourceId`, and keeps every parsed span local to its own file.
+The project façade delegates discovery, dependency collection, and diagnostic
+mapping to focused modules. Dependency collection uses the shared AST visitor,
+and the source map resolves diagnostics, coverage, and individual runtime stack
+frames by source identity. An unchanged input set reuses the complete checked
+program; after a change, unchanged parsed units are retained and reverse
+dependents are identified before project-wide semantic linking.
 
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
 its own interpreter. Setup methods share that test's interpreter and run before
-the test method. Independent interpreters make static fields, object and
-collection arenas, output, call stacks, and coverage state safe to execute in a
-bounded worker pool. Results are sorted by case-insensitive qualified test name
-after execution so parallel scheduling is never observable in reports.
+the test method. Each test receives a fresh execution store, default recording
+host, call stack, and coverage trace, so the bounded worker pool does not share
+observable runtime state. Results are sorted by case-insensitive qualified test
+name after execution so parallel scheduling is never observable in reports.
 
 The interpreter records executed statement spans and true/false conditional
 outcomes. The test runner maps those observations through the project source
@@ -59,19 +61,30 @@ map, excludes `@IsTest` classes from the production denominator, and owns
 console/JUnit rendering. Test policy and report formats do not leak into parser,
 semantic, or ordinary execution entry points.
 
+Checked built-in calls carry a typed `IntrinsicId` in HIR, just like
+user-defined calls carry a selected declaration target. Runtime dispatch
+therefore never repeats case-insensitive built-in lookup. An interpreter
+borrows immutable checked code through a `RuntimeImage`; its execution scopes
+and traces remain isolated, while an `ExecutionStore` owns its collection
+arena, object arena, and static slots. `System.debug` crosses a structured
+`PlatformHost` boundary whose default owned host records output for the
+existing convenience APIs. A custom host may intentionally share external
+state between interpreters.
+
 ## Current modules
 
 | Module | Responsibility |
 |---|---|
-| `span` | Source byte ranges |
+| `span` | File-aware source identities and local byte ranges |
 | `token` | Token kinds and lexical spelling |
 | `lexer` | Source-to-token conversion and lexical errors |
-| `ast` | Parsed program representation |
-| `hir` | Checked expression types and resolved execution targets |
-| `parser` | Grammar and syntax diagnostics |
-| `semantic` | Name lookup and primitive type validation |
-| `runtime` | AST execution, environments, and values |
-| `project` | SFDX discovery, source-unit caching, dependency graphs, and source mapping |
+| `ast` | Parsed program representation and shared immutable visitor |
+| `hir` | Checked expression types, declaration targets, and intrinsic IDs |
+| `parser` | Grammar façade with declaration, statement, expression, type/lookahead, and test modules |
+| `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
+| `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
+| `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
+| `platform` | Storage-independent normalized schema and transactional record-storage contracts |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
@@ -115,8 +128,10 @@ declarations, and executable anonymous statements separately. Signature and
 class collection are early semantic passes, so cross-file lookup, forward
 calls, and recursion work without source-order dependence. Runtime invocations
 replace the caller's lexical-scope stack with a new parameter scope and restore
-it on every completion path. Collections, class/static state, object arenas,
-and output remain interpreter-owned shared runtime state.
+it on every completion path. Collections, class/static state, and object arenas
+remain in the interpreter's execution store. Debug events flow through the
+configured platform host, whose state may be owned by the interpreter or
+intentionally shared by reference.
 
 Class member targets pair a class index with a member index. Instance calls may
 perform virtual dispatch only within the checked signature selected by the HIR;
@@ -130,11 +145,19 @@ of pending completion. The interpreter tracks active calls; when an exception
 first reaches a handler or escapes a method, it snapshots frames that pair the
 leaf method with the origin and each caller method with its nested call site.
 
-## Target compiler pipeline
+Built-in calls use the same rule: semantic analysis records a typed intrinsic
+target, and runtime execution matches that closed ID rather than method
+spelling. Adding a built-in requires an explicit checker mapping and runtime
+implementation, so unsupported platform surface cannot silently fall through
+to dynamic dispatch.
 
-Direct AST walking is appropriate for the current language slice. Before class
-inheritance, overload resolution, and project-scale compilation become large,
-the pipeline should evolve to:
+## Compiler pipeline evolution
+
+Direct AST walking remains appropriate for the current language slice.
+Inheritance, overload resolution, and project compilation now use typed HIR
+side tables so execution does not repeat compiler decisions. The next structural
+evolution, when scale or additional language semantics require it, is a lowered
+executable representation:
 
 ```text
 Source
@@ -150,9 +173,9 @@ The typed representation should make conversions, selected overloads, member
 resolution, loop targets, and runtime operations explicit. Execution should not
 repeat compiler reasoning.
 
-The first typed representation is now implemented as immutable syntax plus HIR
-side tables. A lowered executable IR remains a future evolution; it can replace
-this layout without moving semantic state back into parsed nodes.
+The current typed representation is immutable syntax plus HIR side tables. A
+lowered executable IR can replace this layout without moving semantic state
+back into parsed nodes.
 
 ## Target runtime boundaries
 
@@ -187,6 +210,13 @@ trait CalloutHost {
 Additional hosts can own logging, user context, randomness, IDs, limits, and
 filesystem-independent fixture data.
 
+The implemented host surface currently owns structured debug output.
+`platform::schema` provides a case-insensitive normalized catalog and
+`SchemaProvider`, while `platform::storage` defines storage-neutral records and
+transaction traits. They are deliberately not wired into Apex expressions yet;
+metadata import, SQLite adaptation, and SObject runtime values are the next M7
+layers.
+
 ## Local data architecture
 
 SQLite will eventually provide persistent local org state. The logical model
@@ -204,6 +234,10 @@ SFDX metadata
 Schema normalization must remain separate from SQLite DDL so alternate storage
 or in-memory implementations remain possible.
 
+That separation now exists in code: normalized schema types have no SQLite
+dependency, and the transaction contract deals in storage-neutral records
+rather than AST or runtime `Value` nodes.
+
 ## Compatibility architecture
 
 Compatibility has three layers:
@@ -219,14 +253,13 @@ explicit runtime profiles. They must not appear as scattered conditionals.
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.
-Project-scale performance will later rely on:
+The current foundation already includes class dependency graphs, parsed-unit
+reuse, isolated parallel test execution, and per-file coverage aggregation.
+Further project-scale performance work will rely on:
 
 - Interned names and types
-- Module/class dependency graphs
-- Incremental parsing and semantic analysis
-- Cached typed IR
-- Isolated parallel test execution
-- Per-file statement-line and conditional-outcome coverage aggregation
+- Dependency-scoped incremental semantic analysis
+- Cached typed or lowered IR
 - Content-addressed CI artifacts
 
 These optimizations must preserve deterministic results and source diagnostics.

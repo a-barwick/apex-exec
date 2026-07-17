@@ -6,8 +6,8 @@ Primitive expressions, lexical scopes, control flow, mutable collections, and
 the fixed M3 built-in call surface are implemented. M4 adds user-defined calls,
 recursion, exception unwinding, runtime casts, and source call stacks. M5 adds
 object/static storage, constructors, properties, inheritance, virtual dispatch,
-and cross-file class execution. Transactions and platform effects remain later
-work.
+and cross-file class execution. Debug output now crosses a platform host;
+Apex database transactions and SObject execution remain later M7/M8 work.
 
 ## Program execution
 
@@ -20,17 +20,19 @@ after parsing and semantic validation succeed.
 under the identifier's canonical case-insensitive key. Assignment replaces the
 stored value. Reads of unknown variables are compile-time errors and are also
 guarded defensively by the runtime. Primitive values copy by value. Collection
-values carry interpreter-owned identity, so ordinary assignment aliases the
-same mutable collection. Class instances also carry interpreter-owned identity;
+values carry execution-store-owned identity, so ordinary assignment aliases the
+same mutable collection. Class instances use the same per-interpreter store;
 static fields and properties belong to one interpreter run rather than
 process-global state.
 
 ## Debug output
 
 **Implemented, simplified.** `System.debug(expression)` converts every
-supported value to deterministic text and appends one output line. Lists,
-Sets, and Maps render recursively in their deterministic local order. The CLI
-prints each line to stdout without Salesforce log metadata.
+supported value to deterministic text and emits one structured debug event.
+Lists, Sets, and Maps render recursively in their deterministic local order.
+The default `RecordingHost` buffers each message as one returned output line,
+and the CLI prints those lines without Salesforce log metadata. Custom runtime
+hosts can consume or stream events without changing language execution.
 
 ## Expressions
 
@@ -43,14 +45,23 @@ respectively.
 Method-call receivers are evaluated once, followed by arguments from left to
 right, each exactly once. Static built-ins do not evaluate a runtime receiver.
 Unsupported dispatch does not fall back to runtime approximation because calls
-are validated before execution.
+are validated before execution. Every supported built-in call is recorded as a
+typed HIR intrinsic ID; runtime dispatch does not repeat receiver-family or
+case-insensitive method-name resolution.
 
 User-defined call arguments are also evaluated left to right exactly once.
 Each invocation replaces the caller's lexical scopes with an isolated parameter
-scope while sharing runtime collections and debug output. The statically
-selected HIR target is executed directly, so runtime values do not repeat
-overload or member resolution. Return values unwind blocks and loops to the
-caller; recursive calls use the same isolation rules.
+scope while sharing that execution's store and configured platform host. The
+statically selected HIR target is executed directly, so runtime values do not
+repeat overload or member resolution. Return values unwind blocks and loops to
+the caller; recursive calls use the same isolation rules.
+
+Interpreter preparation borrows the immutable checked program through a
+runtime image. It does not clone the full AST, method list, class list, or HIR
+tables. A per-interpreter execution store owns collection/object identity and
+static slots; scopes, call state, traces, and host state remain isolated with
+that interpreter when the host is owned. A custom host reference may
+intentionally share external state.
 
 ## Classes and objects
 
@@ -75,7 +86,7 @@ claimed to match Salesforce formatting.
 ## Collections
 
 **Implemented for M3.** Runtime collections are mutable reference values stored
-in an interpreter-owned arena.
+in the interpreter's execution store.
 
 - Assignment copies collection identity and therefore aliases mutations.
 - Copy constructors and `clone()` allocate an independent shallow copy.
@@ -117,7 +128,8 @@ after the final element. Set and Map indexing is rejected during checking.
 
 ## Core String, Math, and System calls
 
-**Implemented for the fixed M3 subset.** Method names are case-insensitive.
+**Implemented for the fixed M3 subset plus M6 assertions.** Method names are
+case-insensitive.
 
 - Static String: `valueOf`, `join`, `isBlank`, `isNotBlank`, `isEmpty`, and
   `isNotEmpty`.
@@ -125,7 +137,8 @@ after the final element. Set and Map indexing is rejected during checking.
   `equalsIgnoreCase`, `indexOf`, one- and two-argument `substring`, `trim`,
   `toLowerCase`, `toUpperCase`, and literal `replace`.
 - Integer-backed Math: `abs`, `max`, `min`, and `mod`.
-- System: `debug`.
+- System: `debug`, `assert`, `assertEquals`, and `assertNotEquals`. Failed
+  assertions raise a catchable `AssertException`.
 
 String `length`, `indexOf`, and `substring` use UTF-16 code-unit positions for
 ordinary Unicode scalar strings. Rust strings cannot contain an unpaired
@@ -174,8 +187,10 @@ an actively iterated List or Set raises `FinalException`. Runtime exceptions
 carry their origin span, and the active call chain is snapshotted when the
 exception first reaches a handler or escapes a method. The leaf frame uses the
 origin span; each caller frame uses the nested call site, producing an
-innermost-to-outermost source stack. The public diagnostic renderer maps those
-byte spans to file, line, and column.
+innermost-to-outermost source stack. Single-source rendering maps against its
+supplied source. Project rendering resolves the origin and every frame
+independently by `SourceId`, then maps each file-local byte span to line and
+column.
 
 Core exception values support zero- or one-String-argument construction plus
 `getMessage()`, `getTypeName()`, and deterministic `getStackTraceString()`.
@@ -184,11 +199,16 @@ classes are not yet claimed.
 
 ## Platform effects
 
-**Planned.** Database access, time, IDs, randomness, async scheduling, callouts,
-and user context will be provided by deterministic host interfaces. Tests must
-be able to replace or control each effect.
+**Partially implemented.** Debug events cross the replaceable `PlatformHost`.
+Normalized schema and transactional storage exist as standalone platform
+contracts but are not yet wired into Apex expressions. Database access, time,
+IDs, randomness, async scheduling, callouts, and user context still require
+deterministic host services that tests can replace or control.
 
 ## Transactions
 
-**Planned for M7–M9.** DML and triggers execute inside a transaction. Unhandled
-exceptions roll back transactional changes. Test methods receive isolated state.
+**Foundation only for M7.** `platform::storage` defines storage-neutral
+begin/read/write/delete/commit/rollback contracts, but no SQLite adapter or Apex
+DML integration exists. M7 must add the SQLite adapter, isolated test data, and
+fast reset. M8–M9 must make DML and triggers execute inside a transaction and
+roll back unhandled failures.

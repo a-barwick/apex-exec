@@ -36,5 +36,7 @@ history.
 - [0004 — Store collections by interpreter-owned identity](0004-arena-backed-collection-identity.md)
 - [0005 — Record checked calls and unify abrupt runtime flow](0005-checked-calls-and-runtime-unwinding.md)
 - [0006 — Keep typed HIR facts beside immutable parsed syntax](0006-typed-hir-side-tables.md)
-- [0007 — Rebase cached source units into a project span space](0007-project-span-space-and-incremental-cache.md)
+- [0007 — Rebase cached source units into a project span space (superseded by 0009)](0007-project-span-space-and-incremental-cache.md)
 - [0008 — Isolate test execution by interpreter](0008-isolated-test-execution-and-coverage.md)
+- [0009 — Give every source unit an explicit identity](0009-file-aware-source-identity.md)
+- [0010 — Keep normalized schema independent from record storage](0010-separate-schema-from-storage.md)

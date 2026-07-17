@@ -1,6 +1,8 @@
 use crate::span::Span;
 use std::hash::{Hash, Hasher};
 
+pub mod visit;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub classes: Vec<ClassDeclaration>,

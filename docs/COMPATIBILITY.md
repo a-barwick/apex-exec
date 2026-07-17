@@ -30,7 +30,7 @@ conformance harness is a later milestone.
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
 | Line/block comments | Yes | N/A | N/A | Compatible | Unterminated block comments are errors |
-| `System.debug(expression)` | Yes | Yes | Yes | Simplified | Built-in method call with plain stdout and no Salesforce log metadata |
+| `System.debug(expression)` | Yes | Yes | Yes | Simplified | Structured platform-host event exposed as plain output by the default host; no Salesforce log metadata |
 | Integer arithmetic | Yes | Yes | Yes | Simplified | `+`, `-`, `*`, `/`, `%`, unary signs; checked `i64` runtime behavior |
 | Comparison and equality | Yes | Yes | Yes | Compatible | Integer ordering; case-insensitive String `==`; same-type collection and null equality |
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
@@ -47,12 +47,12 @@ conformance harness is a later milestone.
 | Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supported |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
-| Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive M3 collection, String, Math, and System surface |
+| Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
 | User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
 | Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts; invalid runtime casts throw `TypeException` |
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
-| Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames when caught or unhandled |
+| Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
 | Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
@@ -158,10 +158,12 @@ deferred rather than silently ignored.
 SFDX project compilation finds `sfdx-project.json`, loads package-directory
 paths, recursively discovers `.cls` units, and requires one top-level type whose
 name matches each filename. Compilation produces cross-file dependency edges
-and a merged checked HIR with file-aware diagnostics. A persistent compiler
-reuses unchanged parsed units, calculates reverse-dependent invalidation, and
-reuses the complete checked build when all inputs are unchanged; semantic
-linking currently reruns across the project after any source change.
+and a merged checked HIR with file-aware diagnostics. Cached paths retain stable
+source identities and file-local offsets, so merging does not rewrite AST
+spans. A persistent compiler reuses unchanged parsed units, calculates
+reverse-dependent invalidation, and reuses the complete checked build when all
+inputs are unchanged; semantic linking currently reruns across the project
+after any source change.
 
 The CLI accepts `check <project-or-package-directory>` and an `invoke` form with
 `<project> <Class.method>`. Invocation is deliberately limited to a
@@ -185,9 +187,9 @@ Project tests are discovered and sorted case-insensitively by `Class.method`.
 Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
 interpreter. A bounded worker pool can therefore run tests in parallel without
-sharing static fields, object/collection identity, output, or runtime stacks.
-This models deterministic isolation before M7 adds database transactions and
-setup snapshots.
+sharing static fields, object/collection identity, default recording-host
+output, or runtime stacks. This models deterministic isolation before M7 adds
+database transactions and setup snapshots.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of
@@ -200,8 +202,8 @@ are deterministic local coverage, not Salesforce-exact coverage accounting.
 |---|---|---|
 | SFDX project loading | Implemented (simplified) | M5 |
 | Apex unit tests | Implemented (simplified) | M6 |
-| SObject schema | Planned | M7 |
-| SQLite storage | Planned | M7 |
+| SObject schema | Foundation only (normalized catalog/provider; no metadata import) | M7 |
+| SQLite storage | Planned (storage-neutral transaction contract exists; no adapter) | M7 |
 | DML | Planned | M8 |
 | SOQL | Planned | M8 |
 | SOSL | Planned | M8 |

@@ -162,13 +162,15 @@ This is the first major enterprise-value checkpoint.
 - Generate and migrate a local SQLite schema
 - Typed and dynamic SObjects
 - Salesforce-style IDs and field access
-- Relationships, transactions, savepoints, rollback, and fixtures
+- Relationships and storage-level transactions, savepoints, rollback, and
+  fixtures
 - Fast database reset for test isolation
 
 ### Exit criterion
 
-Apex can create, retrieve, update, and delete custom SObjects in an isolated
-local transaction.
+SFDX metadata produces a normalized object schema, and SQLite-backed platform
+storage can create, retrieve, update, and delete records in isolated local
+transactions. Apex query and DML syntax remain M8 work.
 
 ## M8 — SOQL, SOSL, and DML
 
@@ -196,7 +198,7 @@ changes.
 - Trigger syntax and context variables
 - Before/after insert, update, delete, and undelete
 - Bulk behavior and recursive trigger execution
-- Transaction rollback and deterministic execution timelines
+- Apex DML/trigger rollback semantics and deterministic execution timelines
 
 ### Exit criterion
 

@@ -1,6 +1,6 @@
 # ADR 0007: Rebase cached source units into a project span space
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0009](0009-file-aware-source-identity.md)
 **Date:** 2026-07-14
 
 ## Context

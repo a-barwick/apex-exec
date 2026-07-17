@@ -1,17 +1,23 @@
 use crate::{
     ast::{
-        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassDeclaration, ClassMember,
-        CollectionInitializer, Expression, Identifier, MethodDeclaration, Modifier,
-        PostfixOperator, ReturnType, Statement, TypeName, UnaryOperator,
+        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassMember,
+        CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator, ReturnType,
+        Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget},
     span::Span,
 };
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap},
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+mod host;
+mod image;
+mod intrinsics;
+mod store;
+
+pub use host::{DebugEvent, PlatformHost, RecordingHost};
+use image::RuntimeImage;
+use store::ExecutionStore;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BranchHits {
@@ -99,19 +105,6 @@ struct ActiveCall {
     call_span: Span,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StaticReceiver {
-    String,
-    Math,
-    System,
-}
-
-#[derive(Clone, Debug)]
-enum CallReceiver {
-    Static(StaticReceiver),
-    Value(Value),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Flow {
     Normal,
@@ -120,40 +113,54 @@ enum Flow {
     Return(Option<Value>),
 }
 
-pub struct Interpreter {
+/// One isolated Apex execution with a configurable platform host.
+///
+/// Entry points consume the interpreter and borrow one checked program for the
+/// duration of that execution. The program lifetime is normally inferred by
+/// [`Interpreter::execute`] or [`Interpreter::invoke_static`].
+pub struct Interpreter<'program, H = RecordingHost> {
     scopes: Vec<HashMap<String, Slot>>,
-    collections: Vec<Collection>,
-    objects: Vec<ObjectInstance>,
-    static_fields: HashMap<ClassMemberId, Slot>,
-    output: Vec<String>,
-    methods: Vec<MethodDeclaration>,
+    store: ExecutionStore,
+    host: H,
     call_stack: Vec<ActiveCall>,
-    program: Option<Program>,
-    classes: Vec<ClassDeclaration>,
+    image: Option<RuntimeImage<'program>>,
     current_receiver: Option<ObjectId>,
     current_declaring_class: Option<usize>,
     trace: ExecutionTrace,
 }
 
-impl Interpreter {
+impl<'program> Interpreter<'program, RecordingHost> {
+    /// Creates an isolated interpreter with the default buffering debug host.
     pub fn new() -> Self {
+        Self::with_host(RecordingHost::default())
+    }
+}
+
+impl<'program, H: PlatformHost> Interpreter<'program, H> {
+    /// Creates an isolated interpreter using a caller-provided platform host.
+    ///
+    /// Passing `&mut host` is supported when the caller needs to inspect host
+    /// state after execution. Such a borrowed host may intentionally share
+    /// external state across interpreter instances.
+    pub fn with_host(host: H) -> Self {
         Self {
             scopes: vec![HashMap::new()],
-            collections: Vec::new(),
-            objects: Vec::new(),
-            static_fields: HashMap::new(),
-            output: Vec::new(),
-            methods: Vec::new(),
+            store: ExecutionStore::default(),
+            host,
             call_stack: Vec::new(),
-            program: None,
-            classes: Vec::new(),
+            image: None,
             current_receiver: None,
             current_declaring_class: None,
             trace: ExecutionTrace::default(),
         }
     }
 
-    pub fn execute(mut self, program: &Program) -> Result<Vec<String>, Diagnostic> {
+    /// Executes the anonymous statements in a checked program.
+    ///
+    /// The returned lines are whatever the configured host drains through
+    /// [`PlatformHost::take_debug_output`]. A streaming host that keeps the
+    /// default implementation returns an empty vector.
+    pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
         for statement in &program.statements {
             match self.execute_statement(statement)? {
@@ -179,24 +186,29 @@ impl Interpreter {
                 }
             }
         }
-        Ok(self.output)
+        Ok(self.host.take_debug_output())
     }
 
+    /// Invokes one public or global static zero-argument method.
+    ///
+    /// Class and method names are matched case-insensitively. The result
+    /// contains drained host output followed by a deterministic rendering of a
+    /// non-void return value.
     pub fn invoke_static(
         mut self,
-        program: &Program,
+        program: &'program Program,
         class_name: &str,
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
         self.prepare(program)?;
         let class_id = self
-            .classes
+            .classes()
             .iter()
             .position(|class| class.name.spelling.eq_ignore_ascii_case(class_name))
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown class `{class_name}`"), Span::new(0, 0))
             })?;
-        let candidates = self.classes[class_id]
+        let candidates = self.classes()[class_id]
             .members
             .iter()
             .enumerate()
@@ -217,7 +229,7 @@ impl Interpreter {
                 format!(
                     "invocation requires one public static zero-argument method `{class_name}.{method_name}`"
                 ),
-                self.classes[class_id].name.span,
+                self.classes()[class_id].name.span,
             ));
         };
         let value = self.evaluate_class_method(
@@ -230,15 +242,16 @@ impl Interpreter {
             *span,
             false,
         )?;
+        let mut output = self.host.take_debug_output();
         if !matches!(value, Value::Void) {
-            self.output.push(self.display_value(&value));
+            output.push(self.display_value(&value));
         }
-        Ok(self.output)
+        Ok(output)
     }
 
     pub(crate) fn run_test(
         mut self,
-        program: &Program,
+        program: &'program Program,
         setup_methods: &[ClassMemberId],
         test_method: ClassMemberId,
     ) -> TestExecution {
@@ -252,7 +265,7 @@ impl Interpreter {
             Ok(())
         });
         TestExecution {
-            output: self.output,
+            output: self.host.take_debug_output(),
             diagnostic: result.err(),
             trace: self.trace,
         }
@@ -260,7 +273,7 @@ impl Interpreter {
 
     fn class_method_span(&self, target: ClassMemberId) -> Result<Span, Diagnostic> {
         match self
-            .classes
+            .classes()
             .get(target.class_id)
             .and_then(|class| class.members.get(target.member_id))
         {
@@ -272,15 +285,30 @@ impl Interpreter {
         }
     }
 
-    fn prepare(&mut self, program: &Program) -> Result<(), Diagnostic> {
-        self.methods = program.methods.clone();
-        self.program = Some(program.clone());
-        self.classes = program.classes.clone();
+    fn prepare(&mut self, program: &'program Program) -> Result<(), Diagnostic> {
+        self.image = Some(RuntimeImage::new(program));
         self.initialize_static_fields()
     }
 
+    fn image(&self) -> RuntimeImage<'program> {
+        self.image
+            .expect("execution always has an immutable runtime image")
+    }
+
+    fn program(&self) -> &'program Program {
+        self.image().program()
+    }
+
+    fn methods(&self) -> &'program [crate::ast::MethodDeclaration] {
+        self.image().methods()
+    }
+
+    fn classes(&self) -> &'program [crate::ast::ClassDeclaration] {
+        self.image().classes()
+    }
+
     fn initialize_static_fields(&mut self) -> Result<(), Diagnostic> {
-        for (class_id, class) in self.classes.iter().enumerate() {
+        for (class_id, class) in self.classes().iter().enumerate() {
             for (member_id, member) in class.members.iter().enumerate() {
                 let target = ClassMemberId {
                     class_id,
@@ -288,7 +316,7 @@ impl Interpreter {
                 };
                 match member {
                     ClassMember::Field(field) if field.modifiers.contains(&Modifier::Static) => {
-                        self.static_fields.insert(
+                        self.store.insert_static_slot(
                             target,
                             Slot {
                                 ty: field.ty.clone(),
@@ -299,7 +327,7 @@ impl Interpreter {
                     ClassMember::Property(property)
                         if property.modifiers.contains(&Modifier::Static) =>
                     {
-                        self.static_fields.insert(
+                        self.store.insert_static_slot(
                             target,
                             Slot {
                                 ty: property.ty.clone(),
@@ -312,7 +340,7 @@ impl Interpreter {
             }
         }
 
-        let classes = self.classes.clone();
+        let classes = self.classes();
         for (class_id, class) in classes.iter().enumerate() {
             self.current_declaring_class = Some(class_id);
             for (member_id, member) in class.members.iter().enumerate() {
@@ -328,8 +356,8 @@ impl Interpreter {
                         member_id,
                     };
                     let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .expect("static field was allocated")
                         .value = value;
                 }
@@ -676,17 +704,12 @@ impl Interpreter {
                 arguments,
                 span,
             } => {
-                let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
-                    .call_target(*span)
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            "unresolved method call escaped semantic validation",
-                            name.span,
-                        )
-                    })?;
+                let target = self.program().call_target(*span).ok_or_else(|| {
+                    Diagnostic::new(
+                        "unresolved method call escaped semantic validation",
+                        name.span,
+                    )
+                })?;
                 match target {
                     CallTarget::TopLevelMethod(method_id) => {
                         self.evaluate_function_call(method_id, name, arguments, *span)
@@ -706,6 +729,10 @@ impl Interpreter {
                         })?;
                         self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
                     }
+                    CallTarget::Intrinsic(_) => Err(Diagnostic::new(
+                        "intrinsic target attached to a function call",
+                        *span,
+                    )),
                     CallTarget::Constructor { .. } => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
@@ -728,12 +755,11 @@ impl Interpreter {
                 arguments,
                 span,
             } => {
-                let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
-                    .call_target(*span);
+                let target = self.program().call_target(*span);
                 match target {
+                    Some(CallTarget::Intrinsic(intrinsic)) => {
+                        self.evaluate_intrinsic_call(intrinsic, receiver, method, arguments, *span)
+                    }
                     Some(CallTarget::StaticMethod(target)) => {
                         self.evaluate_class_method(target, None, arguments, *span, false)
                     }
@@ -760,7 +786,10 @@ impl Interpreter {
                     Some(CallTarget::TopLevelMethod(_) | CallTarget::Constructor { .. }) => Err(
                         Diagnostic::new("invalid checked target for member call", *span),
                     ),
-                    None => self.evaluate_method_call(receiver, method, arguments, *span),
+                    None => Err(Diagnostic::new(
+                        "unresolved method call escaped semantic validation",
+                        method.span,
+                    )),
                 }
             }
             Expression::MemberAccess {
@@ -792,9 +821,7 @@ impl Interpreter {
 
     fn evaluate_variable(&mut self, identifier: &Identifier) -> Result<Value, Diagnostic> {
         let target = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
+            .program()
             .reference_target(identifier.span)
             .ok_or_else(|| {
                 Diagnostic::new(
@@ -825,14 +852,9 @@ impl Interpreter {
         receiver: &Expression,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let target = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
-            .member_target(span)
-            .ok_or_else(|| {
-                Diagnostic::new("unresolved member escaped semantic validation", span)
-            })?;
+        let target = self.program().member_target(span).ok_or_else(|| {
+            Diagnostic::new("unresolved member escaped semantic validation", span)
+        })?;
         match target {
             MemberTarget::Static(target) => self.read_class_member(target, None, span),
             MemberTarget::Instance(target) => {
@@ -858,18 +880,19 @@ impl Interpreter {
         receiver: Option<ObjectId>,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let member = self.classes[target.class_id].members[target.member_id].clone();
+        let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
                 if field.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get(&target)
+                    self.store
+                        .static_slot(&target)
                         .map(|slot| slot.value.clone())
                         .ok_or_else(|| Diagnostic::new("missing static field storage", span))
                 } else {
                     let receiver =
                         receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object(receiver)
                         .fields
                         .get(&target)
                         .map(|slot| slot.value.clone())
@@ -893,11 +916,16 @@ impl Interpreter {
                         span,
                     )
                 } else if property.modifiers.contains(&Modifier::Static) {
-                    Ok(self.static_fields[&target].value.clone())
+                    Ok(self
+                        .store
+                        .static_slot(&target)
+                        .expect("auto property storage exists")
+                        .value
+                        .clone())
                 } else {
                     let receiver = receiver
                         .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    Ok(self.objects[receiver.0].fields[&target].value.clone())
+                    Ok(self.store.object(receiver).fields[&target].value.clone())
                 }
             }
             _ => Err(Diagnostic::new("target is not a value member", span)),
@@ -911,19 +939,20 @@ impl Interpreter {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let member = self.classes[target.class_id].members[target.member_id].clone();
+        let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
                 let value = typed_value(value, &field.ty);
                 if field.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .ok_or_else(|| Diagnostic::new("missing static field storage", span))?
                         .value = value.clone();
                 } else {
                     let receiver =
                         receiver.ok_or_else(|| Diagnostic::new("missing field receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object_mut(receiver)
                         .fields
                         .get_mut(&target)
                         .ok_or_else(|| Diagnostic::new("missing instance field storage", span))?
@@ -950,14 +979,15 @@ impl Interpreter {
                         span,
                     )?;
                 } else if property.modifiers.contains(&Modifier::Static) {
-                    self.static_fields
-                        .get_mut(&target)
+                    self.store
+                        .static_slot_mut(&target)
                         .expect("auto property storage exists")
                         .value = value.clone();
                 } else {
                     let receiver = receiver
                         .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    self.objects[receiver.0]
+                    self.store
+                        .object_mut(receiver)
                         .fields
                         .get_mut(&target)
                         .expect("auto property storage exists")
@@ -978,20 +1008,14 @@ impl Interpreter {
             class_id,
             member_id,
         } = self
-            .program
-            .as_ref()
-            .expect("execution always has a checked program")
+            .program()
             .call_target(span)
             .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?
         else {
             return Err(Diagnostic::new("invalid constructor target", span));
         };
         let arguments = self.evaluate_arguments(arguments)?;
-        let object_id = ObjectId(self.objects.len());
-        self.objects.push(ObjectInstance {
-            class_id,
-            fields: HashMap::new(),
-        });
+        let object_id = self.store.allocate_object(class_id);
         self.allocate_instance_fields(object_id, class_id);
         let lineage = self.class_lineage_base_first(class_id);
         for current in lineage {
@@ -1002,7 +1026,7 @@ impl Interpreter {
                 self.zero_argument_constructor(current)
             };
             if let Some(member_id) = selected {
-                let constructor = match self.classes[current].members[member_id].clone() {
+                let constructor = match self.classes()[current].members[member_id].clone() {
                     ClassMember::Constructor(constructor) => constructor,
                     _ => return Err(Diagnostic::new("invalid constructor member", span)),
                 };
@@ -1028,7 +1052,7 @@ impl Interpreter {
 
     fn allocate_instance_fields(&mut self, object: ObjectId, class_id: usize) {
         for current in self.class_lineage_base_first(class_id) {
-            for (member_id, member) in self.classes[current].members.iter().enumerate() {
+            for (member_id, member) in self.classes()[current].members.iter().enumerate() {
                 let (ty, is_static) = match member {
                     ClassMember::Field(field) => {
                         (&field.ty, field.modifiers.contains(&Modifier::Static))
@@ -1039,7 +1063,7 @@ impl Interpreter {
                     _ => continue,
                 };
                 if !is_static {
-                    self.objects[object.0].fields.insert(
+                    self.store.object_mut(object).fields.insert(
                         ClassMemberId {
                             class_id: current,
                             member_id,
@@ -1061,7 +1085,7 @@ impl Interpreter {
     ) -> Result<(), Diagnostic> {
         let saved_receiver = self.current_receiver.replace(object);
         let saved_declaring = self.current_declaring_class.replace(class_id);
-        let members = self.classes[class_id].members.clone();
+        let members = self.classes()[class_id].members.clone();
         let result = (|| {
             for (member_id, member) in members.iter().enumerate() {
                 let ClassMember::Field(field) = member else {
@@ -1072,7 +1096,8 @@ impl Interpreter {
                 }
                 if let Some(initializer) = &field.initializer {
                     let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.objects[object.0]
+                    self.store
+                        .object_mut(object)
                         .fields
                         .get_mut(&ClassMemberId {
                             class_id,
@@ -1094,8 +1119,8 @@ impl Interpreter {
         let mut cursor = Some(class_id);
         while let Some(id) = cursor {
             lineage.push(id);
-            cursor = self.classes[id].superclass.as_ref().and_then(|parent| {
-                self.classes
+            cursor = self.classes()[id].superclass.as_ref().and_then(|parent| {
+                self.classes()
                     .iter()
                     .position(|class| class.name.canonical == parent.canonical)
             });
@@ -1105,7 +1130,7 @@ impl Interpreter {
     }
 
     fn zero_argument_constructor(&self, class_id: usize) -> Option<usize> {
-        self.classes[class_id]
+        self.classes()[class_id]
             .members
             .iter()
             .position(|member| matches!(member, ClassMember::Constructor(constructor) if constructor.parameters.is_empty()))
@@ -1165,7 +1190,7 @@ impl Interpreter {
         } else {
             target
         };
-        let method = match self.classes[target.class_id].members[target.member_id].clone() {
+        let method = match self.classes()[target.class_id].members[target.member_id].clone() {
             ClassMember::Method(method) => method,
             _ => return Err(Diagnostic::new("method target is invalid", span)),
         };
@@ -1186,7 +1211,7 @@ impl Interpreter {
     }
 
     fn virtual_method_target(&self, receiver: ObjectId, declared: ClassMemberId) -> ClassMemberId {
-        let declared_method = match &self.classes[declared.class_id].members[declared.member_id] {
+        let declared_method = match &self.classes()[declared.class_id].members[declared.member_id] {
             ClassMember::Method(method) => method,
             _ => return declared,
         };
@@ -1195,9 +1220,9 @@ impl Interpreter {
             .iter()
             .map(|parameter| parameter.ty.clone())
             .collect::<Vec<_>>();
-        let mut cursor = Some(self.objects[receiver.0].class_id);
+        let mut cursor = Some(self.store.object(receiver).class_id);
         while let Some(class_id) = cursor {
-            for (member_id, member) in self.classes[class_id].members.iter().enumerate() {
+            for (member_id, member) in self.classes()[class_id].members.iter().enumerate() {
                 let ClassMember::Method(method) = member else {
                     continue;
                 };
@@ -1219,11 +1244,11 @@ impl Interpreter {
             if class_id == declared.class_id {
                 break;
             }
-            cursor = self.classes[class_id]
+            cursor = self.classes()[class_id]
                 .superclass
                 .as_ref()
                 .and_then(|parent| {
-                    self.classes
+                    self.classes()
                         .iter()
                         .position(|class| class.name.canonical == parent.canonical)
                 });
@@ -1348,7 +1373,7 @@ impl Interpreter {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let arguments = self.evaluate_arguments(arguments)?;
-        let method = self.methods.get(method_id).cloned().ok_or_else(|| {
+        let method = self.methods().get(method_id).cloned().ok_or_else(|| {
             Diagnostic::new("resolved method does not exist at runtime", name.span)
         })?;
         let body = method
@@ -1435,9 +1460,7 @@ impl Interpreter {
             AssignmentTarget::Variable(identifier) => {
                 let value = self.evaluate(value)?;
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .reference_target(identifier.span)
                     .ok_or_else(|| {
                         Diagnostic::new("unresolved assignment target", identifier.span)
@@ -1475,9 +1498,7 @@ impl Interpreter {
                 span,
             } => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .member_target(*span)
                     .ok_or_else(|| Diagnostic::new("unresolved member assignment", *span))?;
                 let value = self.evaluate(value)?;
@@ -1796,34 +1817,6 @@ impl Interpreter {
         Ok(value)
     }
 
-    fn evaluate_method_call(
-        &mut self,
-        receiver: &Expression,
-        method: &Identifier,
-        arguments: &[Expression],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        let receiver_span = receiver.span();
-        let receiver_value = if let Expression::Variable(identifier) = receiver {
-            if let Some(slot) = self.lookup_canonical(&identifier.canonical) {
-                CallReceiver::Value(slot.value.clone())
-            } else if let Some(static_receiver) = static_receiver(identifier) {
-                CallReceiver::Static(static_receiver)
-            } else {
-                return Err(unknown_variable(identifier));
-            }
-        } else {
-            CallReceiver::Value(self.evaluate(receiver)?)
-        };
-        let arguments = self.evaluate_arguments(arguments)?;
-        match receiver_value {
-            CallReceiver::Static(receiver) => self.call_static(receiver, method, &arguments, span),
-            CallReceiver::Value(receiver) => {
-                self.call_instance(receiver, receiver_span, method, &arguments, span)
-            }
-        }
-    }
-
     fn evaluate_arguments(
         &mut self,
         arguments: &[Expression],
@@ -1837,964 +1830,6 @@ impl Interpreter {
                 })
             })
             .collect()
-    }
-
-    fn call_static(
-        &mut self,
-        receiver: StaticReceiver,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match receiver {
-            StaticReceiver::String => self.call_static_string(method, arguments, span),
-            StaticReceiver::Math => self.call_math(method, arguments, span),
-            StaticReceiver::System => self.call_system(method, arguments, span),
-        }
-    }
-
-    fn call_static_string(
-        &mut self,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "valueof" => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if matches!(argument.value, Value::Void) {
-                    return Err(Diagnostic::new(
-                        "cannot convert void to String",
-                        argument.span,
-                    ));
-                }
-                Ok(Value::String(self.display_value(&argument.value)))
-            }
-            "join" => {
-                let [iterable, separator] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let separator = expect_string(&separator.value, separator.span)?;
-                let id = self.expect_collection_id(iterable.value.clone(), iterable.span)?;
-                let elements = self.sequence_snapshot(id, iterable.span)?;
-                let joined = elements
-                    .iter()
-                    .map(|value| self.display_value(value))
-                    .collect::<Vec<_>>()
-                    .join(separator);
-                Ok(Value::String(joined))
-            }
-            "isblank" | "isnotblank" | "isempty" | "isnotempty" => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let (empty, blank) = match &argument.value {
-                    Value::String(value) => (value.is_empty(), value.trim().is_empty()),
-                    Value::Null(_) => (true, true),
-                    _ => return Err(invalid_runtime_operands(argument.span)),
-                };
-                let value = match method.canonical.as_str() {
-                    "isblank" => blank,
-                    "isnotblank" => !blank,
-                    "isempty" => empty,
-                    "isnotempty" => !empty,
-                    _ => unreachable!(),
-                };
-                Ok(Value::Boolean(value))
-            }
-            _ => Err(unsupported_method("String", method)),
-        }
-    }
-
-    fn call_math(
-        &mut self,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "abs" => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                expect_integer(&argument.value, argument.span)?
-                    .checked_abs()
-                    .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(span))
-            }
-            "max" | "min" => {
-                let [left, right] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let left = expect_integer(&left.value, left.span)?;
-                let right = expect_integer(&right.value, right.span)?;
-                Ok(Value::Integer(if method.canonical == "max" {
-                    left.max(right)
-                } else {
-                    left.min(right)
-                }))
-            }
-            "mod" => {
-                let [left, right] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let left = expect_integer(&left.value, left.span)?;
-                let right_span = right.span;
-                let right = expect_integer(&right.value, right_span)?;
-                if right == 0 {
-                    return Err(runtime_exception(
-                        "MathException",
-                        "Math.mod divisor cannot be zero",
-                        right_span,
-                    ));
-                }
-                left.checked_rem(right)
-                    .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(span))
-            }
-            _ => Err(unsupported_method("Math", method)),
-        }
-    }
-
-    fn call_system(
-        &mut self,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "debug" => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if matches!(argument.value, Value::Void) {
-                    return Err(Diagnostic::new("cannot debug void", argument.span));
-                }
-                self.output.push(self.display_value(&argument.value));
-                Ok(Value::Void)
-            }
-            "assert" => {
-                let ([condition] | [condition, _]) = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if expect_boolean(&condition.value, condition.span)? {
-                    return Ok(Value::Void);
-                }
-                let message = arguments
-                    .get(1)
-                    .map(|message| self.display_value(&message.value));
-                Err(runtime_exception(
-                    "AssertException",
-                    assertion_failure_message(message.as_deref(), "condition is false"),
-                    condition.span,
-                ))
-            }
-            "assertequals" | "assertnotequals" => {
-                let ([expected, actual] | [expected, actual, _]) = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let equal = self.values_equal(&expected.value, &actual.value);
-                let passed = if method.canonical == "assertequals" {
-                    equal
-                } else {
-                    !equal
-                };
-                if passed {
-                    return Ok(Value::Void);
-                }
-                let detail = if method.canonical == "assertequals" {
-                    format!(
-                        "expected {}, actual {}",
-                        self.display_value(&expected.value),
-                        self.display_value(&actual.value)
-                    )
-                } else {
-                    format!("did not expect {}", self.display_value(&actual.value))
-                };
-                let message = arguments
-                    .get(2)
-                    .map(|message| self.display_value(&message.value));
-                Err(runtime_exception(
-                    "AssertException",
-                    assertion_failure_message(message.as_deref(), &detail),
-                    actual.span,
-                ))
-            }
-            _ => Err(unsupported_method("System", method)),
-        }
-    }
-
-    fn call_instance(
-        &mut self,
-        receiver: Value,
-        receiver_span: Span,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match receiver {
-            Value::String(value) => self.call_string_instance(value, method, arguments, span),
-            Value::Collection(id) => self.call_collection(id, method, arguments, span),
-            Value::Object(_) => Err(unsupported_method("class instance", method)),
-            Value::Exception(exception) => {
-                self.call_exception_instance(&exception, method, arguments, span)
-            }
-            Value::Null(_) => Err(runtime_exception(
-                "NullPointerException",
-                format!(
-                    "attempt to de-reference a null value while calling `{}`",
-                    method.spelling
-                ),
-                receiver_span,
-            )),
-            Value::Boolean(_) => Err(unsupported_method("Boolean", method)),
-            Value::Integer(_) => Err(unsupported_method("Integer", method)),
-            Value::Void => Err(Diagnostic::new(
-                "cannot call a method on void",
-                receiver_span,
-            )),
-        }
-    }
-
-    fn call_exception_instance(
-        &self,
-        exception: &Diagnostic,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        expect_no_arguments(arguments, span)?;
-        match method.canonical.as_str() {
-            "getmessage" => Ok(Value::String(exception.message.clone())),
-            "gettypename" => Ok(Value::String(
-                exception
-                    .exception_type
-                    .clone()
-                    .unwrap_or_else(|| "Exception".to_owned()),
-            )),
-            "getstacktracestring" => Ok(Value::String(
-                exception
-                    .stack_trace
-                    .iter()
-                    .map(|frame| {
-                        format!(
-                            "{} @ bytes {}..{}",
-                            frame.method, frame.span.start, frame.span.end
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )),
-            _ => Err(unsupported_method("Exception", method)),
-        }
-    }
-
-    fn call_string_instance(
-        &mut self,
-        receiver: String,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "length" => {
-                let [] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let length = i64::try_from(receiver.encode_utf16().count()).map_err(|_| {
-                    runtime_exception("StringException", "String length is too large", span)
-                })?;
-                Ok(Value::Integer(length))
-            }
-            "contains" | "startswith" | "endswith" | "equals" | "equalsignorecase" | "indexof" => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if matches!(method.canonical.as_str(), "equals" | "equalsignorecase")
-                    && matches!(argument.value, Value::Null(_))
-                {
-                    return Ok(Value::Boolean(false));
-                }
-                let argument = expect_string(&argument.value, argument.span)?;
-                match method.canonical.as_str() {
-                    "contains" => Ok(Value::Boolean(receiver.contains(argument))),
-                    "startswith" => Ok(Value::Boolean(receiver.starts_with(argument))),
-                    "endswith" => Ok(Value::Boolean(receiver.ends_with(argument))),
-                    "equals" => Ok(Value::Boolean(receiver == argument)),
-                    "equalsignorecase" => Ok(Value::Boolean(
-                        receiver.to_lowercase() == argument.to_lowercase(),
-                    )),
-                    "indexof" => {
-                        let index = receiver.find(argument).map_or(-1, |byte_index| {
-                            i64::try_from(receiver[..byte_index].encode_utf16().count())
-                                .expect("String index fits in i64 when String length does")
-                        });
-                        Ok(Value::Integer(index))
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            "substring" => self.string_substring(&receiver, arguments, span),
-            "trim" | "tolowercase" | "touppercase" => {
-                let [] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = match method.canonical.as_str() {
-                    "trim" => receiver.trim().to_owned(),
-                    "tolowercase" => receiver.to_lowercase(),
-                    "touppercase" => receiver.to_uppercase(),
-                    _ => unreachable!(),
-                };
-                Ok(Value::String(value))
-            }
-            "replace" => {
-                let [target, replacement] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let target = expect_string(&target.value, target.span)?;
-                let replacement = expect_string(&replacement.value, replacement.span)?;
-                Ok(Value::String(receiver.replace(target, replacement)))
-            }
-            _ => Err(unsupported_method("String", method)),
-        }
-    }
-
-    fn string_substring(
-        &self,
-        receiver: &str,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        let utf16_length = receiver.encode_utf16().count();
-        let (start, end, error_span) = match arguments {
-            [start] => (
-                nonnegative_usize(&start.value, start.span, "String index")?,
-                utf16_length,
-                start.span,
-            ),
-            [start, end] => (
-                nonnegative_usize(&start.value, start.span, "String index")?,
-                nonnegative_usize(&end.value, end.span, "String index")?,
-                start.span.merge(end.span),
-            ),
-            _ => return Err(invalid_call_arguments(span)),
-        };
-        if start > end || end > utf16_length {
-            return Err(runtime_exception(
-                "StringException",
-                format!(
-                    "String substring range {start}..{end} is out of bounds for length {utf16_length}"
-                ),
-                error_span,
-            ));
-        }
-        let start_byte = utf16_byte_index(receiver, start).ok_or_else(|| {
-            runtime_exception(
-                "StringException",
-                "String index splits a UTF-16 surrogate pair",
-                error_span,
-            )
-        })?;
-        let end_byte = utf16_byte_index(receiver, end).ok_or_else(|| {
-            runtime_exception(
-                "StringException",
-                "String index splits a UTF-16 surrogate pair",
-                error_span,
-            )
-        })?;
-        Ok(Value::String(receiver[start_byte..end_byte].to_owned()))
-    }
-
-    fn call_collection(
-        &mut self,
-        id: CollectionId,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match self.collection(id) {
-            Collection::List { .. } => self.call_list(id, method, arguments, span),
-            Collection::Set { .. } => self.call_set(id, method, arguments, span),
-            Collection::Map { .. } => self.call_map(id, method, arguments, span),
-        }
-    }
-
-    fn call_list(
-        &mut self,
-        id: CollectionId,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" => match arguments {
-                [value] => {
-                    self.ensure_collection_mutable(id, span)?;
-                    let element_type = self.list_type(id).clone();
-                    let value = typed_value(value.value.clone(), &element_type);
-                    let Collection::List { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.push(value);
-                    Ok(Value::Void)
-                }
-                [index, value] => {
-                    self.ensure_collection_mutable(id, span)?;
-                    let index_value = expect_integer(&index.value, index.span)?;
-                    let (element_type, size) = match self.collection(id) {
-                        Collection::List {
-                            element_type,
-                            elements,
-                            ..
-                        } => (element_type.clone(), elements.len()),
-                        _ => unreachable!(),
-                    };
-                    let index = checked_list_index(index_value, size, true, index.span)?;
-                    let value = typed_value(value.value.clone(), &element_type);
-                    let Collection::List { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.insert(index, value);
-                    Ok(Value::Void)
-                }
-                _ => Err(invalid_call_arguments(span)),
-            },
-            "addall" => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.list_type(id).clone();
-                let values: Vec<Value> = source_elements
-                    .into_iter()
-                    .map(|value| typed_value(value, &element_type))
-                    .collect();
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.extend(values);
-                Ok(Value::Void)
-            }
-            "clear" => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.clear();
-                Ok(Value::Void)
-            }
-            "clone" => {
-                expect_no_arguments(arguments, span)?;
-                let (element_type, elements) = match self.collection(id) {
-                    Collection::List {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::List {
-                    element_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
-            "contains" => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, &needle.value)),
-                ))
-            }
-            "get" => {
-                let [index] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.list_get(id, &index.value, index.span)
-            }
-            "indexof" => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                let index = elements
-                    .iter()
-                    .position(|value| self.values_equal(value, &needle.value))
-                    .map_or(-1, |index| i64::try_from(index).unwrap_or(i64::MAX));
-                Ok(Value::Integer(index))
-            }
-            "isempty" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(elements.is_empty()))
-            }
-            "remove" => {
-                let [index] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let index_value = expect_integer(&index.value, index.span)?;
-                let size = match self.collection(id) {
-                    Collection::List { elements, .. } => elements.len(),
-                    _ => unreachable!(),
-                };
-                let index = checked_list_index(index_value, size, false, index.span)?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                Ok(elements.remove(index))
-            }
-            "set" => {
-                let [index, value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let index_value = expect_integer(&index.value, index.span)?;
-                let (element_type, size) = match self.collection(id) {
-                    Collection::List {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.len()),
-                    _ => unreachable!(),
-                };
-                let index = checked_list_index(index_value, size, false, index.span)?;
-                let value = typed_value(value.value.clone(), &element_type);
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements[index] = value;
-                Ok(Value::Void)
-            }
-            "size" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(elements.len(), span)?))
-            }
-            "sort" => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let mut elements = match self.collection(id) {
-                    Collection::List { elements, .. } => elements.clone(),
-                    _ => unreachable!(),
-                };
-                sort_primitive_values(&mut elements, span)?;
-                let Collection::List {
-                    elements: stored, ..
-                } = self.collection_mut(id)
-                else {
-                    unreachable!()
-                };
-                *stored = elements;
-                Ok(Value::Void)
-            }
-            _ => Err(unsupported_method("List", method)),
-        }
-    }
-
-    fn call_set(
-        &mut self,
-        id: CollectionId,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "add" => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.set_type(id).clone();
-                let value = typed_value(value.value.clone(), &element_type);
-                let changed = {
-                    let Collection::Set { elements, .. } = self.collection(id) else {
-                        unreachable!()
-                    };
-                    !elements
-                        .iter()
-                        .any(|existing| self.values_equal(existing, &value))
-                };
-                if changed {
-                    let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.push(value);
-                }
-                Ok(Value::Boolean(changed))
-            }
-            "addall" => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.set_type(id).clone();
-                let mut current = match self.collection(id) {
-                    Collection::Set { elements, .. } => elements.clone(),
-                    _ => unreachable!(),
-                };
-                let original_len = current.len();
-                for value in source_elements {
-                    let value = typed_value(value, &element_type);
-                    if !current
-                        .iter()
-                        .any(|existing| self.values_equal(existing, &value))
-                    {
-                        current.push(value);
-                    }
-                }
-                let changed = current.len() != original_len;
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                *elements = current;
-                Ok(Value::Boolean(changed))
-            }
-            "clear" => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.clear();
-                Ok(Value::Void)
-            }
-            "clone" => {
-                expect_no_arguments(arguments, span)?;
-                let (element_type, elements) = match self.collection(id) {
-                    Collection::Set {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Set {
-                    element_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
-            "contains" => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, &needle.value)),
-                ))
-            }
-            "containsall" => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source = self.sequence_snapshot(source_id, source.span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(source.iter().all(|needle| {
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, needle))
-                })))
-            }
-            "isempty" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(elements.is_empty()))
-            }
-            "remove" => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let position = {
-                    let Collection::Set { elements, .. } = self.collection(id) else {
-                        unreachable!()
-                    };
-                    elements
-                        .iter()
-                        .position(|value| self.values_equal(value, &needle.value))
-                };
-                if let Some(position) = position {
-                    let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.remove(position);
-                    Ok(Value::Boolean(true))
-                } else {
-                    Ok(Value::Boolean(false))
-                }
-            }
-            "removeall" | "retainall" => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let current = match self.collection(id) {
-                    Collection::Set { elements, .. } => elements.clone(),
-                    _ => unreachable!(),
-                };
-                let retain_matches = method.canonical == "retainall";
-                let retained: Vec<Value> = current
-                    .iter()
-                    .filter(|value| {
-                        let found = source.iter().any(|needle| self.values_equal(value, needle));
-                        found == retain_matches
-                    })
-                    .cloned()
-                    .collect();
-                let changed = retained.len() != current.len();
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                *elements = retained;
-                Ok(Value::Boolean(changed))
-            }
-            "size" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(elements.len(), span)?))
-            }
-            _ => Err(unsupported_method("Set", method)),
-        }
-    }
-
-    fn call_map(
-        &mut self,
-        id: CollectionId,
-        method: &Identifier,
-        arguments: &[EvaluatedArgument],
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        match method.canonical.as_str() {
-            "clear" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                entries.clear();
-                Ok(Value::Void)
-            }
-            "clone" => {
-                expect_no_arguments(arguments, span)?;
-                let (key_type, value_type, entries) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        entries,
-                    } => (key_type.clone(), value_type.clone(), entries.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Map {
-                    key_type,
-                    value_type,
-                    entries,
-                }))
-            }
-            "containskey" => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                Ok(Value::Boolean(self.map_key_index(id, &key.value).is_some()))
-            }
-            "get" => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::Map {
-                    value_type,
-                    entries,
-                    ..
-                } = self.collection(id)
-                else {
-                    unreachable!()
-                };
-                Ok(self
-                    .map_key_index(id, &key.value)
-                    .map(|index| entries[index].1.clone())
-                    .unwrap_or_else(|| Value::Null(Some(value_type.clone()))))
-            }
-            "isempty" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Map { entries, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(entries.is_empty()))
-            }
-            "keyset" => {
-                expect_no_arguments(arguments, span)?;
-                let (key_type, elements) = match self.collection(id) {
-                    Collection::Map {
-                        key_type, entries, ..
-                    } => (
-                        key_type.clone(),
-                        entries.iter().map(|(key, _)| key.clone()).collect(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Set {
-                    element_type: key_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
-            "put" => {
-                let [key, value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let (key_type, value_type) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        ..
-                    } => (key_type.clone(), value_type.clone()),
-                    _ => unreachable!(),
-                };
-                let key = typed_value(key.value.clone(), &key_type);
-                let value = typed_value(value.value.clone(), &value_type);
-                Ok(self.map_put(id, key, value))
-            }
-            "putall" => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_entries = match self.collection(source_id) {
-                    Collection::Map { entries, .. } => entries.clone(),
-                    _ => return Err(invalid_runtime_operands(source.span)),
-                };
-                let (key_type, value_type) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        ..
-                    } => (key_type.clone(), value_type.clone()),
-                    _ => unreachable!(),
-                };
-                for (key, value) in source_entries {
-                    self.map_put(
-                        id,
-                        typed_value(key, &key_type),
-                        typed_value(value, &value_type),
-                    );
-                }
-                Ok(Value::Void)
-            }
-            "remove" => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value_type = match self.collection(id) {
-                    Collection::Map { value_type, .. } => value_type.clone(),
-                    _ => unreachable!(),
-                };
-                if let Some(index) = self.map_key_index(id, &key.value) {
-                    let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    Ok(entries.remove(index).1)
-                } else {
-                    Ok(Value::Null(Some(value_type)))
-                }
-            }
-            "size" => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Map { entries, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(entries.len(), span)?))
-            }
-            "values" => {
-                expect_no_arguments(arguments, span)?;
-                let (value_type, elements) = match self.collection(id) {
-                    Collection::Map {
-                        value_type,
-                        entries,
-                        ..
-                    } => (
-                        value_type.clone(),
-                        entries.iter().map(|(_, value)| value.clone()).collect(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::List {
-                    element_type: value_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
-            _ => Err(unsupported_method("Map", method)),
-        }
-    }
-
-    fn map_put(&mut self, id: CollectionId, key: Value, value: Value) -> Value {
-        if let Some(index) = self.map_key_index(id, &key) {
-            let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                unreachable!()
-            };
-            let previous = entries[index].1.clone();
-            entries[index] = (key, value);
-            previous
-        } else {
-            let value_type = match self.collection(id) {
-                Collection::Map { value_type, .. } => value_type.clone(),
-                _ => unreachable!(),
-            };
-            let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                unreachable!()
-            };
-            entries.push((key, value));
-            Value::Null(Some(value_type))
-        }
-    }
-
-    fn map_key_index(&self, id: CollectionId, key: &Value) -> Option<usize> {
-        let Collection::Map { entries, .. } = self.collection(id) else {
-            return None;
-        };
-        entries
-            .iter()
-            .position(|(existing, _)| self.values_equal(existing, key))
-    }
-
-    fn list_get(&self, id: CollectionId, index: &Value, span: Span) -> Result<Value, Diagnostic> {
-        let index = expect_integer(index, span)?;
-        let Collection::List { elements, .. } = self.collection(id) else {
-            return Err(invalid_runtime_operands(span));
-        };
-        let index = checked_list_index(index, elements.len(), false, span)?;
-        Ok(elements[index].clone())
     }
 
     fn evaluate_unary(
@@ -2968,9 +2003,7 @@ impl Interpreter {
         match operand {
             Expression::Variable(identifier) => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .reference_target(identifier.span)
                     .ok_or_else(|| Diagnostic::new("unresolved increment target", operator_span))?;
                 match target {
@@ -3013,9 +2046,7 @@ impl Interpreter {
             }
             Expression::MemberAccess { receiver, span, .. } => {
                 let target = self
-                    .program
-                    .as_ref()
-                    .expect("execution always has a checked program")
+                    .program()
                     .member_target(*span)
                     .ok_or_else(|| Diagnostic::new("unresolved increment target", *span))?;
                 match target {
@@ -3293,8 +2324,12 @@ impl Interpreter {
                 ),
             },
             Value::Object(id) => {
-                let instance = &self.objects[id.0];
-                format!("{}@{}", self.classes[instance.class_id].name.spelling, id.0)
+                let instance = self.store.object(*id);
+                format!(
+                    "{}@{}",
+                    self.classes()[instance.class_id].name.spelling,
+                    id.0
+                )
             }
             Value::Exception(exception) => {
                 let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
@@ -3310,21 +2345,15 @@ impl Interpreter {
     }
 
     fn allocate(&mut self, collection: Collection) -> Value {
-        let id = CollectionId(self.collections.len());
-        self.collections.push(collection);
-        Value::Collection(id)
+        self.store.allocate_collection(collection)
     }
 
     fn collection(&self, id: CollectionId) -> &Collection {
-        self.collections
-            .get(id.0)
-            .expect("runtime collection handles are always valid")
+        self.store.collection(id)
     }
 
     fn collection_mut(&mut self, id: CollectionId) -> &mut Collection {
-        self.collections
-            .get_mut(id.0)
-            .expect("runtime collection handles are always valid")
+        self.store.collection_mut(id)
     }
 
     fn lookup(&self, identifier: &Identifier) -> Result<&Slot, Diagnostic> {
@@ -3367,11 +2396,11 @@ impl Interpreter {
                     return false;
                 };
                 let target_id = self
-                    .classes
+                    .classes()
                     .iter()
                     .position(|class| class.name.canonical == target.canonical);
                 target_id.is_some_and(|target_id| {
-                    self.runtime_class_is_or_inherits(self.objects[id.0].class_id, target_id)
+                    self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
                 })
             }
             Value::Exception(exception) => {
@@ -3389,7 +2418,7 @@ impl Interpreter {
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
-            Value::Object(id) => self.classes[self.objects[id.0].class_id]
+            Value::Object(id) => self.classes()[self.store.object(*id).class_id]
                 .name
                 .spelling
                 .clone(),
@@ -3408,19 +2437,19 @@ impl Interpreter {
         if actual == expected {
             return true;
         }
-        if self.classes[actual].interfaces.iter().any(|interface| {
-            self.classes
+        if self.classes()[actual].interfaces.iter().any(|interface| {
+            self.classes()
                 .iter()
                 .position(|class| class.name.canonical == interface.canonical)
                 .is_some_and(|id| self.runtime_class_is_or_inherits(id, expected))
         }) {
             return true;
         }
-        self.classes[actual]
+        self.classes()[actual]
             .superclass
             .as_ref()
             .and_then(|parent| {
-                self.classes
+                self.classes()
                     .iter()
                     .position(|class| class.name.canonical == parent.canonical)
             })
@@ -3458,30 +2487,14 @@ impl Interpreter {
     }
 }
 
-impl Default for Interpreter {
+impl<'program> Default for Interpreter<'program, RecordingHost> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn static_receiver(identifier: &Identifier) -> Option<StaticReceiver> {
-    match identifier.canonical.as_str() {
-        "string" => Some(StaticReceiver::String),
-        "math" => Some(StaticReceiver::Math),
-        "system" => Some(StaticReceiver::System),
-        _ => None,
-    }
-}
-
 fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::runtime_exception(exception_type, message, span)
-}
-
-fn assertion_failure_message(message: Option<&str>, detail: &str) -> String {
-    match message {
-        Some(message) => format!("Assertion Failed: {message} ({detail})"),
-        None => format!("Assertion Failed: {detail}"),
-    }
 }
 
 fn exception_matches(exception: &Diagnostic, catch_type: &TypeName) -> bool {
@@ -3533,55 +2546,6 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
     }
 }
 
-fn expect_integer(value: &Value, span: Span) -> Result<i64, Diagnostic> {
-    match value {
-        Value::Integer(value) => Ok(*value),
-        Value::Null(_) => Err(runtime_exception(
-            "NullPointerException",
-            "expected non-null Integer at runtime",
-            span,
-        )),
-        _ => Err(invalid_runtime_operands(span)),
-    }
-}
-
-fn expect_boolean(value: &Value, span: Span) -> Result<bool, Diagnostic> {
-    match value {
-        Value::Boolean(value) => Ok(*value),
-        Value::Null(_) => Err(runtime_exception(
-            "NullPointerException",
-            "expected non-null Boolean at runtime",
-            span,
-        )),
-        _ => Err(invalid_runtime_operands(span)),
-    }
-}
-
-fn expect_string(value: &Value, span: Span) -> Result<&str, Diagnostic> {
-    match value {
-        Value::String(value) => Ok(value),
-        Value::Null(_) => Err(runtime_exception(
-            "NullPointerException",
-            "expected non-null String at runtime",
-            span,
-        )),
-        _ => Err(invalid_runtime_operands(span)),
-    }
-}
-
-fn nonnegative_usize(value: &Value, span: Span, label: &str) -> Result<usize, Diagnostic> {
-    let value = expect_integer(value, span)?;
-    if value < 0 {
-        return Err(runtime_exception(
-            "StringException",
-            format!("{label} cannot be negative"),
-            span,
-        ));
-    }
-    usize::try_from(value)
-        .map_err(|_| runtime_exception("StringException", format!("{label} is too large"), span))
-}
-
 fn checked_list_index(
     index: i64,
     size: usize,
@@ -3601,81 +2565,10 @@ fn checked_list_index(
     }
 }
 
-fn collection_size(size: usize, span: Span) -> Result<i64, Diagnostic> {
-    i64::try_from(size)
-        .map_err(|_| runtime_exception("ListException", "collection size is too large", span))
-}
-
-fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnostic> {
-    if values
-        .iter()
-        .any(|value| !matches!(value, Value::String(_) | Value::Integer(_) | Value::Null(_)))
-    {
-        return Err(runtime_exception(
-            "TypeException",
-            "List.sort currently requires String or Integer values",
-            span,
-        ));
-    }
-    values.sort_by(|left, right| match (left, right) {
-        (Value::Null(_), Value::Null(_)) => Ordering::Equal,
-        (Value::Null(_), _) => Ordering::Less,
-        (_, Value::Null(_)) => Ordering::Greater,
-        (Value::String(left), Value::String(right)) => left.cmp(right),
-        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
-        _ => Ordering::Equal,
-    });
-    Ok(())
-}
-
-fn utf16_byte_index(value: &str, target: usize) -> Option<usize> {
-    if target == 0 {
-        return Some(0);
-    }
-    let mut units = 0;
-    for (byte_index, character) in value.char_indices() {
-        if units == target {
-            return Some(byte_index);
-        }
-        units += character.len_utf16();
-        if units > target {
-            return None;
-        }
-    }
-    (units == target).then_some(value.len())
-}
-
-fn expect_no_arguments(arguments: &[EvaluatedArgument], span: Span) -> Result<(), Diagnostic> {
-    if arguments.is_empty() {
-        Ok(())
-    } else {
-        Err(invalid_call_arguments(span))
-    }
-}
-
 fn unknown_variable(identifier: &Identifier) -> Diagnostic {
     Diagnostic::new(
         format!("unknown variable `{}`", identifier.spelling),
         identifier.span,
-    )
-}
-
-fn unsupported_method(receiver: &str, method: &Identifier) -> Diagnostic {
-    runtime_exception(
-        "TypeException",
-        format!(
-            "unsupported {receiver} method `{}` escaped semantic validation",
-            method.spelling
-        ),
-        method.span,
-    )
-}
-
-fn invalid_call_arguments(span: Span) -> Diagnostic {
-    runtime_exception(
-        "TypeException",
-        "invalid call arguments escaped semantic validation",
-        span,
     )
 }
 
@@ -3692,178 +2585,4 @@ fn integer_overflow(span: Span) -> Diagnostic {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn execute_source(source: &str) -> Result<Vec<String>, Diagnostic> {
-        let program = crate::check(source)?;
-        Interpreter::new().execute(&program)
-    }
-
-    #[test]
-    fn typed_nulls_retain_static_string_behavior_and_compare_as_null() {
-        let interpreter = Interpreter::new();
-        let string_null = typed_value(Value::Null(None), &TypeName::String);
-        let integer_null = typed_value(Value::Null(None), &TypeName::Integer);
-
-        assert!(string_null.has_string_type());
-        assert!(!integer_null.has_string_type());
-        assert!(interpreter.values_equal(&string_null, &Value::Null(None)));
-    }
-
-    #[test]
-    fn continue_in_a_for_loop_still_executes_the_update_clause() {
-        let output = execute_source(
-            "Integer i = 0; Integer total = 0; \
-             for (; i < 4; i++) { if (i < 2) continue; total = total + i; } \
-             System.debug(i); System.debug(total);",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["4", "5"]);
-    }
-
-    #[test]
-    fn return_unwinds_nested_blocks_and_loops() {
-        let output = execute_source(
-            "System.debug('before'); while (true) { { return; } } System.debug('after');",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["before"]);
-    }
-
-    #[test]
-    fn collection_assignment_aliases_while_copy_construction_is_independent() {
-        let output = execute_source(
-            "List<Integer> original = new List<Integer>{1}; \
-             List<Integer> alias = original; alias.add(2); \
-             List<Integer> copied = new List<Integer>(original); copied.set(0, 9); \
-             System.debug(original); System.debug(alias); System.debug(copied);",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["(1, 2)", "(1, 2)", "(9, 2)"]);
-    }
-
-    #[test]
-    fn sized_arrays_support_index_mutation_and_remain_elastic() {
-        let output = execute_source(
-            "Integer[] values = new Integer[2]; \
-             values[0] = 3; values[1] = 4; values[0]++; values.add(5); \
-             System.debug(values); System.debug(values.size());",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["(4, 4, 5)", "3"]);
-    }
-
-    #[test]
-    fn set_and_map_methods_are_deterministic_and_return_previous_values() {
-        let output = execute_source(
-            "Set<String> names = new Set<String>{'Ada', 'Ada', 'Grace'}; \
-             Boolean changed = names.add('Linus'); Boolean duplicate = names.add('Ada'); \
-             Map<String, Integer> counts = new Map<String, Integer>{'a' => 1, 'a' => 2}; \
-             Integer previous = counts.put('a', 3); Integer missing = counts.get('none'); \
-             System.debug(names); System.debug(changed); System.debug(duplicate); \
-             System.debug(counts); System.debug(previous); System.debug(missing);",
-        )
-        .unwrap();
-
-        assert_eq!(
-            output,
-            ["{Ada, Grace, Linus}", "true", "false", "{a=3}", "2", "null"]
-        );
-    }
-
-    #[test]
-    fn enhanced_for_iterates_snapshots_but_rejects_alias_mutation() {
-        let output = execute_source(
-            "List<Integer> values = new List<Integer>{1, 2, 3}; Integer total = 0; \
-             for (Integer value : values) { if (value == 2) continue; total = total + value; } \
-             System.debug(total);",
-        )
-        .unwrap();
-        assert_eq!(output, ["4"]);
-
-        let error = execute_source(
-            "List<Integer> values = new List<Integer>{1}; List<Integer> alias = values; \
-             for (Integer value : values) alias.add(2);",
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.message,
-            "cannot modify a collection while it is being iterated"
-        );
-    }
-
-    #[test]
-    fn self_bulk_operations_use_source_snapshots() {
-        let output = execute_source(
-            "List<Integer> values = new List<Integer>{1, 2}; values.addAll(values); \
-             Map<String, Integer> counts = new Map<String, Integer>{'a' => 1}; \
-             counts.putAll(counts); System.debug(values); System.debug(counts);",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["(1, 2, 1, 2)", "{a=1}"]);
-    }
-
-    #[test]
-    fn map_key_and_value_accessors_return_independent_snapshots() {
-        let output = execute_source(
-            "Map<String, Integer> source = new Map<String, Integer>{'a' => 1}; \
-             Set<String> keys = source.keySet(); List<Integer> values = source.values(); \
-             keys.add('b'); values.add(2); \
-             System.debug(source.size()); System.debug(keys); System.debug(values);",
-        )
-        .unwrap();
-
-        assert_eq!(output, ["1", "{a, b}", "(1, 2)"]);
-    }
-
-    #[test]
-    fn string_math_and_system_calls_cover_utf16_indices() {
-        let output = execute_source(
-            "String emoji = 'A😀B'; \
-             System.debug(emoji.length()); System.debug(emoji.substring(1, 3)); \
-             System.debug(emoji.indexOf('B')); System.debug('  Ada  '.trim().toUpperCase()); \
-             System.debug('Apex'.equals('Apex')); System.debug('Apex'.equalsIgnoreCase('aPeX')); \
-             System.debug(String.join(new List<String>{'1', '2', '3'}, '-')); \
-             System.debug(Math.abs(-4)); System.debug(Math.max(2, 5)); \
-             System.debug(Math.min(2, 5)); System.debug(Math.mod(7, 3));",
-        )
-        .unwrap();
-
-        assert_eq!(
-            output,
-            [
-                "4", "😀", "3", "ADA", "true", "true", "1-2-3", "4", "5", "2", "1"
-            ]
-        );
-
-        let error = execute_source("String value = '😀'; System.debug(value.substring(0, 1));")
-            .unwrap_err();
-        assert_eq!(error.message, "String index splits a UTF-16 surrogate pair");
-    }
-
-    #[test]
-    fn reports_collection_bounds_null_and_negative_size_failures() {
-        let bounds =
-            execute_source("List<Integer> values = new List<Integer>{1}; System.debug(values[1]);")
-                .unwrap_err();
-        assert_eq!(bounds.message, "list index 1 is out of bounds for size 1");
-
-        let null_receiver =
-            execute_source("List<Integer> values = null; System.debug(values.size());")
-                .unwrap_err();
-        assert_eq!(
-            null_receiver.message,
-            "attempt to de-reference a null value while calling `size`"
-        );
-
-        let negative_size =
-            execute_source("Integer size = -1; Integer[] values = new Integer[size];").unwrap_err();
-        assert_eq!(negative_size.message, "array size cannot be negative");
-    }
-}
+mod tests;

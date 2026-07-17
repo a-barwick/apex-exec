@@ -3,9 +3,9 @@
 ## Status
 
 Primitive expression checking, recursive generic collections, array aliases,
-the fixed M3 built-in method surface, M4 methods/exceptions, and M5
-class/interface project types are implemented. General numeric and platform
-conversions remain later work.
+the fixed M3 built-in method surface, M4 methods/exceptions, M5
+class/interface project types, and M6 System assertions are implemented.
+General numeric and platform conversions remain later work.
 
 ## Names
 
@@ -113,12 +113,14 @@ when the index is an Integer; Set and Map indexing is rejected.
 
 ## Built-in method calls
 
-**Implemented for the documented M3 subset.** The checker resolves supported
-static and instance built-ins case-insensitively, validates overload arity and
-argument types, and assigns a return type. Calls such as List mutation and
-`System.debug` return `Void`; a Void result cannot initialize a value, be
-assigned, or participate in another value expression. Unknown methods and
-unsupported overloads are compile-time errors.
+**Implemented for the documented M3 subset and M6 System assertions.** The
+checker resolves supported static and instance built-ins case-insensitively,
+validates overload arity and argument types, assigns a return type, and records
+a typed intrinsic target in HIR. Calls such as List mutation, `System.debug`,
+and the `System.assert`, `System.assertEquals`, and `System.assertNotEquals`
+overloads return `Void`; a Void result cannot initialize a value, be assigned,
+or participate in another value expression. Unknown methods and unsupported
+overloads are compile-time errors.
 
 Bare call receivers are resolved as variables before supported static type
 names. A local variable named `String`, `Math`, or `System` therefore retains
