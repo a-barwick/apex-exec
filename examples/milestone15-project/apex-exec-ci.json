@@ -37,19 +37,19 @@
     },
     {
       "path": "force-app/main/default/objects/Invoice__c/Invoice__c.object-meta.xml",
-      "sha256": "2050d30af0173c69e5a52445b8c32cee3d304bba69b1dbe629067b5ccd8e17fa"
+      "sha256": "733911a2ef7e5599f2a3fdaa0bb711d1cbdfe6617719f89ebb2e3b1d4c1f2bc5"
     },
     {
       "path": "force-app/main/default/objects/Invoice__c/fields/Amount__c.field-meta.xml",
-      "sha256": "9477fd7bc563364a781c6d050ddf183550c4e7d76b8611cd9db9c5289c68187a"
+      "sha256": "24c2862f3d57659b6eb5a832a2dda6697d89df7f01be1995ca2205c30168be8a"
     },
     {
       "path": "force-app/main/default/objects/Invoice__c/fields/Status__c.field-meta.xml",
-      "sha256": "d1d5feda785c20eb1488b061f14226cf7add77f6a415fd7df89092b479ab934e"
+      "sha256": "2ccf5c10c87e4e5f4fa53617e9d1367c2626121d57fb6ecbef212ae0da8d77ba"
     },
     {
       "path": "force-app/main/default/permissionsets/Release_Manager.permissionset-meta.xml",
-      "sha256": "44b7c4eebbda5a44d125bfd61e9f4d48c82bccf310ef27964f23e138c2e625e3"
+      "sha256": "e7252e553af30305fa91df3f14c6bd1c4f3316b3922c9e913fbc73b00582ee46"
     },
     {
       "path": "sfdx-project.json",

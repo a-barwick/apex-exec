@@ -283,6 +283,17 @@ elif [ "$1 $2 $3" = "project retrieve start" ]; then
     if [ "$1" = "--output-dir" ]; then shift; out="$1"; fi
     shift
   done
+  case "$out" in
+    "$PWD"/.apex-exec/*) ;;
+    *)
+      printf '%s\n' '{"status":1,"message":"retrieve output was outside the project"}'
+      exit 0
+      ;;
+  esac
+  if [ ! -d "$out/main/default" ]; then
+    printf '%s\n' '{"status":1,"message":"retrieve output tree was not prepared"}'
+    exit 0
+  fi
   mkdir -p "$out"
   cp -R force-app "$out/"
   printf '%s\n' '{"status":0,"result":{"success":true}}'

@@ -1300,8 +1300,15 @@ impl SalesforceValidationCli {
         let retrieve_components = retrieval_scope(local_inventory, affected);
         let mut inventories = Vec::with_capacity(REQUIRED_RETRIEVALS);
         for _ in 0..REQUIRED_RETRIEVALS {
-            let temp = temporary_directory()?;
+            let temp = temporary_directory(project_root)?;
             let inventory = (|| {
+                let source_root = temp.join("main/default");
+                fs::create_dir_all(&source_root).map_err(|error| {
+                    format!(
+                        "failed to prepare Salesforce retrieve output `{}`: {error}",
+                        source_root.display()
+                    )
+                })?;
                 let mut retrieve_args = vec![
                     OsString::from("project"),
                     OsString::from("retrieve"),
@@ -1367,7 +1374,7 @@ impl SalesforceValidationCli {
         deploy_args.push(OsString::from("--test-level"));
         deploy_args.push(OsString::from(test_level.as_salesforce_value()));
         if test_level == DeploymentTestLevel::RunSpecifiedTests {
-            for test in tests {
+            for test in salesforce_test_classes(tests) {
                 deploy_args.push(OsString::from("--tests"));
                 deploy_args.push(OsString::from(test));
             }
@@ -1463,6 +1470,19 @@ fn parse_deployment_validation(response: &Value) -> DeploymentValidation {
         component_failures,
         tests,
     }
+}
+
+fn salesforce_test_classes(tests: &[String]) -> Vec<String> {
+    let mut classes = BTreeMap::<String, String>::new();
+    for test in tests {
+        let class = test
+            .rsplit_once('.')
+            .map_or(test.as_str(), |(class, _)| class);
+        classes
+            .entry(class.to_ascii_lowercase())
+            .or_insert_with(|| class.to_owned());
+    }
+    classes.into_values().collect()
 }
 
 fn collect_validation_tests(value: &Value, tests: &mut Vec<ValidationTest>) {
@@ -1988,9 +2008,12 @@ fn component_order(left: &MetadataComponent, right: &MetadataComponent) -> std::
         })
 }
 
-fn temporary_directory() -> Result<PathBuf, String> {
+fn temporary_directory(project_root: &Path) -> Result<PathBuf, String> {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    let parent = project_root.join(".apex-exec");
+    fs::create_dir_all(&parent)
+        .map_err(|error| format!("failed to create temporary metadata parent: {error}"))?;
+    let path = parent.join(format!(
         "apex-exec-hybrid-{}-{sequence}",
         std::process::id()
     ));
@@ -2043,6 +2066,18 @@ fn write_json(path: &Path, value: &impl Serialize, label: &str) -> Result<(), St
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn salesforce_transport_collapses_selected_methods_to_unique_test_classes() {
+        assert_eq!(
+            salesforce_test_classes(&[
+                "ReleaseServiceTest.preparesStandardInvoice".to_owned(),
+                "releaseServiceTest.preparesPriorityInvoice".to_owned(),
+                "SmokeTest".to_owned(),
+            ]),
+            ["ReleaseServiceTest", "SmokeTest"]
+        );
+    }
 
     #[test]
     fn inventory_groups_source_and_sidecars_and_classifies_metadata() {

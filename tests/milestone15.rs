@@ -268,7 +268,9 @@ fn authenticated_adapter_uses_non_secret_auth_repeated_retrieve_and_check_only_d
     assert!(commands.contains("--metadata CustomField:Invoice__c.Amount__c"));
     assert!(commands.contains("project deploy start --dry-run"));
     assert!(commands.contains("--test-level RunSpecifiedTests"));
-    assert!(commands.contains("--tests ReleaseServiceTest.preparesPriorityInvoice"));
+    assert!(commands.contains("--tests ReleaseServiceTest"));
+    assert_eq!(commands.matches("--tests ReleaseServiceTest").count(), 1);
+    assert!(!commands.contains("--tests ReleaseServiceTest."));
 
     let snapshot = serde_json::to_string(&outcome.validation_snapshot).unwrap();
     let report = serde_json::to_string(&outcome.report).unwrap();
@@ -406,6 +408,17 @@ elif [ "$1 $2 $3" = "project retrieve start" ]; then
     fi
     shift
   done
+  case "$out" in
+    "$PWD"/.apex-exec/*) ;;
+    *)
+      printf '%s\n' '{"status":1,"message":"retrieve output was outside the project"}'
+      exit 0
+      ;;
+  esac
+  if [ ! -d "$out/main/default" ]; then
+    printf '%s\n' '{"status":1,"message":"retrieve output tree was not prepared"}'
+    exit 0
+  fi
   count=0
   if [ -f "$dir/retrieve-count" ]; then count=$(cat "$dir/retrieve-count"); fi
   count=$((count + 1))
