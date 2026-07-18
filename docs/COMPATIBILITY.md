@@ -45,8 +45,8 @@ for the documented case.
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
 | String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; collection text uses deterministic local formatting |
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
-| Ternary expression | No | No | No | Unsupported | Planned as a complete expression slice in M16 |
-| `instanceof` | No | No | No | Unsupported | Planned as a complete expression slice in M16 |
+| Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
+| `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
 | Safe navigation | No | No | No | Unsupported | Planned with evaluate-once null behavior in M18 |
 | Null coalescing | No | No | No | Unsupported | Planned with lazy right-hand execution in M18 |
 | Bitwise/shift operators | No | No | No | Unsupported | Includes compound forms and `Long`; planned in M19 |
@@ -615,12 +615,13 @@ evidence is planned for M17.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-The Phase 2 baseline reproduces 1 of 14 passing goals (7.14%): 1 of 7 lexer
-goals and 0 of 7 parser goals. `JSONParse.cls` reaches unsupported
-`instanceof`; the other first blockers are safe navigation, null coalescing,
-ternary syntax, and bitwise operators. M21 requires 14 of 14 passing against the
-unchanged corpus and removes every goal's `#[ignore]`. That is a complete result
-for this fixed syntax indicator set only.
+M16 reproduces 5 of 14 passing goals (35.71%): 5 of 7 lexer goals and 0 of 7
+parser goals, up from the 1-of-14 Phase 2 baseline. Ternary and `instanceof` are
+no longer first blockers; the current first diagnostics are bitwise syntax,
+unsupported annotations, and nested declarations. M21 requires 14 of 14
+passing against the unchanged corpus and removes every goal's `#[ignore]`.
+These are syntax indicators only, not runtime or Salesforce compatibility
+percentages.
 
 ## Updating this document
 

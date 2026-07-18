@@ -2,14 +2,14 @@
 
 ## Status
 
-Primitive expressions, lexical scopes, control flow, mutable collections,
-checked calls/exceptions, classes, cross-file execution, isolated tests,
-schema-backed SObjects, SOQL/SOSL/DML, triggers, curated platform services, and
-deterministic async execution are implemented at the fidelity summarized in
-`docs/COMPATIBILITY.md`. M12–M15 add debug/editor observations, provider
-comparison, hermetic CI, and hybrid validation above the same runtime
-boundaries. Phase 2 expression, declaration, sharing/security, and API-version
-profiles remain planned.
+Primitive expressions, including M16 ternary and runtime-type tests, lexical
+scopes, control flow, mutable collections, checked calls/exceptions, classes,
+cross-file execution, isolated tests, schema-backed SObjects, SOQL/SOSL/DML,
+triggers, curated platform services, and deterministic async execution are
+implemented at the fidelity summarized in `docs/COMPATIBILITY.md`. M12–M15 add
+debug/editor observations, provider comparison, hermetic CI, and hybrid
+validation above the same runtime boundaries. Remaining Phase 2 expressions,
+declarations, sharing/security, and API-version profiles remain planned.
 
 ## Program execution
 
@@ -43,6 +43,14 @@ remainder, and overflow failures. `&&` and `||` short-circuit. Assignment is
 right-associative. Prefix and postfix increment/decrement mutate `Integer`
 variables or Integer-valued List indexes while returning the new or prior value
 respectively.
+
+Ternary evaluates its Boolean condition once, records the condition outcome for
+coverage, and evaluates exactly one arm. A runtime null Boolean raises
+`NullPointerException`; errors and side effects in the unselected arm do not
+occur. `instanceof` evaluates its value once and compares the resulting
+non-null runtime identity with the checked target type. Null is false in the
+current profile. Historical API-version behavior is deferred to M25 rather
+than selected dynamically inside expression evaluation.
 
 Method-call receivers are evaluated once, followed by arguments from left to
 right, each exactly once. Static built-ins do not evaluate a runtime receiver.

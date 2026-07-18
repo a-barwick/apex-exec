@@ -360,7 +360,7 @@ local milestones must not be declared as substitutes for it.
 
 ### M16 — Conditional and runtime-type expressions
 
-**Status:** Active
+**Status:** Complete
 
 #### Scope
 
@@ -382,7 +382,7 @@ North Star blocker.
 
 ### M17 — Candidate-bound live Salesforce validation
 
-**Status:** Planned
+**Status:** Active
 
 #### Scope
 

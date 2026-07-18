@@ -122,6 +122,14 @@ schema/configuration, and performs a check-only Salesforce deployment.
 Versioned validation snapshots preserve the same provider-neutral inventory,
 test, and deployment observations for deterministic offline replay.
 
+M16 adds dedicated conditional and runtime-type AST nodes without moving
+semantic state into parsed syntax. The checker records each expression's
+result type in the existing HIR side table, computes ternary joins from the
+supported assignment/subtype relation, and validates `instanceof` with a
+separate runtime-type relation so numeric assignment promotion cannot become
+runtime identity. The interpreter evaluates only the chosen ternary arm and
+evaluates an `instanceof` value once against execution-store type identity.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -131,11 +139,12 @@ host, call stack, and coverage trace, so the bounded worker pool does not share
 observable runtime state. Results are sorted by case-insensitive qualified test
 name after execution so parallel scheduling is never observable in reports.
 
-The interpreter records executed statement spans and true/false conditional
-outcomes. The test runner maps those observations through the project source
-map, excludes `@IsTest` classes from the production denominator, and owns
-console/JUnit rendering. Test policy and report formats do not leak into parser,
-semantic, or ordinary execution entry points.
+The interpreter records executed statement spans and true/false statement or
+ternary conditional outcomes. The test runner discovers ternary conditions
+through the shared immutable AST visitor, maps observations through the
+project source map, excludes `@IsTest` classes from the production denominator,
+and owns console/JUnit rendering. Test policy and report formats do not leak
+into parser, semantic, or ordinary execution entry points.
 
 Checked built-in calls carry a typed `IntrinsicId` in HIR, just like
 user-defined calls carry a selected declaration target. Runtime dispatch

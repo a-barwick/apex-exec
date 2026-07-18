@@ -3,10 +3,11 @@
 ## Status
 
 Primitive expression checking, recursive generic collections, array aliases,
-checked methods/exceptions, class/interface project types, test assertions, and
-the curated M10 scalar/platform surface are implemented. The shipped summary is
-`docs/COMPATIBILITY.md`. General numeric/platform conversions, `Long`,
-`Double`, nested declarations, and Phase 2 expression forms remain later work.
+checked methods/exceptions, class/interface project types, test assertions,
+ternary and runtime-type expressions, and the curated M10 scalar/platform
+surface are implemented. The shipped summary is `docs/COMPATIBILITY.md`.
+General numeric/platform conversions, `Long`, `Double`, nested declarations,
+and the remaining Phase 2 expression forms remain later work.
 
 ## Names
 
@@ -196,9 +197,25 @@ equality. Boolean operators require Boolean operands and short-circuit at
 runtime. `+` performs Integer addition unless either operand is a String, in
 which case every supported non-Void value can be converted for concatenation.
 Increment and decrement require a mutable Integer variable, field/property, or
-Integer-valued List index. Ternary, `instanceof`, safe navigation, null
-coalescing, bitwise/shift operators, and compound assignments are currently
-unsupported and are sequenced across M16, M18, and M19.
+Integer-valued List index.
+
+**Implemented for M16.** Ternary is right-associative, below logical OR and
+above assignment. Its condition must have static type Boolean. Both arms are
+checked, but only the selected arm executes. Identical arm types are retained;
+one null arm adopts the concrete arm type; supported subtype/numeric widening
+selects the wider type; otherwise two non-Void supported values join at
+`Object`. Two null arms retain the null expression type. A Void arm is invalid.
+
+**Implemented for M16.** `value instanceof Type` returns Boolean and accepts
+only a target that can overlap the value's declared type at runtime.
+Statically always-true tests and impossible relationships are compile errors.
+Runtime matching covers `Object`, core exceptions, supported SObjects,
+user-class/interface inheritance, platform values, and invariant concrete
+List/Set/Map types. Null returns false. Assignment-only Integer-to-Decimal
+promotion is deliberately not a runtime-type relationship.
+
+Safe navigation, null coalescing, bitwise/shift operators, and compound
+assignments remain unsupported and are sequenced across M18 and M19.
 
 ## Planned rules
 

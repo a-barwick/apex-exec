@@ -20,13 +20,15 @@ check-only Salesforce validation complete the current local feedback loop and
 release-confidence gate.
 Apex identifiers, types, and method names are case-insensitive.
 
-Phase 2 is now active at M16. Its primary syntax gate is all 14 pinned North
-Star lexer/parser indicators passing; the audited baseline is 1 of 14. The
-phase then carries that syntax foundation into live candidate-bound Salesforce
-evidence, a representative 60–80% enterprise test benchmark, broader metadata
-accounting, selected platform fidelity, and persistent incremental compiler
-work. See [the baseline audit](docs/PHASE_2_BASELINE.md) for the evidence and
-the important distinction between syntax progress and runtime compatibility.
+M16 completes checked ternary and `instanceof` expressions. Phase 2 is now
+active at M17, whose next gate is live candidate-bound Salesforce evidence.
+The primary syntax gate remains all 14 pinned North Star lexer/parser
+indicators passing; M16 moves the audited 1-of-14 baseline to 5 of 14. The
+phase then carries that syntax foundation into a representative 60–80%
+enterprise test benchmark, broader metadata accounting, selected platform
+fidelity, and persistent incremental compiler work. See
+[the baseline audit](docs/PHASE_2_BASELINE.md) for the evidence and the
+important distinction between syntax progress and runtime compatibility.
 
 ```console
 $ cargo run -- run examples/hello.apex
@@ -147,6 +149,22 @@ cargo run -- hybrid \
 No real-org validation snapshot is tracked in this repository. Phase 2 M17
 binds the first accepted live evidence bundle to its exact candidate, request,
 org, API/tool versions, and capture age.
+
+The M16 sample executes right-associative lazy conditionals and checked runtime
+type tests, then runs both production branches through the Apex test runner:
+
+```console
+$ cargo run -- invoke examples/milestone16-project ConditionalTypes.run
+primary:String|secondary:Other
+primary:String|secondary:Other
+$ cargo run -- test examples/milestone16-project
+PASS ConditionalTypesTest.coversBothConditionalAndRuntimeTypeBranches
+  debug: primary:String|secondary:Other
+
+Coverage:
+  force-app/main/default/classes/ConditionalTypes.cls: 5/5 lines (100.00%), 4/4 branches (100.00%)
+Summary: 1 passed, 0 failed, 1 total; 5/5 lines (100.00%), 4/4 branches (100.00%)
+```
 
 Compiler stages can be inspected independently:
 

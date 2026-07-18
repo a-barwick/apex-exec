@@ -1,10 +1,10 @@
 # Current Status
 
-**Last updated:** 2026-07-17
+**Last updated:** 2026-07-18
 
 ## Active milestone
 
-M16 — Conditional and runtime-type expressions
+M17 — Candidate-bound live Salesforce validation
 
 ## Completed
 
@@ -16,6 +16,11 @@ M16 — Conditional and runtime-type expressions
 - Single-quoted strings, comments, and common string escapes
 - Precedence-based arithmetic, comparison, equality, and Boolean expressions
 - String concatenation and prefix/postfix increment and decrement
+- Right-associative ternary expressions with checked Boolean conditions,
+  common result typing, lazy arm execution, and production branch coverage
+- Checked `instanceof` expressions with viable-alternative diagnostics,
+  generic collection identity, class/interface runtime relationships,
+  null-false behavior, and single evaluation of the value expression
 - Blocks with nested lexical scopes
 - `if`/`else`, `while`, `do`/`while`, and traditional `for` execution
 - `break`, `continue`, and value-less anonymous `return`
@@ -279,25 +284,32 @@ M16 — Conditional and runtime-type expressions
   seven integration tests covering inventory, safety, selection, fallback,
   drift, differential failures, snapshots, authenticated CLI transport, report
   output, and readiness exit status
-- 276 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.07% overall,
-  including 86.11% for the new hybrid deployment module
+- A complete M16 project and oracle-ready manifest exercise ternary and
+  `instanceof` through project checking, static invocation, isolated Apex
+  tests, CLI workflows, branch coverage, and normalized differential dimensions
+- 287 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.26% overall
+  and 80.73% across the eight changed Rust source modules
 
 ## Immediate target
 
-Implement ternary and `instanceof` as complete lexer/parser/checker/runtime
-slices, then perform M17 against a user-supplied staging org with evidence bound
-to the exact release candidate. The complete Phase 2 sequence and its evidence
-baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+Perform M17 against a user-supplied staging org with evidence bound to the
+exact release candidate. M17 requires the strengthened evidence schema and a
+real authenticated run; fake-CLI transport tests are not live evidence. Local
+M18 work may continue if that external dependency is pending. The complete
+Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
+`docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-The Phase 2 baseline reproduces 1 of 14 passing indicators (**7.14%**): lexer 1
-of 7 (**14.29%**) and parser 0 of 7 (**0%**). `JSONParse.cls` lexes and parses
-through its ordinary members before stopping at `instanceof`. The other first
-diagnostics are safe navigation in `SOQL.cls` and `Logger.cls`, null coalescing
-in `Rollup.cls`, ternary syntax in `RollupService.cls`, and bitwise/compound
-operators in `fflib_SObjectDomain.cls` and `Puff.cls`.
+M16 reproduces 5 of 14 passing indicators (**35.71%**): lexer 5 of 7
+(**71.43%**) and parser 0 of 7 (**0%**), a gain of four lexer indicators from
+the Phase 2 baseline. `SOQL.cls`, `Logger.cls`, `Rollup.cls`,
+`RollupService.cls`, and `JSONParse.cls` now lex completely. Their first parser
+diagnostics are unsupported annotations or nested declarations; the two
+remaining lexer blockers are bitwise/compound operators in
+`fflib_SObjectDomain.cls` and `Puff.cls`. Ternary and `instanceof` no longer
+appear as first diagnostics.
 
 Later reachable blockers include arbitrary annotations, nested declarations,
 enums, class literals, static initializer blocks, `switch`/`when`,
@@ -350,6 +362,15 @@ without `#[ignore]` or corpus changes.
 - `Object` supports assignment, overload widening, casts, and `toString()`;
   equality/hash and the broader inherited Apex Object surface remain
   unsupported.
+- Ternary result typing covers identical types, null with a concrete type,
+  supported subtype widening, Integer-to-Decimal promotion, and `Object` as the
+  common carrier for otherwise unrelated supported values. It does not add
+  broader Apex conversion rules.
+- `instanceof` uses the current compatibility profile: null is false, invariant
+  generic collection identity is preserved, and statically always-true or
+  impossible tests fail during checking. Historical pre-API-32 null behavior,
+  String-to-Id quirks, and unsupported platform generic interfaces await
+  versioned profiles and broader type support.
 - The core exception subset supports construction, catching, rethrowing,
   messages, type names, and deterministic stack text. Custom exception classes,
   causes, and Salesforce-exact stack formatting require later compatibility and
@@ -419,8 +440,8 @@ without `#[ignore]` or corpus changes.
   behavior, finalizers, future callout options, and platform-event replay or
   retention are unsupported.
 - Coverage counts executable production statement lines and both outcomes of
-  `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
-  claim of Salesforce-exact coverage accounting.
+  `if`, ternary, `while`, `do`/`while`, and condition-bearing `for` branches.
+  It is not a claim of Salesforce-exact coverage accounting.
 - Date/time formatting is fixed deterministic UTC formatting rather than
   locale/time-zone aware Salesforce formatting. Decimal uses 96-bit
   `rust_decimal` semantics and does not yet implement every Apex rounding mode.

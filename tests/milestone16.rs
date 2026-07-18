@@ -23,6 +23,7 @@ fn milestone16_project_checks_invokes_and_tests_with_full_branch_coverage() {
     let report = run_tests(&compilation, &TestOptions::default()).unwrap();
     assert!(report.is_success(), "{}", report.render_console());
     assert_eq!(report.tests.len(), 1);
+    assert_eq!(report.coverage.covered_lines, report.coverage.total_lines);
     assert_eq!(
         report.coverage.covered_branches,
         report.coverage.total_branches

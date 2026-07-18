@@ -7,5 +7,9 @@ private class ConditionalTypesTest {
             'secondary:Other',
             ConditionalTypes.describe(false, new List<String>{'value'})
         );
+        System.assertEquals(
+            'primary:String|secondary:Other',
+            ConditionalTypes.run()
+        );
     }
 }

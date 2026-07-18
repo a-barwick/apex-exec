@@ -50,6 +50,16 @@ rendering maps spans against the supplied source text. Project
 independently through its `SourceId`, so one stack may name multiple files.
 Salesforce-exact formatting still requires later differential validation.
 
+## M16 expression diagnostics
+
+**Implemented.** A missing ternary arm or colon is a parser diagnostic.
+Non-Boolean conditions, Void arms, unknown runtime target types, impossible
+`instanceof` relationships, and statically always-true runtime-type tests are
+semantic diagnostics. Null Boolean conditions are catchable runtime
+`NullPointerException` values. Safe navigation and null coalescing tokenize
+through the shared `?` punctuation but remain explicit parser errors until
+M18.
+
 ## Planned structured diagnostics
 
 The renderer already distinguishes lexical, syntax, name/type, unsupported
