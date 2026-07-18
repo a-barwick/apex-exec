@@ -22,6 +22,7 @@ mod asynchronous;
 mod database;
 mod host;
 mod image;
+mod instrumentation;
 mod intrinsics;
 mod platform_intrinsics;
 mod store;
@@ -33,31 +34,12 @@ pub use host::{
     TriggerStage, UserContext,
 };
 use image::RuntimeImage;
+pub(crate) use instrumentation::{BranchHits, ExecutionTrace};
+pub use instrumentation::{DebugFrame, DebugSnapshot, DebugTraceStatus, DebugVariable};
+use instrumentation::{
+    DebugSnapshotBuilder, InstrumentationPolicy, InstrumentationState, StatementInstrumentation,
+};
 use store::ExecutionStore;
-
-/// A debugger-visible variable captured immediately before an Apex statement.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugVariable {
-    pub name: String,
-    pub type_name: String,
-    pub value: String,
-}
-
-/// One source-mapped Apex frame in a debugger snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugFrame {
-    pub name: String,
-    pub span: Span,
-}
-
-/// Immutable runtime state captured at one executable statement boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugSnapshot {
-    pub span: Span,
-    pub frames: Vec<DebugFrame>,
-    pub variables: Vec<DebugVariable>,
-    pub transaction_event_count: usize,
-}
 
 /// Complete deterministic trace from one debugger launch.
 #[derive(Clone, Debug)]
@@ -66,18 +48,8 @@ pub struct DebugExecution {
     pub diagnostic: Option<Diagnostic>,
     pub snapshots: Vec<DebugSnapshot>,
     pub timeline: Vec<TransactionEvent>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BranchHits {
-    pub true_hits: usize,
-    pub false_hits: usize,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ExecutionTrace {
-    pub executed_statements: BTreeSet<Span>,
-    pub branches: BTreeMap<Span, BranchHits>,
+    /// Retained-memory accounting and truncation state for `snapshots`.
+    pub trace_status: DebugTraceStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -286,8 +258,7 @@ pub struct Interpreter<'program, H = RecordingHost> {
     trigger_depth: usize,
     read_only_sobjects: BTreeSet<SObjectId>,
     read_only_collections: BTreeSet<CollectionId>,
-    trace: ExecutionTrace,
-    debug_snapshots: Vec<DebugSnapshot>,
+    instrumentation: InstrumentationState,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
     next_async_sequence: u64,
@@ -305,43 +276,16 @@ impl<'program> Interpreter<'program, RecordingHost> {
     /// can navigate the immutable snapshots without pausing the language
     /// runtime on an editor or transport thread.
     pub fn debug_execute(mut self, program: &'program Program) -> DebugExecution {
-        let result = self.prepare(program).and_then(|_| {
-            self.begin_transaction(Span::new(0, 0))?;
-            let result = (|| {
-                self.initialize_static_fields()?;
-                for statement in &program.statements {
-                    match self.execute_statement(statement)? {
-                        Flow::Normal => {}
-                        Flow::Return(None) => break,
-                        Flow::Return(Some(_)) => {
-                            return Err(Diagnostic::new(
-                                "value return escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                        Flow::Break => {
-                            return Err(Diagnostic::new(
-                                "`break` escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                        Flow::Continue => {
-                            return Err(Diagnostic::new(
-                                "`continue` escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                    }
-                }
-                Ok(())
-            })();
-            self.finish_transaction(result, Span::new(0, 0))
-        });
+        self.instrumentation
+            .configure(InstrumentationPolicy::Debugger);
+        let result = self.execute_anonymous_entry(program);
+        let (snapshots, trace_status) = self.instrumentation.take_debug_trace();
         DebugExecution {
             output: self.host.take_debug_output(),
             diagnostic: result.err(),
-            snapshots: self.debug_snapshots,
+            snapshots,
             timeline: self.host.timeline_events().to_vec(),
+            trace_status,
         }
     }
 
@@ -353,13 +297,9 @@ impl<'program> Interpreter<'program, RecordingHost> {
         class_name: &str,
         method_name: &str,
     ) -> DebugExecution {
-        let result = self.prepare(program).and_then(|_| {
-            self.begin_transaction(Span::new(0, 0))?;
-            let result = self
-                .initialize_static_fields()
-                .and_then(|_| self.invoke_static_inner(class_name, method_name));
-            self.finish_transaction(result, Span::new(0, 0))
-        });
+        self.instrumentation
+            .configure(InstrumentationPolicy::Debugger);
+        let result = self.invoke_static_entry(program, class_name, method_name);
         let mut output = self.host.take_debug_output();
         let diagnostic = match result {
             Ok(value) => {
@@ -370,11 +310,13 @@ impl<'program> Interpreter<'program, RecordingHost> {
             }
             Err(diagnostic) => Some(diagnostic),
         };
+        let (snapshots, trace_status) = self.instrumentation.take_debug_trace();
         DebugExecution {
             output,
             diagnostic,
-            snapshots: self.debug_snapshots,
+            snapshots,
             timeline: self.host.timeline_events().to_vec(),
+            trace_status,
         }
     }
 }
@@ -398,8 +340,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             trigger_depth: 0,
             read_only_sobjects: BTreeSet::new(),
             read_only_collections: BTreeSet::new(),
-            trace: ExecutionTrace::default(),
-            debug_snapshots: Vec::new(),
+            instrumentation: InstrumentationState::new(InstrumentationPolicy::None),
             async_queue: VecDeque::new(),
             current_async: None,
             next_async_sequence: 1,
@@ -412,37 +353,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     /// [`PlatformHost::take_debug_output`]. A streaming host that keeps the
     /// default implementation returns an empty vector.
     pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
-        self.prepare(program)?;
-        self.begin_transaction(Span::new(0, 0))?;
-        let result = (|| {
-            self.initialize_static_fields()?;
-            for statement in &program.statements {
-                match self.execute_statement(statement)? {
-                    Flow::Normal => {}
-                    Flow::Return(None) => break,
-                    Flow::Return(Some(_)) => {
-                        return Err(Diagnostic::new(
-                            "value return escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                    Flow::Break => {
-                        return Err(Diagnostic::new(
-                            "`break` escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                    Flow::Continue => {
-                        return Err(Diagnostic::new(
-                            "`continue` escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                }
-            }
-            Ok(())
-        })();
-        self.finish_transaction(result, Span::new(0, 0))?;
+        self.instrumentation.configure(InstrumentationPolicy::None);
+        self.execute_anonymous_entry(program)?;
         Ok(self.host.take_debug_output())
     }
 
@@ -457,12 +369,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         class_name: &str,
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
-        self.prepare(program)?;
-        self.begin_transaction(Span::new(0, 0))?;
-        let result = self
-            .initialize_static_fields()
-            .and_then(|_| self.invoke_static_inner(class_name, method_name));
-        let value = self.finish_transaction(result, Span::new(0, 0))?;
+        self.instrumentation.configure(InstrumentationPolicy::None);
+        let value = self.invoke_static_entry(program, class_name, method_name)?;
         let mut output = self.host.take_debug_output();
         if !matches!(value, Value::Void) {
             output.push(self.display_value(&value));
@@ -524,6 +432,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         setup_methods: &[ClassMemberId],
         test_method: ClassMemberId,
     ) -> TestExecution {
+        self.instrumentation
+            .configure(InstrumentationPolicy::Coverage);
         let result = self.prepare(program).and_then(|_| {
             self.begin_transaction(Span::new(0, 0))?;
             let result = (|| {
@@ -541,8 +451,56 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         TestExecution {
             output: self.host.take_debug_output(),
             diagnostic: result.err(),
-            trace: self.trace,
+            trace: self.instrumentation.take_trace(),
         }
+    }
+
+    fn execute_anonymous_entry(&mut self, program: &'program Program) -> Result<(), Diagnostic> {
+        self.prepare(program)?;
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = (|| {
+            self.initialize_static_fields()?;
+            for statement in &program.statements {
+                match self.execute_statement(statement)? {
+                    Flow::Normal => {}
+                    Flow::Return(None) => break,
+                    Flow::Return(Some(_)) => {
+                        return Err(Diagnostic::new(
+                            "value return escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Break => {
+                        return Err(Diagnostic::new(
+                            "`break` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Continue => {
+                        return Err(Diagnostic::new(
+                            "`continue` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.finish_transaction(result, Span::new(0, 0))
+    }
+
+    fn invoke_static_entry(
+        &mut self,
+        program: &'program Program,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Value, Diagnostic> {
+        self.prepare(program)?;
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = self
+            .initialize_static_fields()
+            .and_then(|_| self.invoke_static_inner(class_name, method_name));
+        self.finish_transaction(result, Span::new(0, 0))
     }
 
     fn class_method_span(&self, target: ClassMemberId) -> Result<Span, Diagnostic> {
@@ -674,10 +632,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
-        if !matches!(statement, Statement::Block { .. }) {
-            self.capture_debug_snapshot(statement.span());
-        }
-        self.trace.executed_statements.insert(statement.span());
+        self.instrument_statement(
+            statement.span(),
+            !matches!(statement, Statement::Block { .. }),
+        );
         match statement {
             Statement::VariableDeclaration {
                 ty,
@@ -912,12 +870,116 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn record_branch(&mut self, span: Span, outcome: bool) {
-        let hits = self.trace.branches.entry(span).or_default();
-        if outcome {
-            hits.true_hits += 1;
-        } else {
-            hits.false_hits += 1;
+        self.instrumentation.record_branch(span, outcome);
+    }
+
+    fn instrument_statement(&mut self, span: Span, capture_debugger: bool) {
+        let StatementInstrumentation::CaptureDebugger {
+            retained_byte_budget,
+        } = self
+            .instrumentation
+            .before_statement(span, capture_debugger)
+        else {
+            return;
+        };
+        let (snapshot, retained_bytes, truncated) =
+            self.build_debug_snapshot(span, retained_byte_budget);
+        self.instrumentation
+            .record_debug_snapshot(snapshot, retained_bytes, truncated);
+    }
+
+    fn build_debug_snapshot(
+        &self,
+        span: Span,
+        retained_byte_budget: usize,
+    ) -> (DebugSnapshot, usize, bool) {
+        let mut builder = DebugSnapshotBuilder::new(
+            span,
+            self.host.transaction_event_count(),
+            retained_byte_budget,
+        );
+        self.capture_debug_frames(span, &mut builder);
+        self.capture_debug_variables(&mut builder);
+        builder.finish()
+    }
+
+    fn capture_debug_frames(&self, span: Span, builder: &mut DebugSnapshotBuilder) {
+        let leaf_name = self
+            .call_stack
+            .last()
+            .map_or("<anonymous>", |call| call.method.as_str());
+        if !builder.can_push_frame() {
+            builder.mark_truncated();
+        } else if builder.push_frame(leaf_name.to_owned(), span) {
+            for index in (0..self.call_stack.len().saturating_sub(1)).rev() {
+                if !builder.can_push_frame() {
+                    builder.mark_truncated();
+                    break;
+                }
+                if !builder.push_frame(
+                    self.call_stack[index].method.clone(),
+                    self.call_stack[index + 1].call_span,
+                ) {
+                    break;
+                }
+            }
+            if let Some(call) = self.call_stack.first() {
+                if builder.can_push_frame() {
+                    builder.push_frame("<anonymous>".to_owned(), call.call_span);
+                } else {
+                    builder.mark_truncated();
+                }
+            }
         }
+    }
+
+    fn capture_debug_variables(&self, builder: &mut DebugSnapshotBuilder) {
+        let limit = builder.remaining_variable_slots();
+        let (visible, variables_truncated) = self.visible_debug_names(limit);
+        if variables_truncated {
+            builder.mark_truncated();
+        }
+        for canonical in visible {
+            if !builder.can_push_variable() {
+                builder.mark_truncated();
+                break;
+            }
+            let slot = self
+                .lookup_canonical(canonical)
+                .expect("selected debugger variable remains visible");
+            if !builder.push_variable(
+                canonical.to_owned(),
+                slot.ty.apex_name(),
+                self.display_value(&slot.value),
+            ) {
+                break;
+            }
+        }
+    }
+
+    fn visible_debug_names(&self, limit: usize) -> (BTreeSet<&str>, bool) {
+        let mut visible = BTreeSet::<&str>::new();
+        let mut truncated = false;
+        for scope in &self.scopes {
+            for canonical in scope.keys().map(String::as_str) {
+                if visible.contains(canonical) {
+                    continue;
+                }
+                if visible.len() < limit {
+                    visible.insert(canonical);
+                    continue;
+                }
+                truncated = true;
+                let Some(last) = visible.last().copied() else {
+                    continue;
+                };
+                if canonical < last {
+                    visible.remove(last);
+                    visible.insert(canonical);
+                }
+            }
+        }
+        (visible, truncated)
     }
 
     fn execute_for_each(
@@ -3257,49 +3319,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.scopes
             .last_mut()
             .expect("interpreter always has a scope")
-    }
-
-    fn capture_debug_snapshot(&mut self, span: Span) {
-        let mut visible = BTreeMap::<String, DebugVariable>::new();
-        for scope in &self.scopes {
-            for (canonical, slot) in scope {
-                visible.insert(
-                    canonical.clone(),
-                    DebugVariable {
-                        name: canonical.clone(),
-                        type_name: slot.ty.apex_name(),
-                        value: self.display_value(&slot.value),
-                    },
-                );
-            }
-        }
-        let mut frames = Vec::with_capacity(self.call_stack.len().max(1));
-        let leaf_name = self
-            .call_stack
-            .last()
-            .map_or("<anonymous>", |call| call.method.as_str());
-        frames.push(DebugFrame {
-            name: leaf_name.to_owned(),
-            span,
-        });
-        for index in (0..self.call_stack.len().saturating_sub(1)).rev() {
-            frames.push(DebugFrame {
-                name: self.call_stack[index].method.clone(),
-                span: self.call_stack[index + 1].call_span,
-            });
-        }
-        if let Some(call) = self.call_stack.first() {
-            frames.push(DebugFrame {
-                name: "<anonymous>".to_owned(),
-                span: call.call_span,
-            });
-        }
-        self.debug_snapshots.push(DebugSnapshot {
-            span,
-            frames,
-            variables: visible.into_values().collect(),
-            transaction_event_count: self.host.transaction_event_count(),
-        });
     }
 
     fn value_has_type(&self, value: &Value, target: &TypeName) -> bool {

@@ -1,3 +1,6 @@
+use super::instrumentation::{
+    MAX_DEBUG_RENDERED_VALUE_BYTES, MAX_DEBUG_RETAINED_BYTES, MAX_DEBUG_SNAPSHOTS,
+};
 use super::*;
 
 #[derive(Default)]
@@ -14,6 +17,150 @@ impl PlatformHost for ObservingHost {
 fn execute_source(source: &str) -> Result<Vec<String>, Diagnostic> {
     let program = crate::check(source)?;
     Interpreter::new().execute(&program)
+}
+
+#[test]
+fn ordinary_statement_execution_does_not_capture_debug_snapshots() {
+    let program = crate::check(
+        "Integer total = 0; \
+         for (Integer i = 0; i < 20000; i++) total = total + i;",
+    )
+    .unwrap();
+    let mut interpreter = Interpreter::new();
+
+    interpreter.execute_anonymous_entry(&program).unwrap();
+
+    assert_eq!(
+        interpreter.instrumentation.policy(),
+        InstrumentationPolicy::None
+    );
+    assert_eq!(interpreter.instrumentation.snapshot_count(), 0);
+    assert!(
+        interpreter
+            .instrumentation
+            .trace()
+            .executed_statements
+            .is_empty()
+    );
+    assert!(interpreter.instrumentation.trace().branches.is_empty());
+}
+
+#[test]
+fn ordinary_static_invocation_does_not_capture_instrumentation() {
+    let program = crate::check(
+        "public class Worker { \
+             public static Integer run() { \
+                 Integer total = 0; \
+                 for (Integer i = 0; i < 20000; i++) total = total + i; \
+                 return total; \
+             } \
+         }",
+    )
+    .unwrap();
+    let mut interpreter = Interpreter::new();
+
+    let value = interpreter
+        .invoke_static_entry(&program, "Worker", "run")
+        .unwrap();
+
+    assert_eq!(value, Value::Integer(199_990_000));
+    assert_eq!(
+        interpreter.instrumentation.policy(),
+        InstrumentationPolicy::None
+    );
+    assert_eq!(interpreter.instrumentation.snapshot_count(), 0);
+    assert!(
+        interpreter
+            .instrumentation
+            .trace()
+            .executed_statements
+            .is_empty()
+    );
+    assert!(interpreter.instrumentation.trace().branches.is_empty());
+}
+
+#[test]
+fn coverage_policy_records_only_coverage_facts() {
+    let program = crate::check(
+        "Integer total = 0; \
+         for (Integer i = 0; i < 2; i++) total = total + i;",
+    )
+    .unwrap();
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .instrumentation
+        .configure(InstrumentationPolicy::Coverage);
+
+    interpreter.execute_anonymous_entry(&program).unwrap();
+
+    assert_eq!(interpreter.instrumentation.snapshot_count(), 0);
+    assert!(
+        !interpreter
+            .instrumentation
+            .trace()
+            .executed_statements
+            .is_empty()
+    );
+    assert!(
+        !interpreter.instrumentation.trace().branches.is_empty(),
+        "the loop condition should retain both branch outcomes"
+    );
+}
+
+#[test]
+fn debugger_snapshot_count_is_bounded_and_reports_truncation() {
+    let source = format!(
+        "Integer i = 0; while (i < {}) i++;",
+        MAX_DEBUG_SNAPSHOTS + 100
+    );
+    let program = crate::check(&source).unwrap();
+
+    let execution = Interpreter::new().debug_execute(&program);
+
+    assert!(execution.diagnostic.is_none());
+    assert_eq!(execution.snapshots.len(), MAX_DEBUG_SNAPSHOTS);
+    assert!(execution.trace_status.truncated);
+    assert!(execution.trace_status.retained_bytes <= MAX_DEBUG_RETAINED_BYTES);
+}
+
+#[test]
+fn debugger_reports_runtime_failures_after_its_snapshot_limit() {
+    let source = format!(
+        "Integer i = 0; while (i < {}) i++; Integer bad = 1 / 0;",
+        MAX_DEBUG_SNAPSHOTS + 100
+    );
+    let program = crate::check(&source).unwrap();
+
+    let execution = Interpreter::new().debug_execute(&program);
+
+    assert_eq!(
+        execution
+            .diagnostic
+            .as_ref()
+            .and_then(|diagnostic| diagnostic.exception_type.as_deref()),
+        Some("MathException")
+    );
+    assert_eq!(execution.snapshots.len(), MAX_DEBUG_SNAPSHOTS);
+    assert!(execution.trace_status.truncated);
+}
+
+#[test]
+fn debugger_rendered_values_are_bounded_and_keep_pre_statement_state() {
+    let long_value = "x".repeat(MAX_DEBUG_RENDERED_VALUE_BYTES + 100);
+    let program =
+        crate::check(&format!("String value = '{long_value}'; Integer done = 1;")).unwrap();
+
+    let execution = Interpreter::new().debug_execute(&program);
+
+    let value = execution.snapshots[1]
+        .variables
+        .iter()
+        .find(|variable| variable.name == "value")
+        .unwrap();
+    assert!(value.value.len() <= MAX_DEBUG_RENDERED_VALUE_BYTES);
+    assert!(value.value.ends_with('…'));
+    assert!(execution.trace_status.truncated);
+    assert!(execution.trace_status.retained_bytes <= MAX_DEBUG_RETAINED_BYTES);
 }
 
 #[test]

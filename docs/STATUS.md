@@ -228,6 +228,9 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Statement-boundary debugger snapshots with verified breakpoints, entry stops,
   step in/over/out, source-mapped Apex frames, visible typed variables, runtime
   exceptions, debug output, database DML inspection, and transaction timelines
+- Explicit runtime instrumentation policies keep ordinary execute/invoke paths
+  free of coverage and debugger state, limit test execution to consumed
+  coverage facts, and bound debugger traces with reported truncation
 - A stdio Debug Adapter Protocol server covering launch/configuration, threads,
   frames, scopes, variables, stepping, continue, terminate, and disconnect for
   both anonymous scripts and project `Class.method` entry points
@@ -502,7 +505,11 @@ lexer 5/7, parser 0/7, total 5/14.
 - The REPL reconstructs accepted state by deterministic whole-session replay.
   It does not preserve host effects that fall outside the deterministic local
   platform profile.
-- Debugger stops are immutable pre-statement snapshots. Debug-console
+- Debugger stops are immutable pre-statement snapshots. One launch retains the
+  earliest 4,096 snapshots and an estimated 16 MiB of snapshot structures and
+  text, with per-snapshot limits of 256 variables and 128 frames and a 16 KiB
+  rendered-value limit; `DebugExecution::trace_status` reports truncation.
+  Recursive cycle-safe value rendering remains S0-03 work. Debug-console
   expression evaluation, mutation, conditional breakpoints, data breakpoints,
   exception filters, and reverse execution are not implemented.
 - LSP navigation and rename cover checked project classes and members.
