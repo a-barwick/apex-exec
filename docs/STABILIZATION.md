@@ -65,8 +65,8 @@ package.
 |---|---|---|---|---|
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
-| S0-02 | Opt-in runtime instrumentation | Review (`811294f`; `codex/stab-runtime-instrumentation`; fmt/test/clippy and focused runtime/debugger/coverage/CLI evidence pass) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Blocked | S0-02 | S0-01, S0-05 |
+| S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Ready | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
@@ -82,6 +82,25 @@ package.
 | S2-04 | Open-source release gate | Blocked | S0-05, owner license decision | Disjoint implementation work |
 
 Only S0-01, S0-02, and S0-05 should start in the first parallel wave.
+
+## Integrated package evidence
+
+### S0-02 — Opt-in runtime instrumentation
+
+- Implementation `811294f`, Review handoff `e6c6d27`, and integration merge
+  `41319d6`.
+- Fresh read-only review by `review_s0_02`: **Approve**, with no blocking
+  findings. The downstream debugger/DAP trace-exhaustion visibility gap is
+  recorded as F-P1-13 and scheduled for S2-03 rather than expanding S0-02.
+- Integrated verification passed: `cargo fmt --check`; `cargo test` (312
+  passed, 14 ignored North Star indicators); `cargo clippy --all-targets -- -D
+  warnings`; website `npm test` (2 passed) and `npm run lint`; the focused
+  instrumentation test; and the ordinary-run cyclic-list CLI reproduction
+  (exit 0, output `1`).
+- Complexity evidence: comparable Lizard runs reduced
+  `execute_statement` CCN from 17 to 16, held the runtime warning count at
+  five, and reported no threshold warnings in the extracted bounded
+  instrumentation module.
 
 ## Roadmap gates
 

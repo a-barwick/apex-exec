@@ -293,6 +293,20 @@ budgets.
 These should be fixed after the structured diagnostic model to avoid another
 temporary adapter.
 
+### F-P1-13 — Debugger trace exhaustion is hidden downstream
+
+S0-02 exposes deterministic, machine-readable debugger trace truncation through
+`DebugExecution::trace_status`, but `DebuggerSession` keeps the execution
+artifact private and its terminal stop ignores that status. DAP clients
+therefore receive an ordinary `terminated` event when the retained trace prefix
+is exhausted and cannot distinguish a later unreachable breakpoint from trace
+truncation.
+
+This does not block S0-02 because DAP feature expansion is explicit non-scope
+and direct debug execution artifacts satisfy that package's contract. Propagate
+typed truncation through the debugger session and DAP, with an end-to-end
+exhaustion regression, in S2-03.
+
 ## Scale and compatibility risks to benchmark
 
 - Deterministic Set and Map storage is vector-backed; lookup and structural
