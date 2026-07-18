@@ -303,9 +303,9 @@ M17 — Candidate-bound live Salesforce validation
   for positive capture/replay, candidate/request/target/API/tool/age mismatch,
   controlled deployment blockers, drift, retrieval stability, tampering,
   error-phase ordering, CLI exit status, and output side effects
-- 300 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.23% overall
-  and 82.89% across the three changed production modules (`ci`, `hybrid`, and
+- 301 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.34% overall
+  and 83.59% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
 
 ## Immediate target

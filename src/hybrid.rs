@@ -2283,6 +2283,14 @@ mod tests {
                 .contains("CLI version mismatch")
         );
 
+        let mut mismatch = snapshot.clone();
+        mismatch.evidence.apex_exec_version = "different".to_owned();
+        assert!(
+            validate_replay_environment(&mismatch, &options, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("Apex Exec version mismatch")
+        );
+
         let mut mismatch = options.clone();
         mismatch.maximum_evidence_age = Duration::from_secs(60 * 60);
         assert!(
@@ -2333,6 +2341,13 @@ mod tests {
                 .unwrap_err()
                 .contains("exact M14 CI result")
         );
+        let mut mismatch = candidate.clone();
+        mismatch.ci_cache_key = "d".repeat(64);
+        assert!(
+            validate_candidate_binding(&snapshot, &mismatch, &request)
+                .unwrap_err()
+                .contains("M14 CI cache key")
+        );
 
         let mut mismatch = request.clone();
         mismatch.changed_paths = vec![PathBuf::from("force-app/changed.cls")];
@@ -2350,6 +2365,28 @@ mod tests {
             validate_candidate_binding(&snapshot, &candidate, &mismatch)
                 .unwrap_err()
                 .contains("selectors or digests")
+        );
+
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.component_selection = ComponentSelectionMode::Impacted;
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("component-selection mode")
+        );
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.selected_tests = vec!["DemoTest.passes".to_owned()];
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("selected tests")
+        );
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.test_level = DeploymentTestLevel::RunSpecifiedTests;
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("test level")
         );
     }
 
@@ -2400,6 +2437,33 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("invalid validation snapshot"), "{error}");
         assert!(!error.contains("failed to start Salesforce CLI"));
+    }
+
+    #[test]
+    fn run_options_require_cacheable_capture_and_exact_replay_assertions() {
+        let target = ValidationSource::TargetOrg("staging".to_owned());
+        let mut options = HybridRunOptions::default();
+        options.ci.no_cache = true;
+        assert!(
+            validate_run_options(&target, &options)
+                .unwrap_err()
+                .contains("cacheable M14 CI artifact")
+        );
+
+        let snapshot = ValidationSource::Snapshot(PathBuf::from("validation.json"));
+        let options = HybridRunOptions::default();
+        assert!(
+            validate_run_options(&snapshot, &options)
+                .unwrap_err()
+                .contains("requires `--replay`")
+        );
+        let mut options = HybridRunOptions::default();
+        options.ci.replay_only = true;
+        assert!(
+            validate_run_options(&snapshot, &options)
+                .unwrap_err()
+                .contains("expected target org")
+        );
     }
 
     fn valid_snapshot() -> ValidationSnapshot {
