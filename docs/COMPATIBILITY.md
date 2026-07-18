@@ -59,16 +59,16 @@ for the documented case.
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
 | `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot |
-| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supports primitive, `Object`, custom-class, and core-exception elements |
+| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction validates and supports primitive, `Object`, known custom-class, and core-exception elements |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
 | User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
-| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts; invalid runtime casts throw `TypeException` |
+| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts, structurally disambiguated from grouped member/index/postfix expressions; invalid runtime casts throw `TypeException` |
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
-| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, `interface extends`, and cycle-checked hierarchy edges |
+| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, `interface extends`, cycle-checked hierarchy edges, and visited iterative subtype traversal |
 | Nested types and enums | No | No | No | Unsupported | Qualified nested identities, enums, and type literals are planned in M20 |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
@@ -190,10 +190,11 @@ obligations are enforced, every superclass/interface edge participates in
 iterative cycle validation, and instance calls use virtual dispatch. Interfaces
 extend interfaces; an `implements` clause on an interface is rejected as
 invalid syntax before contract traversal. User types participate in assignment,
-overload ranking, and related up/downcasts. Access checks cover public, private,
-protected, and global members, including accessor-specific property visibility.
-Nested types, enums, explicit superclass-constructor calls, custom exception
-classes, and the full Apex conversion system remain unsupported.
+overload ranking, and related up/downcasts through a visited iterative subtype
+walk. Access checks cover public, private, protected, and global members,
+including accessor-specific property visibility. Nested types, enums, explicit
+superclass-constructor calls, custom exception classes, and the full Apex
+conversion system remain unsupported.
 Sharing modifiers parse so class declarations remain structurally inspectable,
 but semantic checking rejects them because sharing/security behavior is
 deferred rather than silently ignored.
@@ -596,6 +597,8 @@ language or Salesforce compatibility claim.
   structured `TokenStreamError` values before parsing.
 - Unknown variables, generic mismatches, invalid iteration/indexing, and
   invalid built-in or user-defined calls fail semantic checking.
+- Unknown element types in constructed collections and sized arrays fail
+  semantic checking before execution.
 - Duplicate method signatures, ambiguous/no-match overloads, invalid return
   paths, invalid catches, and unsupported casts fail semantic checking.
 - Duplicate/unknown classes, inheritance cycles, inaccessible members, invalid

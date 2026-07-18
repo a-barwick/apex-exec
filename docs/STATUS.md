@@ -45,7 +45,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   collections
 - One-dimensional `T[]` syntax as an alias for `List<T>`
 - Empty, copy, literal, and sized-array construction, including custom,
-  `Object`, and core-exception element types
+  `Object`, and core-exception element types, with complete constructed-element
+  type validation
 - List indexing, indexed assignment, and indexed increment/decrement
 - Collection reference aliasing with independent shallow copies from copy
   constructors and `clone()`
@@ -63,6 +64,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - `try`, typed `catch`, `finally`, `throw`, and catchable core exception values
 - Minimal `Object` assignment and explicit casts, including catchable invalid
   downcasts
+- Structural cast/group disambiguation for parenthesized member access,
+  indexing, postfix mutation, signed operators, and supported genuine casts
 - Catchable `NullPointerException`, `ListException`, `MathException`,
   `TypeException`, `StringException`, `IllegalArgumentException`, and
   `FinalException` behavior
@@ -92,7 +95,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   accessor-specific visibility
 - Class inheritance, abstract/virtual methods, overrides, interfaces, subtype
   assignment, iterative cycle validation across every hierarchy edge, and
-  cycle-safe interface contract collection
+  visited iterative subtype and interface-contract traversal
 - Object identity, inherited storage, class casts, and source-mapped class call
   execution
 - SFDX `packageDirectories` discovery, recursive `.cls` loading, filename/type
@@ -336,7 +339,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 315 ordinary tests pass with no failures (14 separate North Star goal tests
+- 319 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
