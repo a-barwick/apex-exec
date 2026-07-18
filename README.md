@@ -20,6 +20,14 @@ check-only Salesforce validation complete the current local feedback loop and
 release-confidence gate.
 Apex identifiers, types, and method names are case-insensitive.
 
+Phase 2 is now active at M16. Its primary syntax gate is all 14 pinned North
+Star lexer/parser indicators passing; the audited baseline is 1 of 14. The
+phase then carries that syntax foundation into live candidate-bound Salesforce
+evidence, a representative 60–80% enterprise test benchmark, broader metadata
+accounting, selected platform fidelity, and persistent incremental compiler
+work. See [the baseline audit](docs/PHASE_2_BASELINE.md) for the evidence and
+the important distinction between syntax progress and runtime compatibility.
+
 ```console
 $ cargo run -- run examples/hello.apex
 Hello, world!
@@ -136,6 +144,10 @@ cargo run -- hybrid \
   --validation-snapshot milestone15-validation.json
 ```
 
+No real-org validation snapshot is tracked in this repository. Phase 2 M17
+binds the first accepted live evidence bundle to its exact candidate, request,
+org, API/tool versions, and capture age.
+
 Compiler stages can be inspected independently:
 
 ```console
@@ -154,6 +166,7 @@ curated; unsupported behavior is rejected explicitly.
 
 - [Vision](docs/VISION.md) — north star, enterprise value, and product principles
 - [Roadmap](ROADMAP.md) — milestones and their exit criteria
+- [Phase 2 baseline](docs/PHASE_2_BASELINE.md) — audited gaps and reproducible evidence
 - [Current status](docs/STATUS.md) — completed work and immediate next target
 - [Architecture](docs/ARCHITECTURE.md) — current and target system design
 - [Compatibility](docs/COMPATIBILITY.md) — supported Apex surface and fidelity

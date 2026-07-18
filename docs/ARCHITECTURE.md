@@ -415,6 +415,34 @@ versioned snapshot. Release readiness requires the hermetic local CI policy,
 check-only deployment, unaffected schema/configuration drift, and every
 selected test outcome to agree.
 
+## Phase 2 architecture constraints
+
+The Phase 2 roadmap expands compatibility without weakening the existing phase
+boundaries:
+
+- New syntax receives explicit tokens and lossless AST nodes. Parser acceptance
+  for a North Star source does not authorize the runtime to approximate an
+  unsupported construct; the checker must either record a typed target or emit
+  an explicit unsupported diagnostic.
+- Nested declarations need canonical qualified identities owned by their
+  enclosing type. Dependency graphs, HIR targets, editor indexes, source maps,
+  and runtime dispatch must use that identity rather than flattening names.
+- API version and sharing/security behavior belong in explicit compiler/runtime
+  profiles. The effective profile must participate in cache, oracle, and hybrid
+  evidence identity.
+- Hybrid validation evidence must bind to the exact sealed candidate, affected
+  request, target, API/tool versions, and capture age before replay can approve
+  a release.
+- Metadata breadth begins with complete accounting. Every package-root file is
+  recognized, intentionally excluded, or reported unsupported; an unknown
+  unchanged path cannot silently disappear from drift analysis.
+- Persistent typed/lowered IR cannot serialize session-local `SourceId` values
+  directly. A stable path/content identity and verified remapping layer is
+  required, with clean-build-equivalent diagnostics after load.
+
+Consequential representation, profile, evidence-schema, and persistent-cache
+choices require ADRs in their implementation milestones.
+
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.
