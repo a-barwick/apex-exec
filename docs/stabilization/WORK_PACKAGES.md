@@ -10,6 +10,7 @@ expanding scope.
 
 **Status:** Complete
 **Branch:** `codex/stabilization`
+**Checkpoint:** `b4519ff`
 
 Deliverables:
 
