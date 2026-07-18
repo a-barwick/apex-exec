@@ -65,7 +65,7 @@ package.
 |---|---|---|---|---|
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
-| S0-02 | Opt-in runtime instrumentation | Active (`codex/stab-runtime-instrumentation`; `s0_02_instrumentation`) | S0-00 merged | S0-01, S0-05 |
+| S0-02 | Opt-in runtime instrumentation | Review (`811294f`; `codex/stab-runtime-instrumentation`; fmt/test/clippy and focused runtime/debugger/coverage/CLI evidence pass) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Blocked | S0-02 | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
