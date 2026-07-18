@@ -1,0 +1,100 @@
+{
+  "name": "apex-exec",
+  "displayName": "Apex Exec",
+  "description": "Local Apex diagnostics, navigation, coverage, and deterministic debugging",
+  "version": "0.1.0",
+  "publisher": "apex-exec",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:apex",
+    "onDebug:apex-exec"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "apexExec.refreshCoverage",
+        "title": "Apex Exec: Run Tests and Show Coverage"
+      }
+    ],
+    "languages": [
+      {
+        "id": "apex",
+        "aliases": [
+          "Apex"
+        ],
+        "extensions": [
+          ".cls",
+          ".trigger",
+          ".apex"
+        ]
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "apex-exec",
+        "label": "Apex Exec",
+        "languages": [
+          "apex"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Apex script or SFDX project directory"
+              },
+              "target": {
+                "type": "string",
+                "description": "Class.method entry point for a project launch"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "apex-exec",
+            "request": "launch",
+            "name": "Debug Apex script",
+            "program": "${file}",
+            "stopOnEntry": true
+          },
+          {
+            "type": "apex-exec",
+            "request": "launch",
+            "name": "Debug Apex project entry",
+            "program": "${workspaceFolder}",
+            "target": "Entry.run",
+            "stopOnEntry": true
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Apex Exec",
+      "properties": {
+        "apexExec.executable": {
+          "type": "string",
+          "default": "apex-exec",
+          "description": "Path to the apex-exec binary"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

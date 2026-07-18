@@ -1,10 +1,16 @@
 pub mod ast;
+pub mod dap;
+pub mod debugger;
 pub mod diagnostic;
+pub mod editor;
 pub mod hir;
 pub mod lexer;
+pub mod lsp;
 pub mod parser;
 pub mod platform;
 pub mod project;
+mod protocol;
+pub mod repl;
 pub mod runtime;
 pub mod semantic;
 pub mod span;

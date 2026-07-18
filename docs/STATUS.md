@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M12 — Debugger, REPL, and editor integration
+M13 — Salesforce compatibility oracle
 
 ## Completed
 
@@ -201,15 +201,40 @@ M12 — Debugger, REPL, and editor integration
   with 100% production line coverage (26/26), plus seven Rust integration tests
   covering order, snapshots, explicit draining, lifecycle failures, contracts,
   limits, and runtime boundaries
+- Persistent transactional REPL sessions with accumulated declarations and
+  variables, deterministic replay, incremental output, rollback on rejected
+  snippets, and reset/source/quit commands
+- Statement-boundary debugger snapshots with verified breakpoints, entry stops,
+  step in/over/out, source-mapped Apex frames, visible typed variables, runtime
+  exceptions, debug output, database DML inspection, and transaction timelines
+- A stdio Debug Adapter Protocol server covering launch/configuration, threads,
+  frames, scopes, variables, stepping, continue, terminate, and disconnect for
+  both anonymous scripts and project `Class.method` entry points
+- Checked project symbol indexing for class/member go-to-definition,
+  references, case-insensitive rename edits, and source-mapped inline
+  diagnostics
+- Per-executable-line coverage data and an LSP `apex/coverage` request that
+  preserves covered/uncovered state rather than aggregate counts alone
+- A stdio Language Server Protocol server covering initialization,
+  full-document diagnostics, definition, references, rename, saved-project
+  refresh, and coverage overlays
+- A VS Code thin client registering Apex files, the LSP/DAP servers, launch
+  configurations, and in-editor covered/uncovered line decorations
+- A complete M12 debug example plus protocol, editor, debugger, REPL, project
+  timeline, CLI, and coverage integration tests
+- 240 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 83.96% overall,
+  including 100.00% for REPL, 94.21% for debugger, 93.80% for LSP, 92.91% for
+  DAP, 88.37% for protocol framing, and 82.68% for editor indexing
 
 ## Immediate target
 
-Begin M12 with a persistent REPL and debugger protocol boundary while retaining
-deterministic runtime state and source-mapped diagnostics.
+Begin M13 by defining a Salesforce differential fixture manifest and result
+model before adding scratch-org authentication or transport.
 
 ## North Star indicators
 
-At M11 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M12 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -324,6 +349,15 @@ compatibility percentages.
 - HTTP callouts are synchronous and must be mocked through `PlatformHost`.
   Apex `HttpCalloutMock`/`Test.setMock`, named credentials, TLS, and live
   network transport are intentionally not implemented.
+- The REPL reconstructs accepted state by deterministic whole-session replay.
+  It does not preserve host effects that fall outside the deterministic local
+  platform profile.
+- Debugger stops are immutable pre-statement snapshots. Debug-console
+  expression evaluation, mutation, conditional breakpoints, data breakpoints,
+  exception filters, and reverse execution are not implemented.
+- LSP navigation and rename cover checked project classes and members.
+  Local-variable rename, completion, hover, formatting, semantic tokens, code
+  actions, and unsaved multi-file semantic linking remain future work.
 
 ## Handoff checklist
 

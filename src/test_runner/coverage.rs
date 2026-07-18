@@ -66,6 +66,8 @@ pub(super) fn build_coverage<'a>(
             path,
             total_lines: file.total_lines.len(),
             covered_lines: file.covered_lines.len(),
+            executable_line_numbers: file.total_lines.into_iter().collect(),
+            covered_line_numbers: file.covered_lines.into_iter().collect(),
             total_branches: file.total_branches,
             covered_branches: file.covered_branches,
         })

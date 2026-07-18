@@ -22,6 +22,9 @@ Isolated test runner ─► deterministic results, JUnit, and coverage
     │
     ▼
 Platform kernel ─► normalized schema, checked queries/DML, and SQLite transactions
+    │
+    ▼
+REPL / DAP / LSP ─► persistent inner loop and source-mapped editor services
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -87,6 +90,16 @@ queued event. `Test.stopTest` explicitly drains jobs in deterministic order;
 each job runs inside a nested platform transaction checkpoint and emits
 started/completed/failed events. No worker thread or wall-clock scheduler exists.
 
+M12 adds deterministic statement-boundary debug snapshots above the runtime.
+Snapshots contain visible scopes, rendered values, call frames, source spans,
+and transaction-timeline boundaries. Debug Adapter Protocol clients navigate
+the completed immutable trace, so editor response timing never changes Apex
+execution. The Language Server Protocol adapter uses checked HIR targets and
+the project source map for definitions, references, rename, diagnostics, and
+coverage overlays. The persistent REPL commits a snippet only after the
+accumulated source checks and executes successfully, then reconstructs state by
+deterministic replay.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -135,6 +148,12 @@ state between interpreters.
 | `runtime::database` | Query/DML conversion plus typed bulk trigger context construction and recursive dispatch |
 | `runtime::asynchronous` | Enqueue-time payload snapshots, deterministic FIFO jobs, explicit draining, batch chunking, and platform-event delivery |
 | `test_runner` | Test discovery, isolated scheduling, filtering, reporting, and coverage aggregation |
+| `repl` | Transactional accumulated-source REPL state and deterministic replay |
+| `debugger` | Breakpoint, stepping, frame, variable, database, and timeline navigation over runtime snapshots |
+| `editor` | Checked project symbol indexing, rename edits, inline diagnostics, and line coverage overlays |
+| `protocol` | Shared LSP/DAP `Content-Length` JSON message framing |
+| `lsp` | Stdio Language Server Protocol requests and document diagnostics |
+| `dap` | Stdio Debug Adapter Protocol launch and inspection workflows |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 

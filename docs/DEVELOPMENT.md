@@ -4,8 +4,7 @@
 
 - Rust 1.88 or newer
 - Cargo
-
-The current crate has no third-party dependencies.
+- Node.js and npm only when developing the optional VS Code client
 
 ## Build and run
 
@@ -16,7 +15,13 @@ cargo run -- run examples/control-flow.apex
 cargo run -- check examples/milestone5-project
 cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
+cargo run -- repl
+cargo run -- lsp .
+cargo run -- dap
 ```
+
+The VS Code thin client is under `editors/vscode`; see its README for local
+extension-host instructions.
 
 Inspect individual compiler phases:
 
