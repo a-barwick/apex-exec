@@ -10,6 +10,7 @@
 **/.apex-exec/
 **/artifacts/
 **/__pycache__/
+**/node_modules/
 *.py[cod]
 
 # Local environment files

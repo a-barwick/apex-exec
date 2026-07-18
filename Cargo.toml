@@ -2,7 +2,15 @@
 name = "apex-exec"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "A local Apex compiler and execution runtime"
+readme = "README.md"
+repository = "https://github.com/a-barwick/apex-exec"
+homepage = "https://github.com/a-barwick/apex-exec"
+documentation = "https://github.com/a-barwick/apex-exec/tree/main/docs"
+keywords = ["apex", "salesforce", "compiler", "interpreter", "testing"]
+categories = ["compilers", "development-tools", "development-tools::testing"]
+publish = false
 
 [dependencies]
 base64 = "0.22"

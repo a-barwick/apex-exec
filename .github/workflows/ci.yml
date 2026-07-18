@@ -1,0 +1,268 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/stabilization
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: 22.13.0
+  RUST_BACKTRACE: "1"
+  RUST_VERSION: 1.88.0
+
+jobs:
+  rust:
+    name: Rust fmt, test, clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Run the complete ordinary Rust suite
+        run: cargo test --locked
+
+      - name: Report North Star frontier; keep future goals ignored
+        run: |
+          echo "The 14 future lexer/parser goals remain ignored progress indicators."
+          cargo test --locked --test north_star -- --nocapture
+
+      - name: Deny Clippy warnings on every target
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  website:
+    name: Website build, test, lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541d401f5da3316ec04f0781f6c5f8 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install the locked website graph
+        run: npm ci
+
+      - name: Build the deployment artifact
+        run: npm run build
+
+      - name: Run rendered-site tests
+        run: npm test
+
+      - name: Lint website source
+        run: npm run lint
+
+  maintainability:
+    name: Documentation and complexity ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate workflow syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Set up pinned Python tool runner
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: 0.7.12
+          enable-cache: false
+
+      - name: Run tooling self-tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_*.py' -v
+
+      - name: Check Markdown formatting and local links
+        run: python3 tools/docs/check_docs.py
+
+      - name: Reject whitespace errors
+        run: git diff --check
+
+      - name: Reject complexity debt growth
+        run: tools/maintainability/check_lizard.sh
+
+  rust-audit:
+    name: RustSec audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-audit
+
+      - name: Restore cargo-audit binary
+        id: cargo-audit-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2
+
+      - name: Install pinned cargo-audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked --version 0.22.2 cargo-audit
+
+      - name: Reject RustSec, informational, and yanked findings
+        run: cargo audit --deny warnings
+
+  rust-deny:
+    name: Cargo deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-deny
+
+      - name: Restore cargo-deny binary
+        id: cargo-deny-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ runner.arch }}-0.20.2
+
+      - name: Install pinned cargo-deny
+        if: steps.cargo-deny-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked --version 0.20.2 cargo-deny
+
+      - name: Check advisories, bans, and dependency sources
+        run: cargo deny check advisories bans sources
+
+  website-audit:
+    name: Website advisory policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541d401f5da3316ec04f0781f6c5f8 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install the locked website graph
+        working-directory: website
+        run: npm ci
+
+      - name: Allow only exact documented npm advisories
+        run: python3 tools/dependencies/check_npm_audit.py
+
+  editor:
+    name: VS Code reproducibility disposition
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541d401f5da3316ec04f0781f6c5f8 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install the locked extension graph
+        run: npm ci
+
+      - name: Run the scoped extension smoke test
+        run: npm test
+
+  required:
+    name: Required CI gate
+    if: always()
+    needs:
+      - rust
+      - website
+      - maintainability
+      - rust-audit
+      - rust-deny
+      - website-audit
+      - editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every verification layer
+        shell: bash
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          WEBSITE_RESULT: ${{ needs.website.result }}
+          MAINTAINABILITY_RESULT: ${{ needs.maintainability.result }}
+          RUST_AUDIT_RESULT: ${{ needs.rust-audit.result }}
+          RUST_DENY_RESULT: ${{ needs.rust-deny.result }}
+          WEBSITE_AUDIT_RESULT: ${{ needs.website-audit.result }}
+          EDITOR_RESULT: ${{ needs.editor.result }}
+        run: |
+          set -euo pipefail
+          for result in \
+            "${RUST_RESULT}" \
+            "${WEBSITE_RESULT}" \
+            "${MAINTAINABILITY_RESULT}" \
+            "${RUST_AUDIT_RESULT}" \
+            "${RUST_DENY_RESULT}" \
+            "${WEBSITE_AUDIT_RESULT}" \
+            "${EDITOR_RESULT}"
+          do
+            if [[ "${result}" != "success" ]]; then
+              echo "A required CI layer finished with: ${result}" >&2
+              exit 1
+            fi
+          done
+          echo "All required CI verification layers passed."
