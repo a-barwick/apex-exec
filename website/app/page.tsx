@@ -24,32 +24,32 @@ const shippedCapabilities = [
 
 const roadmap = [
   {
-    milestone: "M1–M6",
+    milestone: "M1–M15",
     state: "Complete",
-    title: "Language to local test runner",
+    title: "Core local development loop",
     description:
-      "From primitive execution through classes, project compilation, and isolated Apex tests.",
+      "Language, projects, tests, local data, platform services, editor workflows, enterprise CI, and hybrid validation.",
   },
   {
-    milestone: "M7",
+    milestone: "M16–M17",
+    state: "Complete",
+    title: "Phase 2 evidence entry",
+    description:
+      "Checked conditional/runtime-type expressions plus reviewed candidate-bound live Salesforce validation evidence.",
+  },
+  {
+    milestone: "S0",
     state: "Active",
-    title: "SObject schema + SQLite",
+    title: "Stabilization gate",
     description:
-      "Version-controlled schema, local data, and transaction foundations for realistic test isolation.",
+      "Process safety, explicit instrumentation, runtime graph safety, execution context, and enforceable release gates.",
   },
   {
-    milestone: "M8–M10",
+    milestone: "M18–M21",
     state: "Planned",
-    title: "Data and platform kernel",
+    title: "North Star grammar closure",
     description:
-      "SOQL, DML, triggers, and a curated platform surface prioritized by real project usage.",
-  },
-  {
-    milestone: "M13–M15",
-    state: "Planned",
-    title: "Measured enterprise confidence",
-    description:
-      "Differential Salesforce verification, incremental CI, and hybrid deployment gates.",
+      "Null-aware, bitwise, nested-type, enum, and remaining grammar slices after S0 passes.",
   },
 ];
 
@@ -104,7 +104,7 @@ export default function Home() {
         <div className="hero-copy">
           <div className="eyebrow">
             <span className="status-dot" aria-hidden="true" />
-            M7 active · Local data foundation
+            S0 active · Phase 2 stabilization
           </div>
           <h1>
             Move the Apex
@@ -187,7 +187,7 @@ export default function Home() {
 
       <section className="signal-strip" aria-label="Project signals">
         <div>
-          <strong>6</strong>
+          <strong>17</strong>
           <span>milestones complete</span>
         </div>
         <div>
@@ -267,9 +267,9 @@ export default function Home() {
             <h2>Built as infrastructure, not a demo.</h2>
           </div>
           <p>
-            Six completed milestones form a coherent language-to-test slice.
-            Each layer has clear ownership, executable coverage, and deliberately
-            bounded compatibility claims.
+            Seventeen completed milestones form a coherent local-development
+            and evidence foundation. Each layer has clear ownership, executable
+            coverage, and deliberately bounded compatibility claims.
           </p>
         </div>
 
@@ -349,9 +349,9 @@ export default function Home() {
               Preserve confidence.
             </h2>
             <p>
-              Apex Exec is early infrastructure with a working enterprise-value
-              checkpoint: local project compilation and isolated tests. The next
-              investment unlocks realistic data-backed workloads.
+              Apex Exec has a working local feedback loop and reviewed live
+              validation evidence. The active investment closes bounded
+              stabilization before M18 feature work resumes.
             </p>
           </div>
           <div className="decision-actions">

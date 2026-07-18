@@ -336,11 +336,12 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 
 ## Immediate target
 
-Implement M18 safe-navigation and null-coalescing expressions as complete
-lexer/parser/semantic/runtime slices, including precedence, chaining, lazy
-evaluation, side-effect, diagnostic-phase, and integration coverage. The
-complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
-`docs/PHASE_2_BASELINE.md`.
+Complete and independently review the bounded S0 work packages, integrate them
+on `codex/stabilization`, and satisfy the S0 exit criteria and owner approvals.
+After S0-GATE is complete, resume M18 safe-navigation and null-coalescing
+expressions as complete lexer/parser/semantic/runtime slices. The package
+tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
+evidence baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 

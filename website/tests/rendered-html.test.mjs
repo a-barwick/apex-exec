@@ -35,9 +35,12 @@ test("server-renders the engineering leadership site", async () => {
   assert.match(html, /inner loop/);
   assert.match(html, /The leadership case/);
   assert.match(html, /Built as infrastructure, not a demo/);
-  assert.match(html, /SObject schema \+ SQLite/);
+  assert.match(html, /Phase 2 stabilization/);
+  assert.match(html, /Stabilization gate/);
+  assert.match(html, /M18 feature work resumes/);
   assert.match(html, /Compatibility posture/);
   assert.match(html, /github\.com\/a-barwick\/apex-exec/);
+  assert.doesNotMatch(html, /M7 active|Six completed milestones/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
@@ -50,7 +53,8 @@ test("removes starter assets and publishes site-specific metadata", async () => 
 
   assert.match(layout, /Apex Exec — Move the Apex inner loop off the org/);
   assert.match(layout, /new URL\("\/og\.png", base\)/);
-  assert.match(page, /M7 active/);
+  assert.match(page, /S0 active/);
+  assert.match(page, /Seventeen completed milestones/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("app/_sites-preview", root)));
 });
