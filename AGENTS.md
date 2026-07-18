@@ -13,6 +13,32 @@ Before changing behavior, read:
 3. `docs/STATUS.md`
 4. `docs/ARCHITECTURE.md`
 5. `docs/COMPATIBILITY.md`
+6. `docs/STABILIZATION.md`
+
+While the Phase 2 stabilization gate is active, also read:
+
+1. `docs/stabilization/FINDINGS.md`
+2. `docs/stabilization/WORK_PACKAGES.md`
+3. `docs/stabilization/OPERATIONS.md`
+
+## Active stabilization program
+
+- M18 feature implementation is gated until the S0 exit criteria in
+  `docs/STABILIZATION.md` pass.
+- Claim only a work package marked **Ready**, record its branch/status before
+  implementation, and respect its dependencies, file ownership, scope, and
+  non-scope.
+- Run at most three implementation workstreams concurrently. Never allow two
+  active workstreams to substantially edit the same runtime, semantic, AST, or
+  HIR hotspot.
+- Implementation work moves a package to **Review**. Only the integration owner
+  marks it **Complete** after independent review, integration, reproductions,
+  and full verification.
+- New findings belong in `docs/stabilization/FINDINGS.md` and the tracker; do
+  not silently expand an active package.
+- The repository owner must select the license, supported public API policy,
+  approve S1 architecture ADRs, and approve the final stabilization merge to
+  `main`.
 
 ## Working rules
 
@@ -35,6 +61,17 @@ Before changing behavior, read:
   work.
 - Prefer finishing a complete language slice over adding unrelated platform
   APIs.
+- Do not add raw positional identities across compiler/runtime boundaries,
+  hardcoded compatibility-profile strings, rendered-message classification, or
+  anonymous zero-span sentinels.
+- Every recursive traversal over user-controlled syntax or runtime graphs must
+  prove acyclicity or enforce visited/depth/node limits.
+- Keep debugging, coverage, and tracing opt-in and bounded.
+- Touching a recorded complexity hotspot requires extracting the relevant
+  abstraction; moving the same decision tree into another file is not a
+  maintainability improvement.
+- Add a reproducible benchmark or deterministic cost assertion for compiler,
+  runtime, collection, query, transaction, or async hot-path changes.
 
 ## Verification
 

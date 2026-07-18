@@ -2,9 +2,25 @@
 
 **Last updated:** 2026-07-18
 
-## Active milestone
+## Active program gate
 
-M18 — Null-aware expressions
+S0 — Phase 2 stabilization
+
+The pre-open-source audit and execution strategy are now captured in
+[`docs/STABILIZATION.md`](STABILIZATION.md). M18 — null-aware expressions
+remains the next feature milestone, but feature implementation is gated until
+the bounded S0 process-safety and correctness criteria pass.
+
+Initial S0 work may begin in three disjoint packages:
+
+- S0-01 — frontend process safety and correctness
+- S0-02 — opt-in runtime instrumentation
+- S0-05 — CI, maintainability ratchet, and release-document gates
+
+Runtime graph safety (S0-03) follows instrumentation, and execution context/
+lazy class initialization (S0-04) follows both. Package status, dependencies,
+acceptance criteria, branch rules, and the coordinator prompt live under
+`docs/stabilization/`.
 
 ## Completed
 
