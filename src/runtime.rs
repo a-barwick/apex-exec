@@ -1073,6 +1073,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 expression,
                 span,
             } => self.evaluate_cast(ty, expression, *span),
+            Expression::Conditional {
+                condition,
+                when_true,
+                when_false,
+                ..
+            } => {
+                let outcome = self.evaluate_boolean(condition)?;
+                self.record_branch(condition.span(), outcome);
+                if outcome {
+                    self.evaluate(when_true)
+                } else {
+                    self.evaluate(when_false)
+                }
+            }
+            Expression::Instanceof { value, target, .. } => {
+                let value = self.evaluate(value)?;
+                Ok(Value::Boolean(
+                    !matches!(value, Value::Null(_)) && self.value_has_type(&value, target),
+                ))
+            }
             Expression::Index {
                 collection,
                 index,

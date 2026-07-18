@@ -330,6 +330,20 @@ pub enum Expression {
         expression: Box<Expression>,
         span: Span,
     },
+    Conditional {
+        condition: Box<Expression>,
+        when_true: Box<Expression>,
+        when_false: Box<Expression>,
+        question_span: Span,
+        span: Span,
+    },
+    Instanceof {
+        value: Box<Expression>,
+        target: TypeName,
+        target_span: Span,
+        operator_span: Span,
+        span: Span,
+    },
     Unary {
         operator: UnaryOperator,
         operand: Box<Expression>,
@@ -368,6 +382,8 @@ impl Expression {
             | Self::MethodCall { span, .. }
             | Self::MemberAccess { span, .. }
             | Self::Cast { span, .. }
+            | Self::Conditional { span, .. }
+            | Self::Instanceof { span, .. }
             | Self::Unary { span, .. }
             | Self::Postfix { span, .. }
             | Self::Binary { span, .. } => *span,

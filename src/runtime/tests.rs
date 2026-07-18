@@ -56,6 +56,49 @@ fn continue_in_a_for_loop_still_executes_the_update_clause() {
 }
 
 #[test]
+fn conditional_short_circuits_records_side_effects_and_rejects_null_conditions() {
+    let output = execute_source(
+        "Integer hits = 0; \
+         Integer first = true ? (hits = hits + 1) : (hits = hits + 100); \
+         Integer second = false ? (hits = hits + 100) : (hits = hits + 10); \
+         Integer safe = true ? 7 : 1 / 0; \
+         System.debug(first); System.debug(second); System.debug(safe); System.debug(hits);",
+    )
+    .unwrap();
+    assert_eq!(output, ["1", "11", "7", "11"]);
+
+    let error =
+        execute_source("Boolean condition = null; Integer value = condition ? 1 : 2;").unwrap_err();
+    assert_eq!(
+        error.exception_type.as_deref(),
+        Some("NullPointerException")
+    );
+}
+
+#[test]
+fn instanceof_uses_runtime_identity_handles_generics_and_evaluates_once() {
+    let output = execute_source(
+        "public virtual class Parent {} \
+         public class Child extends Parent {} \
+         public interface Marker {} \
+         public class Tagged implements Marker {} \
+         Object child = new Child(); Parent parent = new Parent(); Object tagged = new Tagged(); \
+         Object strings = new List<String>{'x'}; Object absent = null; Integer hits = 0; \
+         Boolean once = ((hits = hits + 1) == 1 ? child : parent) instanceof Child; \
+         System.debug(once); System.debug(hits); \
+         System.debug(parent instanceof Child); System.debug(tagged instanceof Marker); \
+         System.debug(strings instanceof List<String>); \
+         System.debug(strings instanceof List<Integer>); System.debug(absent instanceof String);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        ["true", "1", "false", "true", "true", "false", "false"]
+    );
+}
+
+#[test]
 fn return_unwinds_nested_blocks_and_loops() {
     let output = execute_source(
         "System.debug('before'); while (true) { { return; } } System.debug('after');",

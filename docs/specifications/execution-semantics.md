@@ -2,13 +2,14 @@
 
 ## Status
 
-Primitive expressions, lexical scopes, control flow, mutable collections, and
-the fixed M3 built-in call surface are implemented. M4 adds user-defined calls,
-recursion, exception unwinding, runtime casts, and source call stacks. M5 adds
-object/static storage, constructors, properties, inheritance, virtual dispatch,
-and cross-file class execution. Debug output crosses a platform host. M7 adds
-schema-backed SObject execution and transactional SQLite storage; Apex
-query/DML syntax remains M8 work.
+Primitive expressions, including M16 ternary and runtime-type tests, lexical
+scopes, control flow, mutable collections, checked calls/exceptions, classes,
+cross-file execution, isolated tests, schema-backed SObjects, SOQL/SOSL/DML,
+triggers, curated platform services, and deterministic async execution are
+implemented at the fidelity summarized in `docs/COMPATIBILITY.md`. M12–M15 add
+debug/editor observations, provider comparison, hermetic CI, and hybrid
+validation above the same runtime boundaries. Remaining Phase 2 expressions,
+declarations, sharing/security, and API-version profiles remain planned.
 
 ## Program execution
 
@@ -42,6 +43,14 @@ remainder, and overflow failures. `&&` and `||` short-circuit. Assignment is
 right-associative. Prefix and postfix increment/decrement mutate `Integer`
 variables or Integer-valued List indexes while returning the new or prior value
 respectively.
+
+Ternary evaluates its Boolean condition once, records the condition outcome for
+coverage, and evaluates exactly one arm. A runtime null Boolean raises
+`NullPointerException`; errors and side effects in the unselected arm do not
+occur. `instanceof` evaluates its value once and compares the resulting
+non-null runtime identity with the checked target type. Null is false in the
+current profile. Historical API-version behavior is deferred to M25 rather
+than selected dynamically inside expression evaluation.
 
 Method-call receivers are evaluated once, followed by arguments from left to
 right, each exactly once. Static built-ins do not evaluate a runtime receiver.
@@ -97,8 +106,9 @@ unset fields return a typed null. Typed SObjects widen to the `SObject` root.
 `IllegalArgumentException` for unknown objects or fields. Dynamic writes
 validate the runtime value against the normalized field kind. SObject equality
 is identity equality. Deterministic debug text contains the object API name and
-assigned fields. Field mutation remains in memory until M8 DML explicitly
-crosses the storage boundary.
+assigned fields. Ordinary field mutation remains in memory; explicit M8 DML
+crosses the storage boundary and M9 trigger dispatch may mutate before images
+inside that DML tree.
 
 ## Collections
 
@@ -216,18 +226,28 @@ classes are not yet claimed.
 
 ## Platform effects
 
-**Partially implemented.** Debug events cross the replaceable `PlatformHost`.
-Normalized schema is wired into checked HIR and in-memory SObject execution.
-SQLite implements the standalone transactional storage contract. Apex DML does
-not yet connect interpreter values to that adapter. Time, randomness, async
-scheduling, callouts, and user context still require deterministic host
-services that tests can replace or control.
+**Implemented for the curated profile, simplified.** Debug, query, DML,
+trigger, async lifecycle, deterministic clock/random/user context, limits, and
+mock HTTP observations cross the replaceable `PlatformHost`. Normalized schema
+is wired into checked HIR and in-memory SObject execution, while query/DML
+requests cross storage-neutral platform contracts into SQLite. Async work is
+queued explicitly and drains deterministically at `Test.stopTest`; no
+background scheduler or live callout transport exists.
+
+The current profile is `m10-common`. API-version differences and
+sharing/security behavior are not scattered through expression evaluation;
+M25 and M27 introduce explicit profiles at the compiler/host boundary.
 
 ## Transactions
 
-**Implemented below DML for M7.** `platform::storage` defines storage-neutral
-begin/read/write/delete/commit/rollback plus named-savepoint contracts.
-`SqliteStorage` migrates normalized object tables, performs CRUD, replaces
-fixtures transactionally, and resets all record data without rebuilding schema.
-M8–M9 must place Apex DML and triggers inside these transactions and roll back
-unhandled failures.
+**Implemented through M9, simplified.** `platform::storage` defines
+storage-neutral begin/read/write/delete/commit/rollback plus named-savepoint
+contracts. `SqliteStorage` migrates normalized object tables, performs CRUD,
+replaces fixtures transactionally, and resets records without rebuilding
+schema.
+
+Every DML tree owns a nested checkpoint that includes active records, recycled
+records, and deterministic ID sequences. A caught DML/trigger failure rolls
+back that tree, while an exception escaping an invocation or test rolls back
+the outer entry point. Partial `allOrNone=false` result semantics remain M24
+work.

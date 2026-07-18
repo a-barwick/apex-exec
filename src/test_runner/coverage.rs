@@ -1,6 +1,9 @@
 use super::{CoverageReport, FileCoverage};
 use crate::{
-    ast::{ClassMember, Statement},
+    ast::{
+        ClassMember, Expression, Statement,
+        visit::{self, Visitor},
+    },
     project::Compilation,
     runtime::{BranchHits, ExecutionTrace},
     span::Span,
@@ -102,17 +105,17 @@ fn collect_coverage_candidates(
         for member in &class.members {
             match member {
                 ClassMember::Constructor(constructor) => {
-                    visit_statement(&constructor.body, statements, branches)
+                    visit_executable(&constructor.body, statements, branches)
                 }
                 ClassMember::Method(method) => {
                     if let Some(body) = &method.body {
-                        visit_statement(body, statements, branches);
+                        visit_executable(body, statements, branches);
                     }
                 }
                 ClassMember::Property(property) => {
                     for accessor in &property.accessors {
                         if let Some(body) = &accessor.body {
-                            visit_statement(body, statements, branches);
+                            visit_executable(body, statements, branches);
                         }
                     }
                 }
@@ -121,8 +124,17 @@ fn collect_coverage_candidates(
         }
     }
     for trigger in &compilation.program.triggers {
-        visit_statement(&trigger.body, statements, branches);
+        visit_executable(&trigger.body, statements, branches);
     }
+}
+
+fn visit_executable(
+    statement: &Statement,
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    visit_statement(statement, statements, branches);
+    ExpressionBranchCollector { branches }.visit_statement(statement);
 }
 
 fn visit_statement(
@@ -202,5 +214,18 @@ fn visit_statement(
         | Statement::Throw { .. }
         | Statement::Return { .. }
         | Statement::Dml { .. } => {}
+    }
+}
+
+struct ExpressionBranchCollector<'a> {
+    branches: &'a mut BTreeSet<Span>,
+}
+
+impl<'ast> Visitor<'ast> for ExpressionBranchCollector<'_> {
+    fn visit_expression(&mut self, expression: &'ast Expression) {
+        if let Expression::Conditional { condition, .. } = expression {
+            self.branches.insert(condition.span());
+        }
+        visit::walk_expression(self, expression);
     }
 }

@@ -20,6 +20,77 @@ fn short_circuit_rhs_is_still_checked_statically() {
 }
 
 #[test]
+fn checks_conditional_conditions_branches_and_result_types() {
+    check_source(
+        "Boolean flag = true; \
+         Integer nullable = flag ? 1 : null; \
+         Decimal promoted = flag ? 1 : 2.5; \
+         Object common = flag ? 'text' : 1; \
+         Object bothNull = flag ? null : null;",
+    )
+    .unwrap();
+
+    let error = check_source("Integer value = 1 ? 2 : 3;").unwrap_err();
+    assert_eq!(error.message, "expected Boolean, found Integer");
+
+    let error = check_source("Integer value = true ? 1 : missing;").unwrap_err();
+    assert_eq!(error.message, "unknown variable `missing`");
+
+    let error = check_source("Object value = true ? System.debug('x') : 1;").unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("conditional branches must produce values")
+    );
+}
+
+#[test]
+fn checks_instanceof_viability_generic_targets_and_always_true_tests() {
+    check_source(
+        "public virtual class Parent {} \
+         public class Child extends Parent {} \
+         public interface Marker {} \
+         public class Tagged implements Marker {} \
+         Object child = new Child(); \
+         Boolean isChild = child instanceof Child; \
+         Parent parent = new Parent(); \
+         Boolean maybeChild = parent instanceof Child; \
+         Object tagged = new Tagged(); \
+         Boolean marked = tagged instanceof Marker; \
+         Object values = new List<String>(); \
+         Boolean strings = values instanceof List<String>; \
+         Boolean integers = values instanceof List<Integer>; \
+         Boolean absent = null instanceof String;",
+    )
+    .unwrap();
+
+    let error =
+        check_source("String value = 'x'; Boolean result = value instanceof String;").unwrap_err();
+    assert!(error.message.contains("always true"));
+
+    let error =
+        check_source("String value = 'x'; Boolean result = value instanceof Integer;").unwrap_err();
+    assert_eq!(
+        error.message,
+        "Integer is not a viable runtime type for String"
+    );
+
+    let error =
+        check_source("Object value = 'x'; Boolean result = value instanceof Missing;").unwrap_err();
+    assert_eq!(error.message, "unknown type `Missing`");
+
+    let error = check_source(
+        "List<String> values = new List<String>(); \
+         Boolean result = values instanceof List<Integer>;",
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "List<Integer> is not a viable runtime type for List<String>"
+    );
+}
+
+#[test]
 fn null_assignment_does_not_permit_cross_type_equality() {
     check_source("Integer number = null; number = null;").unwrap();
 

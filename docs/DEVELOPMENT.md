@@ -17,11 +17,17 @@ cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
 cargo run -- ci run examples/milestone14-project/apex-exec-ci.json --shard 0/2
 cargo run -- hybrid examples/milestone15-project/apex-exec-ci.json \
-  --validation-snapshot milestone15-validation.json
+  --validation-snapshot /path/to/reviewed-milestone15-validation.json
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
 ```
+
+The repository does not ship a real-org M15 snapshot. Produce one from an
+authorized staging alias with `--target-org`, `--record-validation`, and
+`--report`; do not commit credentials or auth URLs. Phase 2 M17 strengthens the
+snapshot schema before accepting the first live evidence bundle as a durable
+release gate.
 
 The VS Code thin client is under `editors/vscode`; see its README for local
 extension-host instructions.

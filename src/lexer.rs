@@ -74,6 +74,7 @@ impl<'a> Lexer<'a> {
             '.' => TokenKind::Dot,
             ',' => TokenKind::Comma,
             ':' => TokenKind::Colon,
+            '?' => TokenKind::Question,
             '=' if self.take('=') => TokenKind::EqualEqual,
             '=' if self.take('>') => TokenKind::FatArrow,
             '=' => TokenKind::Equal,
@@ -124,6 +125,7 @@ impl<'a> Lexer<'a> {
                     "finally" => TokenKind::Finally,
                     "throw" => TokenKind::Throw,
                     "new" => TokenKind::New,
+                    "instanceof" => TokenKind::Instanceof,
                     "class" => TokenKind::Class,
                     "interface" => TokenKind::Interface,
                     "extends" => TokenKind::Extends,
@@ -367,5 +369,25 @@ mod tests {
         assert!(kinds.contains(&TokenKind::Finally));
         assert!(kinds.contains(&TokenKind::Throw));
         assert!(kinds.contains(&TokenKind::Void));
+    }
+
+    #[test]
+    fn tokenizes_conditional_and_instanceof_syntax_case_insensitively() {
+        let source =
+            "Object value = flag ? item : null; Boolean match = value InStAnCeOf List<String>;";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::Question));
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::Colon));
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == TokenKind::Instanceof)
+        );
+        let question = tokens
+            .iter()
+            .find(|token| token.kind == TokenKind::Question)
+            .unwrap();
+        assert_eq!(&source[question.span.start..question.span.end], "?");
     }
 }

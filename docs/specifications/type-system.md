@@ -3,9 +3,11 @@
 ## Status
 
 Primitive expression checking, recursive generic collections, array aliases,
-the fixed M3 built-in method surface, M4 methods/exceptions, M5
-class/interface project types, and M6 System assertions are implemented.
-General numeric and platform conversions remain later work.
+checked methods/exceptions, class/interface project types, test assertions,
+ternary and runtime-type expressions, and the curated M10 scalar/platform
+surface are implemented. The shipped summary is `docs/COMPATIBILITY.md`.
+General numeric/platform conversions, `Long`, `Double`, nested declarations,
+and the remaining Phase 2 expression forms remain later work.
 
 ## Names
 
@@ -34,6 +36,15 @@ case-insensitive.
 checked and produces a catchable `MathException` on overflow, but
 Apex-compatible range and overflow behavior are planned.
 
+### Additional scalar types
+
+**Implemented through M10, simplified.** `Decimal`, `Date`, `Datetime`, `Time`,
+`Id`, and `Blob` have the checked construction, conversion, arithmetic, and
+method subsets listed in `docs/COMPATIBILITY.md`. `Long`, `Double`, complete
+numeric promotion, and Salesforce-exact range/overflow behavior are not
+implemented. M19 introduces the `Long` slice required for bitwise and shift
+operators.
+
 ### `Object`
 
 **Implemented, simplified.** Every supported non-Void value is
@@ -51,12 +62,13 @@ typed runtime exception when a nullable value is used.
 
 ## Core exception types
 
-**Implemented for M4, simplified.** `Exception` is the common catch type for
+**Implemented, simplified.** `Exception` is the common catch type for
 `NullPointerException`, `ListException`, `MathException`, `TypeException`,
-`StringException`, `IllegalArgumentException`, and `FinalException`. Concrete
-exceptions widen to `Exception` or `Object`. Downcasts from `Exception` or
-`Object` are explicit and checked at runtime. Custom exception classes and the
-broader Apex hierarchy require later compatibility work.
+`StringException`, `IllegalArgumentException`, `FinalException`,
+`AssertException`, `QueryException`, `DmlException`, and `AsyncException`.
+Concrete exceptions widen to `Exception` or `Object`. Downcasts from
+`Exception` or `Object` are explicit and checked at runtime. Custom exception
+classes and the broader Apex hierarchy require later compatibility work.
 
 ## Collection types
 
@@ -100,7 +112,9 @@ String name = 'Ada';
 
 Uninitialized local declarations are rejected in the current supported
 surface. Class fields and automatic properties receive typed null before any
-explicit initializer executes.
+explicit initializer executes. M21 will parse valid uninitialized and
+multi-declarator Apex forms; execution support still requires an explicit
+typed-null initialization rule.
 
 ## Assignment
 
@@ -175,7 +189,8 @@ casting `null` yields a null carrying the target static type.
 
 ## Operators
 
-**Implemented.** Integer arithmetic and ordering require Integer operands.
+**Implemented for the documented subset.** Integer arithmetic and ordering
+require Integer operands.
 Equality accepts matching supported types or `null`; String `==` and `!=` are
 case-insensitive, while collection membership uses case-sensitive String
 equality. Boolean operators require Boolean operands and short-circuit at
@@ -184,10 +199,28 @@ which case every supported non-Void value can be converted for concatenation.
 Increment and decrement require a mutable Integer variable, field/property, or
 Integer-valued List index.
 
+**Implemented for M16.** Ternary is right-associative, below logical OR and
+above assignment. Its condition must have static type Boolean. Both arms are
+checked, but only the selected arm executes. Identical arm types are retained;
+one null arm adopts the concrete arm type; supported subtype/numeric widening
+selects the wider type; otherwise two non-Void supported values join at
+`Object`. Two null arms retain the null expression type. A Void arm is invalid.
+
+**Implemented for M16.** `value instanceof Type` returns Boolean and accepts
+only a target that can overlap the value's declared type at runtime.
+Statically always-true tests and impossible relationships are compile errors.
+Runtime matching covers `Object`, core exceptions, supported SObjects,
+user-class/interface inheritance, platform values, and invariant concrete
+List/Set/Map types. Null returns false. Assignment-only Integer-to-Decimal
+promotion is deliberately not a runtime-type relationship.
+
+Safe navigation, null coalescing, bitwise/shift operators, and compound
+assignments remain unsupported and are sequenced across M18 and M19.
+
 ## Planned rules
 
-- Numeric operations and conversions
-- `Decimal`, `Double`, `Long`, and other platform primitives
+- Complete numeric operations and conversions
+- `Double`, `Long`, and other unsupported platform primitives
 - Nested/generic user types, enums, and custom exception classes
 - General conversions beyond the implemented inheritance relationships
 - Full Object and platform-type behavior

@@ -31,6 +31,11 @@ cargo test --test north_star parses_rollup_service -- --ignored
 When a goal becomes part of the supported compatibility surface, promote it
 out of `#[ignore]` rather than weakening or replacing the source.
 
+Phase 2 targets all seven lexer goals as ordinary tests in M19 and all 14
+lexer/parser goals as ordinary tests in M21. Those gates measure acceptance of
+this pinned syntax corpus only; semantic/runtime compatibility remains covered
+by focused conformance and enterprise-project tests.
+
 ## Selection method
 
 On 2026-07-13, 12 established public Apex repositories were shallow-cloned and

@@ -1,10 +1,10 @@
 # Current Status
 
-**Last updated:** 2026-07-17
+**Last updated:** 2026-07-18
 
 ## Active milestone
 
-Roadmap complete through M15 — compatibility expansion and hardening
+M17 — Candidate-bound live Salesforce validation
 
 ## Completed
 
@@ -16,6 +16,11 @@ Roadmap complete through M15 — compatibility expansion and hardening
 - Single-quoted strings, comments, and common string escapes
 - Precedence-based arithmetic, comparison, equality, and Boolean expressions
 - String concatenation and prefix/postfix increment and decrement
+- Right-associative ternary expressions with checked Boolean conditions,
+  common result typing, lazy arm execution, and production branch coverage
+- Checked `instanceof` expressions with viable-alternative diagnostics,
+  generic collection identity, class/interface runtime relationships,
+  null-false behavior, and single evaluation of the value expression
 - Blocks with nested lexical scopes
 - `if`/`else`, `while`, `do`/`while`, and traditional `for` execution
 - `break`, `continue`, and value-less anonymous `return`
@@ -279,25 +284,59 @@ Roadmap complete through M15 — compatibility expansion and hardening
   seven integration tests covering inventory, safety, selection, fallback,
   drift, differential failures, snapshots, authenticated CLI transport, report
   output, and readiness exit status
-- 276 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.07% overall,
-  including 86.11% for the new hybrid deployment module
+- A complete M16 project and oracle-ready manifest exercise ternary and
+  `instanceof` through project checking, static invocation, isolated Apex
+  tests, CLI workflows, branch coverage, and normalized differential dimensions
+- 287 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.26% overall
+  and 80.73% across the eight changed Rust source modules
 
 ## Immediate target
 
-Expand measured real-project compatibility and selectively promote North Star
-grammar/runtime blockers without weakening the completed M15 release gate.
+Perform M17 against a user-supplied staging org with evidence bound to the
+exact release candidate. M17 requires the strengthened evidence schema and a
+real authenticated run; fake-CLI transport tests are not live evidence. Local
+M18 work may continue if that external dependency is pending. The complete
+Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
+`docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-At M15 completion, the pinned real-world lexer/parser goals pass 1 of 14
-indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
-`JSONParse.cls` now parses through its class and ordinary members before
-stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
-other first lexer blockers forward to safe navigation, null coalescing,
-ternary syntax, and bitwise operators. These
-are syntax-progress indicators, not semantic, execution, or Salesforce
-compatibility percentages.
+M16 reproduces 5 of 14 passing indicators (**35.71%**): lexer 5 of 7
+(**71.43%**) and parser 0 of 7 (**0%**), a gain of four lexer indicators from
+the Phase 2 baseline. `SOQL.cls`, `Logger.cls`, `Rollup.cls`,
+`RollupService.cls`, and `JSONParse.cls` now lex completely. Their first parser
+diagnostics are unsupported annotations or nested declarations; the two
+remaining lexer blockers are bitwise/compound operators in
+`fflib_SObjectDomain.cls` and `Puff.cls`. Ternary and `instanceof` no longer
+appear as first diagnostics.
+
+Later reachable blockers include arbitrary annotations, nested declarations,
+enums, class literals, static initializer blocks, `switch`/`when`,
+uninitialized and multi-declarator locals, constructor delegation, arbitrary
+generic type references, and additional modifiers/literals. These are
+syntax-progress indicators, not semantic, execution, or Salesforce
+compatibility percentages. M21 requires all 14 original fixtures to pass
+without `#[ignore]` or corpus changes.
+
+## Phase 2 evidence baseline
+
+- After a refreshed fetch, `main` and `origin/main` both resolve to the M15
+  merge commit `bc92a9e`.
+- The ordinary suite passes 276 tests; all 14 separately ignored North Star
+  goals produce 1 pass and 13 failures when run explicitly.
+- M15 has seven integration tests and four focused unit tests. Its authenticated
+  integration uses a fake `sf`; no real validation snapshot or readiness
+  report is tracked.
+- No representative enterprise project or frozen Salesforce test denominator
+  has been measured against the 60–80% vision target.
+- The M15 path classifier recognizes 28 static metadata types. Unknown
+  unchanged metadata is omitted from drift accounting, and multi-part Custom
+  Metadata full names are currently truncated.
+- Version-1 validation snapshots are not bound to a manifest/candidate digest,
+  affected request, capture time, API version, or tool provenance. M17 must
+  reject stale or mismatched evidence before the first live run is accepted as
+  durable release evidence.
 
 ## Known limitations
 
@@ -323,6 +362,15 @@ compatibility percentages.
 - `Object` supports assignment, overload widening, casts, and `toString()`;
   equality/hash and the broader inherited Apex Object surface remain
   unsupported.
+- Ternary result typing covers identical types, null with a concrete type,
+  supported subtype widening, Integer-to-Decimal promotion, and `Object` as the
+  common carrier for otherwise unrelated supported values. It does not add
+  broader Apex conversion rules.
+- `instanceof` uses the current compatibility profile: null is false, invariant
+  generic collection identity is preserved, and statically always-true or
+  impossible tests fail during checking. Historical pre-API-32 null behavior,
+  String-to-Id quirks, and unsupported platform generic interfaces await
+  versioned profiles and broader type support.
 - The core exception subset supports construction, catching, rethrowing,
   messages, type names, and deterministic stack text. Custom exception classes,
   causes, and Salesforce-exact stack formatting require later compatibility and
@@ -369,9 +417,10 @@ compatibility percentages.
 - The default recording host owns an in-memory SQLite database for one
   interpreter. A persistent project database configuration and fixture CLI
   remain future work.
-- Nested types, enums, annotations other than `@IsTest`/`@TestSetup`/`@future`, explicit
-  superclass-constructor calls, custom exception classes, and Salesforce-exact
-  object string formatting are not implemented.
+- Nested types, enums, annotations other than
+  `@IsTest`/`@TestSetup`/`@future`, explicit superclass-constructor calls,
+  custom exception classes, and Salesforce-exact object string formatting are
+  not implemented.
 - Sharing modifiers are parsed for structural progress but rejected during
   checking because sharing/security semantics remain deferred.
 - Test setup methods run before every isolated test interpreter, and their DML
@@ -391,8 +440,8 @@ compatibility percentages.
   behavior, finalizers, future callout options, and platform-event replay or
   retention are unsupported.
 - Coverage counts executable production statement lines and both outcomes of
-  `if`, `while`, `do`/`while`, and condition-bearing `for` branches. It is not a
-  claim of Salesforce-exact coverage accounting.
+  `if`, ternary, `while`, `do`/`while`, and condition-bearing `for` branches.
+  It is not a claim of Salesforce-exact coverage accounting.
 - Date/time formatting is fixed deterministic UTC formatting rather than
   locale/time-zone aware Salesforce formatting. Decimal uses 96-bit
   `rust_decimal` semantics and does not yet implement every Apex rounding mode.
@@ -431,15 +480,19 @@ compatibility percentages.
   emitted standard reports.
 - Content-addressed artifacts cache normalized compile/test/report observations,
   not serialized AST/HIR. A cache miss still performs project-wide semantic
-  linking after parsing reuse; persistent lowered-IR caching remains future
-  performance work.
-- M15 inventories a curated common SFDX metadata layout rather than every
-  Metadata API type. Unknown changed paths conservatively validate the complete
+  linking after parsing reuse; persistent lowered-IR caching remains M29 work.
+- M15 inventories 28 curated common SFDX metadata types rather than the entire
+  Metadata API. Unknown changed paths conservatively validate the complete
   project, while unknown unchanged metadata is outside drift accounting.
+  Multi-part Custom Metadata filenames are currently reduced to their first
+  dot-separated segment.
 - Drift compares project-owned schema/configuration content retrieved for the
   release and excludes directly changed components as intended payload. It
   does not discover org configuration that has no corresponding local
   component.
+- Version-1 M15 snapshots do not seal the M14 candidate, affected request,
+  capture age, API version, or CLI/tool versions. Replay confidence therefore
+  depends on external review until M17 introduces candidate-bound evidence.
 - Authenticated hybrid validation requires an already-installed Salesforce CLI
   and previously authenticated target alias. It does not create, authenticate,
   reset, or delete orgs, and dry-run results remain subject to Salesforce

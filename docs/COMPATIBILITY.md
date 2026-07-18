@@ -34,6 +34,7 @@ for the documented case.
 | `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
+| Uninitialized/multi-declarator locals | No | No | No | Unsupported | Valid Apex forms are planned for M21 grammar closure |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
@@ -44,8 +45,14 @@ for the documented case.
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
 | String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; collection text uses deterministic local formatting |
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
+| Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
+| `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
+| Safe navigation | No | No | No | Unsupported | Planned with evaluate-once null behavior in M18 |
+| Null coalescing | No | No | No | Unsupported | Planned with lazy right-hand execution in M18 |
+| Bitwise/shift operators | No | No | No | Unsupported | Includes compound forms and `Long`; planned in M19 |
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
+| `switch on` / `when` | No | No | No | Unsupported | Required by M21 North Star grammar closure |
 | Loops and loop control | Yes | Yes | Yes | Compatible | Traditional and enhanced `for`, `while`, `do`/`while`, `break`, and `continue` |
 | Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution; declared methods have checked values |
 | `null` | Yes | Yes | Yes | Simplified | Assignable to every supported value type; selected runtime null behavior implemented |
@@ -62,6 +69,7 @@ for the documented case.
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
 | Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
+| Nested types and enums | No | No | No | Unsupported | Qualified nested identities, enums, and type literals are planned in M20 |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
@@ -498,6 +506,11 @@ and fields, common object children, permission sets, profiles, settings, flows,
 layouts, labels, custom metadata, roles, groups, queues, tabs, applications,
 workflows, named credentials, and remote-site settings.
 
+The classifier has 28 static metadata-type mappings. Unrecognized unchanged
+paths do not enter inventory or drift accounting, and multi-part Custom
+Metadata filenames are currently truncated at the first dot. M26 replaces this
+curated classifier with explicit, API-versioned file accounting.
+
 With `--target-org`, Apex Exec verifies an existing authenticated alias,
 retrieves the scoped org metadata into a temporary directory, and runs
 `sf project deploy start --dry-run`. Only affected tests are requested through
@@ -514,6 +527,12 @@ every affected local test outcome matches Salesforce. JSON and console reports
 include affected components/tests, coverage, drift, differential percentage,
 and explicit blockers.
 
+Version-1 snapshots do not contain a sealed manifest/candidate digest, affected
+request digest, capture time, API version, or CLI/tool provenance. Replay is
+therefore deterministic for the supplied observations but is not proof that
+the observations belong to the current candidate. Candidate-bound, expiring
+evidence is planned for M17.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
@@ -525,7 +544,9 @@ and explicit blockers.
 | Salesforce-shaped IDs | Implemented (validation, checksum, deterministic generation) | M7 |
 | SQLite storage | Implemented (additive migration, CRUD, transactions, savepoints, fixtures/reset) | M7 |
 | DML | Implemented (simplified atomic scalar/bulk operations) | M8 |
+| Partial DML results | Planned (`allOrNone=false` and result/error objects) | M24 |
 | SOQL | Implemented (simplified checked static queries) | M8 |
+| Broader SOQL | Planned (enterprise-prioritized relationships, aggregation, literals, and polymorphism) | M23 |
 | SOSL | Implemented (simplified deterministic local search) | M8 |
 | Structured query/DML/trigger timelines | Implemented | M9 |
 | Triggers | Implemented (simplified) | M9 |
@@ -541,8 +562,10 @@ and explicit blockers.
 | Enterprise CI | Implemented (hermetic manifests/replay, content cache, impacted tests, shards, standard reports, provider templates, and policy gates) | M14 |
 | Hybrid deployment confidence | Implemented (affected components/tests, optional validation org, drift, test differential, readiness reports, and snapshot replay) | M15 |
 | Governor limits | Deferred | Post-core compatibility profile |
-| Sharing/security behavior | Deferred | Post-core compatibility profile |
-| API-version differences | Deferred | Post-core compatibility profile |
+| Candidate-bound live validation evidence | Planned | M17 |
+| Broad metadata accounting and org-only drift | Planned | M26 |
+| Sharing/security behavior | Planned (profile-scoped) | M27 |
+| API-version differences | Planned | M25 |
 | Runtime isolation for untrusted code | Out of scope | None |
 
 ## Compiler behavior
@@ -592,10 +615,13 @@ and explicit blockers.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-At M15 completion those indicators still pass 1 of 14 goals (7.14%): 1 of 7
-lexer goals and 0 of 7 parser goals. `JSONParse.cls` now parses its class and
-ordinary members until unsupported `instanceof`; the remaining first blockers
-are safe navigation, null coalescing, ternary syntax, and bitwise operators.
+M16 reproduces 5 of 14 passing goals (35.71%): 5 of 7 lexer goals and 0 of 7
+parser goals, up from the 1-of-14 Phase 2 baseline. Ternary and `instanceof` are
+no longer first blockers; the current first diagnostics are bitwise syntax,
+unsupported annotations, and nested declarations. M21 requires 14 of 14
+passing against the unchanged corpus and removes every goal's `#[ignore]`.
+These are syntax indicators only, not runtime or Salesforce compatibility
+percentages.
 
 ## Updating this document
 

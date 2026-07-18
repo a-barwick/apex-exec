@@ -122,6 +122,14 @@ schema/configuration, and performs a check-only Salesforce deployment.
 Versioned validation snapshots preserve the same provider-neutral inventory,
 test, and deployment observations for deterministic offline replay.
 
+M16 adds dedicated conditional and runtime-type AST nodes without moving
+semantic state into parsed syntax. The checker records each expression's
+result type in the existing HIR side table, computes ternary joins from the
+supported assignment/subtype relation, and validates `instanceof` with a
+separate runtime-type relation so numeric assignment promotion cannot become
+runtime identity. The interpreter evaluates only the chosen ternary arm and
+evaluates an `instanceof` value once against execution-store type identity.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -131,11 +139,12 @@ host, call stack, and coverage trace, so the bounded worker pool does not share
 observable runtime state. Results are sorted by case-insensitive qualified test
 name after execution so parallel scheduling is never observable in reports.
 
-The interpreter records executed statement spans and true/false conditional
-outcomes. The test runner maps those observations through the project source
-map, excludes `@IsTest` classes from the production denominator, and owns
-console/JUnit rendering. Test policy and report formats do not leak into parser,
-semantic, or ordinary execution entry points.
+The interpreter records executed statement spans and true/false statement or
+ternary conditional outcomes. The test runner discovers ternary conditions
+through the shared immutable AST visitor, maps observations through the
+project source map, excludes `@IsTest` classes from the production denominator,
+and owns console/JUnit rendering. Test policy and report formats do not leak
+into parser, semantic, or ordinary execution entry points.
 
 Checked built-in calls carry a typed `IntrinsicId` in HIR, just like
 user-defined calls carry a selected declaration target. Runtime dispatch
@@ -414,6 +423,34 @@ The resulting inventory and validation observations can be recorded as a
 versioned snapshot. Release readiness requires the hermetic local CI policy,
 check-only deployment, unaffected schema/configuration drift, and every
 selected test outcome to agree.
+
+## Phase 2 architecture constraints
+
+The Phase 2 roadmap expands compatibility without weakening the existing phase
+boundaries:
+
+- New syntax receives explicit tokens and lossless AST nodes. Parser acceptance
+  for a North Star source does not authorize the runtime to approximate an
+  unsupported construct; the checker must either record a typed target or emit
+  an explicit unsupported diagnostic.
+- Nested declarations need canonical qualified identities owned by their
+  enclosing type. Dependency graphs, HIR targets, editor indexes, source maps,
+  and runtime dispatch must use that identity rather than flattening names.
+- API version and sharing/security behavior belong in explicit compiler/runtime
+  profiles. The effective profile must participate in cache, oracle, and hybrid
+  evidence identity.
+- Hybrid validation evidence must bind to the exact sealed candidate, affected
+  request, target, API/tool versions, and capture age before replay can approve
+  a release.
+- Metadata breadth begins with complete accounting. Every package-root file is
+  recognized, intentionally excluded, or reported unsupported; an unknown
+  unchanged path cannot silently disappear from drift analysis.
+- Persistent typed/lowered IR cannot serialize session-local `SourceId` values
+  directly. A stable path/content identity and verified remapping layer is
+  required, with clean-build-equivalent diagnostics after load.
+
+Consequential representation, profile, evidence-schema, and persistent-cache
+choices require ADRs in their implementation milestones.
 
 ## Performance direction
 
