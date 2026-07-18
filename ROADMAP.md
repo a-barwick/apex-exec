@@ -254,7 +254,7 @@ effects, and reproduce the same job order and IDs on every run.
 
 ## M12 — Debugger, REPL, and editor integration
 
-**Status:** Active
+**Status:** Complete
 
 - Persistent REPL state
 - Debug Adapter Protocol
@@ -269,7 +269,7 @@ Developers can use Apex Exec as their normal inner loop from a supported editor.
 
 ## M13 — Salesforce compatibility oracle
 
-**Status:** Planned
+**Status:** Active
 
 Run identical conformance fixtures locally and in a scratch org, then compare:
 

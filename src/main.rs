@@ -1,6 +1,7 @@
 use apex_exec::{check, execute, parse, test_runner::TestOptions, tokenize};
 use std::{
     env, fs,
+    io::{self, BufRead, BufReader, IsTerminal},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -22,13 +23,44 @@ fn run() -> Result<ExitCode, String> {
         println!("{}", usage());
         return Ok(ExitCode::SUCCESS);
     }
-    let path = args.next().ok_or_else(usage)?;
     if !matches!(
         command.as_str(),
-        "run" | "tokens" | "ast" | "check" | "invoke" | "test"
+        "run" | "tokens" | "ast" | "check" | "invoke" | "test" | "repl" | "lsp" | "dap"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
+
+    if command == "repl" {
+        if args.next().is_some() {
+            return Err(usage());
+        }
+        return run_repl();
+    }
+
+    if command == "lsp" {
+        let root = args.next().map(PathBuf::from);
+        if args.next().is_some() {
+            return Err(usage());
+        }
+        apex_exec::lsp::serve(
+            BufReader::new(io::stdin().lock()),
+            io::stdout().lock(),
+            root,
+        )
+        .map_err(|error| format!("LSP transport failed: {error}"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if command == "dap" {
+        if args.next().is_some() {
+            return Err(usage());
+        }
+        apex_exec::dap::serve(BufReader::new(io::stdin().lock()), io::stdout().lock())
+            .map_err(|error| format!("DAP transport failed: {error}"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let path = args.next().ok_or_else(usage)?;
 
     if command == "invoke" {
         let target = args.next().ok_or_else(usage)?;
@@ -105,6 +137,64 @@ fn run() -> Result<ExitCode, String> {
         .map_err(|diagnostic| diagnostic.render(&path, &source))
 }
 
+fn run_repl() -> Result<ExitCode, String> {
+    let stdin = io::stdin();
+    let interactive = stdin.is_terminal();
+    if interactive {
+        eprintln!("Apex Exec REPL — :reset clears state, :source shows it, :quit exits");
+    }
+    let mut session = apex_exec::repl::ReplSession::new();
+    let mut pending = String::new();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|error| format!("failed to read REPL input: {error}"))?;
+        if pending.is_empty() && line.starts_with(':') {
+            match line.trim() {
+                ":quit" | ":exit" => break,
+                ":reset" => {
+                    session.reset();
+                    if interactive {
+                        eprintln!("state reset");
+                    }
+                }
+                ":source" => println!("{}", session.source()),
+                command => eprintln!("unknown REPL command `{command}`"),
+            }
+            continue;
+        }
+        pending.push_str(&line);
+        pending.push('\n');
+        let mut candidate = session.source().to_owned();
+        if !candidate.is_empty() {
+            candidate.push('\n');
+        }
+        candidate.push_str(&pending);
+        match session.evaluate(&pending) {
+            Ok(evaluation) => {
+                for output in evaluation.output {
+                    println!("{output}");
+                }
+                pending.clear();
+            }
+            Err(diagnostic) if incomplete_repl_input(&diagnostic, &candidate) => {}
+            Err(diagnostic) => {
+                eprintln!("{}", diagnostic.render("<repl>", &candidate));
+                pending.clear();
+            }
+        }
+    }
+    if !pending.trim().is_empty() {
+        return Err("incomplete Apex input at end of REPL stream".to_owned());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn incomplete_repl_input(diagnostic: &apex_exec::diagnostic::Diagnostic, source: &str) -> bool {
+    diagnostic.span.start >= source.trim_end().len()
+        && (diagnostic.message.contains("expected")
+            || diagnostic.message.contains("unterminated")
+            || diagnostic.message.contains("end of input"))
+}
+
 fn parse_test_options(
     mut args: impl Iterator<Item = String>,
 ) -> Result<(TestOptions, Option<PathBuf>), String> {
@@ -155,6 +245,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

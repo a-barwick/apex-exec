@@ -60,14 +60,19 @@ impl SourceMap {
     }
 
     pub(super) fn location(&self, span: Span) -> Option<(PathBuf, usize)> {
+        self.position(span).map(|(path, line, _)| (path, line))
+    }
+
+    pub(super) fn position(&self, span: Span) -> Option<(PathBuf, usize, usize)> {
         let entry = self.entry_for_source(span.source_id)?;
         let local = span.start.min(entry.source.len());
-        let line = entry.source[..local]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count()
-            + 1;
-        Some((entry.path.clone(), line))
+        let (line, column) = source_line_column(&entry.source, local);
+        Some((entry.path.clone(), line, column))
+    }
+
+    pub(super) fn source(&self, source_id: SourceId) -> Option<(&Path, &str)> {
+        let entry = self.entry_for_source(source_id)?;
+        Some((&entry.path, &entry.source))
     }
 
     fn entry_for_source(&self, source_id: SourceId) -> Option<&SourceEntry> {

@@ -86,6 +86,8 @@ pub struct FileCoverage {
     pub path: PathBuf,
     pub total_lines: usize,
     pub covered_lines: usize,
+    pub executable_line_numbers: Vec<usize>,
+    pub covered_line_numbers: Vec<usize>,
     pub total_branches: usize,
     pub covered_branches: usize,
 }

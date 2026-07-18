@@ -55,6 +55,16 @@ impl Compilation {
     pub(crate) fn source_location(&self, span: Span) -> Option<(PathBuf, usize)> {
         self.source_map.location(span)
     }
+
+    /// Maps a checked span to its project path and one-based line/column.
+    pub fn source_position(&self, span: Span) -> Option<(PathBuf, usize, usize)> {
+        self.source_map.position(span)
+    }
+
+    /// Returns the source text and path assigned to a compiler source identity.
+    pub fn source_text(&self, source_id: SourceId) -> Option<(&Path, &str)> {
+        self.source_map.source(source_id)
+    }
 }
 
 #[derive(Clone, Debug)]

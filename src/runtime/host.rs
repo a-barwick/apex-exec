@@ -232,6 +232,11 @@ pub trait PlatformHost {
 
     fn async_event(&mut self, _event: AsyncEvent) {}
 
+    /// Number of transaction timeline events currently visible to a debugger.
+    fn transaction_event_count(&self) -> usize {
+        0
+    }
+
     /// Deterministic UTC wall clock, represented as Unix epoch milliseconds.
     fn now_millis(&mut self) -> i64 {
         1_735_689_600_000 // 2025-01-01T00:00:00Z
@@ -321,6 +326,10 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
 
     fn async_event(&mut self, event: AsyncEvent) {
         (**self).async_event(event);
+    }
+
+    fn transaction_event_count(&self) -> usize {
+        (**self).transaction_event_count()
     }
 
     fn now_millis(&mut self) -> i64 {
@@ -556,6 +565,10 @@ impl PlatformHost for RecordingHost {
 
     fn async_event(&mut self, event: AsyncEvent) {
         self.async_events.push(event);
+    }
+
+    fn transaction_event_count(&self) -> usize {
+        self.timeline.len()
     }
 
     fn now_millis(&mut self) -> i64 {

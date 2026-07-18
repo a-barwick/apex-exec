@@ -35,6 +35,39 @@ pub use host::{
 use image::RuntimeImage;
 use store::ExecutionStore;
 
+/// A debugger-visible variable captured immediately before an Apex statement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugVariable {
+    pub name: String,
+    pub type_name: String,
+    pub value: String,
+}
+
+/// One source-mapped Apex frame in a debugger snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugFrame {
+    pub name: String,
+    pub span: Span,
+}
+
+/// Immutable runtime state captured at one executable statement boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugSnapshot {
+    pub span: Span,
+    pub frames: Vec<DebugFrame>,
+    pub variables: Vec<DebugVariable>,
+    pub transaction_event_count: usize,
+}
+
+/// Complete deterministic trace from one debugger launch.
+#[derive(Clone, Debug)]
+pub struct DebugExecution {
+    pub output: Vec<String>,
+    pub diagnostic: Option<Diagnostic>,
+    pub snapshots: Vec<DebugSnapshot>,
+    pub timeline: Vec<TransactionEvent>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BranchHits {
     pub true_hits: usize,
@@ -254,6 +287,7 @@ pub struct Interpreter<'program, H = RecordingHost> {
     read_only_sobjects: BTreeSet<SObjectId>,
     read_only_collections: BTreeSet<CollectionId>,
     trace: ExecutionTrace,
+    debug_snapshots: Vec<DebugSnapshot>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
     next_async_sequence: u64,
@@ -263,6 +297,85 @@ impl<'program> Interpreter<'program, RecordingHost> {
     /// Creates an isolated interpreter with the default buffering debug host.
     pub fn new() -> Self {
         Self::with_host(RecordingHost::default())
+    }
+
+    /// Executes anonymous Apex while retaining statement-level debugger state.
+    ///
+    /// Execution remains deterministic and single-threaded. Protocol adapters
+    /// can navigate the immutable snapshots without pausing the language
+    /// runtime on an editor or transport thread.
+    pub fn debug_execute(mut self, program: &'program Program) -> DebugExecution {
+        let result = self.prepare(program).and_then(|_| {
+            self.begin_transaction(Span::new(0, 0))?;
+            let result = (|| {
+                self.initialize_static_fields()?;
+                for statement in &program.statements {
+                    match self.execute_statement(statement)? {
+                        Flow::Normal => {}
+                        Flow::Return(None) => break,
+                        Flow::Return(Some(_)) => {
+                            return Err(Diagnostic::new(
+                                "value return escaped semantic validation",
+                                statement.span(),
+                            ));
+                        }
+                        Flow::Break => {
+                            return Err(Diagnostic::new(
+                                "`break` escaped semantic validation",
+                                statement.span(),
+                            ));
+                        }
+                        Flow::Continue => {
+                            return Err(Diagnostic::new(
+                                "`continue` escaped semantic validation",
+                                statement.span(),
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            self.finish_transaction(result, Span::new(0, 0))
+        });
+        DebugExecution {
+            output: self.host.take_debug_output(),
+            diagnostic: result.err(),
+            snapshots: self.debug_snapshots,
+            timeline: self.host.timeline_events().to_vec(),
+        }
+    }
+
+    /// Invokes a project entry point and records the same debugger snapshots as
+    /// anonymous execution.
+    pub fn debug_invoke(
+        mut self,
+        program: &'program Program,
+        class_name: &str,
+        method_name: &str,
+    ) -> DebugExecution {
+        let result = self.prepare(program).and_then(|_| {
+            self.begin_transaction(Span::new(0, 0))?;
+            let result = self
+                .initialize_static_fields()
+                .and_then(|_| self.invoke_static_inner(class_name, method_name));
+            self.finish_transaction(result, Span::new(0, 0))
+        });
+        let mut output = self.host.take_debug_output();
+        let diagnostic = match result {
+            Ok(value) => {
+                if !matches!(value, Value::Void) {
+                    output.push(self.display_value(&value));
+                }
+                None
+            }
+            Err(diagnostic) => Some(diagnostic),
+        };
+        DebugExecution {
+            output,
+            diagnostic,
+            snapshots: self.debug_snapshots,
+            timeline: self.host.timeline_events().to_vec(),
+        }
     }
 }
 
@@ -286,6 +399,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             read_only_sobjects: BTreeSet::new(),
             read_only_collections: BTreeSet::new(),
             trace: ExecutionTrace::default(),
+            debug_snapshots: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
             next_async_sequence: 1,
@@ -560,6 +674,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
+        if !matches!(statement, Statement::Block { .. }) {
+            self.capture_debug_snapshot(statement.span());
+        }
         self.trace.executed_statements.insert(statement.span());
         match statement {
             Statement::VariableDeclaration {
@@ -3120,6 +3237,49 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.scopes
             .last_mut()
             .expect("interpreter always has a scope")
+    }
+
+    fn capture_debug_snapshot(&mut self, span: Span) {
+        let mut visible = BTreeMap::<String, DebugVariable>::new();
+        for scope in &self.scopes {
+            for (canonical, slot) in scope {
+                visible.insert(
+                    canonical.clone(),
+                    DebugVariable {
+                        name: canonical.clone(),
+                        type_name: slot.ty.apex_name(),
+                        value: self.display_value(&slot.value),
+                    },
+                );
+            }
+        }
+        let mut frames = Vec::with_capacity(self.call_stack.len().max(1));
+        let leaf_name = self
+            .call_stack
+            .last()
+            .map_or("<anonymous>", |call| call.method.as_str());
+        frames.push(DebugFrame {
+            name: leaf_name.to_owned(),
+            span,
+        });
+        for index in (0..self.call_stack.len().saturating_sub(1)).rev() {
+            frames.push(DebugFrame {
+                name: self.call_stack[index].method.clone(),
+                span: self.call_stack[index + 1].call_span,
+            });
+        }
+        if let Some(call) = self.call_stack.first() {
+            frames.push(DebugFrame {
+                name: "<anonymous>".to_owned(),
+                span: call.call_span,
+            });
+        }
+        self.debug_snapshots.push(DebugSnapshot {
+            span,
+            frames,
+            variables: visible.into_values().collect(),
+            transaction_event_count: self.host.transaction_event_count(),
+        });
     }
 
     fn value_has_type(&self, value: &Value, target: &TypeName) -> bool {
