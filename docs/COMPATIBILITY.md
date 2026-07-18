@@ -94,7 +94,7 @@ for the documented case.
 | Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
 | HTTP callouts | Yes | Yes | Via host | Simplified | Stateful request/response APIs, queued mock responses, captured requests, and no live network |
 | Persistent REPL | Yes | Yes | Yes | Simplified | Accepted snippets share deterministic replayed state; failed snippets do not commit |
-| Statement debugger | N/A | N/A | Yes | Simplified | Breakpoints, step in/over/out, frames, variables, database events, and transaction timelines over immutable snapshots |
+| Statement debugger | N/A | N/A | Yes | Simplified | Opt-in breakpoints, step in/over/out, frames, variables, database events, and transaction timelines over bounded immutable snapshots |
 | Editor navigation | N/A | Via HIR | N/A | Simplified | Project class/member definitions, references, rename edits, and source-mapped inline diagnostics |
 | Coverage overlays | N/A | N/A | Via runner | Compatible | Every executable production line is exposed as covered or uncovered to editor clients |
 
@@ -419,8 +419,13 @@ Project launches use a public static zero-argument `Class.method`; scripts run
 their anonymous statements. Custom `apex/database` and
 `apex/transactionTimeline` requests expose source-stop-aware platform events.
 Debugging navigates deterministic pre-statement snapshots, not a suspended live
-runtime, so expression evaluation and value mutation from the debug console are
-not supported.
+runtime. Debugger launches alone opt into snapshot allocation and retain the
+earliest 4,096 snapshots under an estimated 16 MiB snapshot-memory ceiling,
+with at most 256 variables and 128 frames per snapshot and 16 KiB per rendered
+value. `DebugExecution::trace_status` reports when any bound truncates the
+trace. Ordinary execute/invoke paths select no instrumentation, while the test
+runner records coverage facts without debugger snapshots. Expression
+evaluation and value mutation from the debug console are not supported.
 
 `apex-exec lsp [project]` implements stdio Language Server Protocol
 initialization, full-document synchronization, inline diagnostic publication,
