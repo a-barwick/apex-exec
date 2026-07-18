@@ -126,7 +126,7 @@ jobs:
           retention-days: 14
 
   enterprise-ci:
-    name: Hermetic enterprise CI (shard ${{ matrix.shard }}/2)
+    name: Hermetic CI (${{ matrix.label }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -135,9 +135,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard:
-          - 0
-          - 1
+        include:
+          - project: milestone14-project
+            label: M14 shard 1/2
+            shard: 0
+            total: 2
+          - project: milestone14-project
+            label: M14 shard 2/2
+            shard: 1
+            total: 2
+          - project: milestone15-project
+            label: M15 release gate
+            shard: 0
+            total: 1
     steps:
       - name: Check out complete history
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -148,7 +158,7 @@ jobs:
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: enterprise-ci-${{ matrix.shard }}
+          cache-key: enterprise-ci-${{ matrix.project }}-${{ matrix.shard }}
 
       - name: Build optimized runtime
         run: cargo build --locked --release
@@ -174,33 +184,31 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/apex-exec
-          key: apex-results-${{ matrix.shard }}-${{ github.sha }}
-          restore-keys: |
-            apex-results-${{ matrix.shard }}-
+          key: apex-results-${{ matrix.project }}-${{ matrix.shard }}-${{ github.sha }}
 
       - name: Run impacted Apex tests and policy gates
         run: >-
           target/release/apex-exec ci run
-          examples/milestone14-project/apex-exec-ci.json
+          examples/${{ matrix.project }}/apex-exec-ci.json
           --changed-list apex-exec-changed.txt
           --cache-dir .ci-cache/apex-exec
-          --shard ${{ matrix.shard }}/2
+          --shard ${{ matrix.shard }}/${{ matrix.total }}
 
       - name: Prove deterministic artifact replay
         run: >-
           target/release/apex-exec ci run
-          examples/milestone14-project/apex-exec-ci.json
+          examples/${{ matrix.project }}/apex-exec-ci.json
           --changed-list apex-exec-changed.txt
           --cache-dir .ci-cache/apex-exec
-          --shard ${{ matrix.shard }}/2
+          --shard ${{ matrix.shard }}/${{ matrix.total }}
           --replay
 
       - name: Upload JUnit, Cobertura, and SARIF reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: enterprise-ci-shard-${{ matrix.shard }}
-          path: examples/milestone14-project/artifacts/${{ matrix.shard }}/
+          name: enterprise-ci-${{ matrix.project }}-${{ matrix.shard }}
+          path: examples/${{ matrix.project }}/artifacts/${{ matrix.shard }}/
           if-no-files-found: warn
           retention-days: 14
 
@@ -208,7 +216,8 @@ jobs:
         if: >-
           always() &&
           hashFiles(format(
-            'examples/milestone14-project/artifacts/{0}/results.sarif',
+            'examples/{0}/artifacts/{1}/results.sarif',
+            matrix.project,
             matrix.shard
           )) != '' &&
           (github.event_name != 'pull_request' ||
@@ -216,8 +225,8 @@ jobs:
           github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@ddf5ce7296213f5548c91e2dd19df2d77d2b2d66 # v3
         with:
-          sarif_file: examples/milestone14-project/artifacts/${{ matrix.shard }}/results.sarif
-          category: apex-exec/shard-${{ matrix.shard }}
+          sarif_file: examples/${{ matrix.project }}/artifacts/${{ matrix.shard }}/results.sarif
+          category: apex-exec/${{ matrix.project }}/shard-${{ matrix.shard }}
 
   required:
     name: Required CI gate

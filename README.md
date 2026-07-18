@@ -8,15 +8,16 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first fourteen milestones provide the core language, typed collections,
+The first fifteen milestones provide the core language, typed collections,
 exceptions, classes and inheritance, SFDX project compilation, isolated Apex
 tests with coverage, metadata-backed SObjects, SQLite transactions, checked
 SOQL/SOSL and DML, triggers with rollback, and a curated platform API profile.
 That profile includes date/time/decimal/ID/Blob values, JSON, regex, schema
 describe, deterministic context and limits, and host-mocked HTTP callouts.
 Deterministic async execution, editor/REPL debugging, a measured Salesforce
-differential oracle, and hermetic content-addressed enterprise CI complete the
-current local feedback loop.
+differential oracle, hermetic content-addressed enterprise CI, and targeted
+check-only Salesforce validation complete the current local feedback loop and
+release-confidence gate.
 Apex identifiers, types, and method names are case-insensitive.
 
 ```console
@@ -116,13 +117,32 @@ cargo run -- ci run \
   --shard 0/2 --replay
 ```
 
+The M15 hybrid gate reuses that hermetic manifest, selects affected deployment
+components and tests, checks schema/configuration drift, compares local and org
+test outcomes, and emits one release-readiness decision. An authenticated run
+uses a Salesforce check-only deployment; reviewed snapshots support offline
+replay:
+
+```bash
+cargo run -- hybrid \
+  examples/milestone15-project/apex-exec-ci.json \
+  --target-org staging \
+  --record-validation milestone15-validation.json \
+  --report milestone15-readiness.json
+
+# Repeat the decision without credentials or Salesforce compute.
+cargo run -- hybrid \
+  examples/milestone15-project/apex-exec-ci.json \
+  --validation-snapshot milestone15-validation.json
+```
+
 Repository pull requests, pushes to `main`, merge-queue candidates, and weekday
 scheduled builds run the same guarantees in GitHub Actions. The required gate
 combines Rust formatting, linting, documentation, and cross-platform tests with
-15 end-to-end Apex program/project cases and both hermetic enterprise-CI
-shards. A `v*` tag whose version matches `Cargo.toml` builds verified Linux,
-macOS, and Windows archives, adds SHA-256 checksums, and publishes a GitHub
-release.
+16 end-to-end Apex program/project cases, both M14 enterprise-CI shards, and
+the M15 release-gate project. A `v*` tag whose version matches `Cargo.toml`
+builds verified Linux, macOS, and Windows archives, adds SHA-256 checksums, and
+publishes a GitHub release.
 
 Run the realistic Apex regression layer locally after building the binary:
 

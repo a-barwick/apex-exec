@@ -298,7 +298,7 @@ A large Apex repository can validate a pull request without provisioning an org.
 
 ## M15 — Hybrid deployment confidence
 
-**Status:** Active
+**Status:** Complete
 
 - Optional validation-org authentication
 - Affected-component and affected-test selection

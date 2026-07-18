@@ -28,6 +28,9 @@ REPL / DAP / LSP ─► persistent inner loop and source-mapped editor services
     │
     ▼
 Compatibility oracle ─► normalized local/Salesforce snapshots and measured diffs
+    │
+    ▼
+Hybrid readiness ─► affected validation, drift findings, and release decision
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -111,6 +114,14 @@ normalize into the same snapshot model. Recorded Salesforce snapshots are
 durable conformance evidence and allow deterministic offline comparison; live
 scratch-org transport remains isolated in the oracle adapter.
 
+M15 composes the M14 hermetic manifest, compiler dependency graph, isolated
+test runner, and Salesforce transport above their existing boundaries. It
+normalizes SFDX source files into metadata components, selects changed classes
+and their reverse dependents, retrieves only affected code plus project-owned
+schema/configuration, and performs a check-only Salesforce deployment.
+Versioned validation snapshots preserve the same provider-neutral inventory,
+test, and deployment observations for deterministic offline replay.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -167,6 +178,7 @@ state between interpreters.
 | `dap` | Stdio Debug Adapter Protocol launch and inspection workflows |
 | `oracle` | Versioned conformance manifests, local/Salesforce adapters, normalized snapshots, differential reports, and measured compatibility coverage |
 | `ci` | Hermetic input manifests, content-addressed result artifacts, impacted-test selection, deterministic sharding, standard reports, and policy gates |
+| `hybrid` | Metadata-component inventory, affected deployment selection, validation-org transport, schema/configuration drift, test differential, and release readiness |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 
@@ -378,13 +390,39 @@ executed or replayed artifact. GitHub Actions, GitLab CI, and Jenkins templates
 obtain changed paths from their pull-request base and run the same manifest on
 two independent shards.
 
+## Hybrid deployment architecture
+
+M15 treats the sealed M14 manifest as the local release candidate and does not
+add org behavior to compiler or runtime phases. Changed Apex classes select
+their reverse-dependent deployable classes through the compiler graph.
+Metadata, triggers, deleted files, and unknown paths conservatively select the
+complete project because their implicit Salesforce dependencies cannot be
+proven locally.
+
+The provider-neutral inventory groups source and sidecar files into stable
+Metadata API identities and content digests. Drift comparison covers
+project-owned schema and configuration components that are not directly
+changed by the release; changed components are intentional deployment payload,
+not drift. Code differences are handled by the dry-run deployment and affected
+test differential instead of being mislabeled as configuration drift.
+
+An authenticated adapter first verifies an existing org alias without verbose
+output, retrieves the scoped metadata into an isolated temporary directory,
+and invokes `sf project deploy start --dry-run`. It never creates an org,
+authenticates interactively, requests an auth URL, or persists credentials.
+The resulting inventory and validation observations can be recorded as a
+versioned snapshot. Release readiness requires the hermetic local CI policy,
+check-only deployment, unaffected schema/configuration drift, and every
+selected test outcome to agree.
+
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.
 The current foundation includes class dependency graphs, parsed-unit reuse,
 isolated parallel test execution, per-file coverage aggregation, hermetic CI
-manifests, content-addressed whole-run reuse, and deterministic distributed
-shards. Further project-scale performance work can rely on:
+manifests, content-addressed whole-run reuse, deterministic distributed shards,
+and affected hybrid validation. Further project-scale performance work can
+rely on:
 
 - Interned names and types
 - Dependency-scoped incremental semantic analysis

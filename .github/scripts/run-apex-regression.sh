@@ -107,5 +107,9 @@ run_case \
   "m13-oracle-apex-test" \
   "Summary: 1 passed, 0 failed, 1 total" \
   test examples/milestone13-oracle/project OracleDemoTest.confirmsBehavior
+run_case \
+  "m15-hybrid-project-tests" \
+  "Summary: 3 passed, 0 failed, 3 total" \
+  test examples/milestone15-project --jobs 2
 
 echo "Apex regression suite passed ${case_count} end-to-end cases."

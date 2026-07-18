@@ -26,7 +26,9 @@ fn ci_workflow_gates_prs_pushes_and_merge_queues_with_every_confidence_layer() {
         "zizmor==1.27.0",
         ".github/scripts/run-apex-regression.sh",
         "cargo test --locked --test north_star lexes_json_parse -- --ignored --exact",
-        "examples/milestone14-project/apex-exec-ci.json",
+        "examples/${{ matrix.project }}/apex-exec-ci.json",
+        "milestone14-project",
+        "milestone15-project",
         "--replay",
         "github/codeql-action/upload-sarif@",
         "Required CI gate",
@@ -48,6 +50,22 @@ fn ci_workflow_gates_prs_pushes_and_merge_queues_with_every_confidence_layer() {
     );
     assert!(CI_WORKFLOW.contains("contents: read"));
     assert!(CI_WORKFLOW.contains("cancel-in-progress: true"));
+    assert!(
+        CI_WORKFLOW.contains(
+            "key: apex-results-${{ matrix.project }}-${{ matrix.shard }}-${{ github.sha }}"
+        )
+    );
+    let result_cache = CI_WORKFLOW
+        .split("Restore content-addressed Apex results")
+        .nth(1)
+        .unwrap()
+        .split("Run impacted Apex tests and policy gates")
+        .next()
+        .unwrap();
+    assert!(
+        !result_cache.contains("restore-keys"),
+        "Apex result caches must never restore artifacts from an older commit"
+    );
 }
 
 #[test]
@@ -60,7 +78,8 @@ fn release_workflow_verifies_tags_and_only_publishes_verified_native_binaries() 
         "cargo test --locked",
         "cargo test --locked --test north_star lexes_json_parse -- --ignored --exact",
         ".github/scripts/run-apex-regression.sh",
-        "Run and replay both hermetic Apex CI shards",
+        "Run and replay hermetic Apex CI gates",
+        "examples/milestone15-project/apex-exec-ci.json",
         "ubuntu-latest",
         "macos-latest",
         "windows-latest",
@@ -136,10 +155,10 @@ fn complex_apex_regression_script_runs_against_the_built_cli() {
         String::from_utf8_lossy(&result.stderr)
     );
     let stdout = String::from_utf8(result.stdout).unwrap();
-    assert!(stdout.contains("Apex regression suite passed 15 end-to-end cases."));
+    assert!(stdout.contains("Apex regression suite passed 16 end-to-end cases."));
     assert_eq!(
         fs::read_dir(&artifact_dir).unwrap().count(),
-        15,
+        16,
         "each end-to-end case should preserve one diagnostic log"
     );
 

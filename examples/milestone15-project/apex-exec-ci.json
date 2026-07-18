@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "toolVersion": "0.1.0",
+  "project": ".",
+  "inputs": [
+    {
+      "path": "force-app/main/default/classes/AuditService.cls",
+      "sha256": "9aec9ce192e03cf1a82e6b16044d9268c3ebd1c8f6086d9473f1876b04e38771"
+    },
+    {
+      "path": "force-app/main/default/classes/AuditService.cls-meta.xml",
+      "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0"
+    },
+    {
+      "path": "force-app/main/default/classes/AuditServiceTest.cls",
+      "sha256": "2a7e2a6b0e0ab8c2ef3f9cab2643f72ad600fb80c39faa7cea5a1ffd4fb3f88e"
+    },
+    {
+      "path": "force-app/main/default/classes/AuditServiceTest.cls-meta.xml",
+      "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0"
+    },
+    {
+      "path": "force-app/main/default/classes/ReleaseService.cls",
+      "sha256": "238ed3c18ef6796e80e2181d8b333f16fe2420dba0e14f623b39a020bdbaaa14"
+    },
+    {
+      "path": "force-app/main/default/classes/ReleaseService.cls-meta.xml",
+      "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0"
+    },
+    {
+      "path": "force-app/main/default/classes/ReleaseServiceTest.cls",
+      "sha256": "e6b29400b7e4d8c7835f920279279a6f677d1aa51aa77cb35d13d426f7d5f0eb"
+    },
+    {
+      "path": "force-app/main/default/classes/ReleaseServiceTest.cls-meta.xml",
+      "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0"
+    },
+    {
+      "path": "force-app/main/default/objects/Invoice__c/Invoice__c.object-meta.xml",
+      "sha256": "2050d30af0173c69e5a52445b8c32cee3d304bba69b1dbe629067b5ccd8e17fa"
+    },
+    {
+      "path": "force-app/main/default/objects/Invoice__c/fields/Amount__c.field-meta.xml",
+      "sha256": "9477fd7bc563364a781c6d050ddf183550c4e7d76b8611cd9db9c5289c68187a"
+    },
+    {
+      "path": "force-app/main/default/objects/Invoice__c/fields/Status__c.field-meta.xml",
+      "sha256": "d1d5feda785c20eb1488b061f14226cf7add77f6a415fd7df89092b479ab934e"
+    },
+    {
+      "path": "force-app/main/default/permissionsets/Release_Manager.permissionset-meta.xml",
+      "sha256": "44b7c4eebbda5a44d125bfd61e9f4d48c82bccf310ef27964f23e138c2e625e3"
+    },
+    {
+      "path": "sfdx-project.json",
+      "sha256": "551ef2235473ec82d133182eb03299f3db67994133b9f89a0cb110190040d798"
+    }
+  ],
+  "changedFiles": [
+    "force-app/main/default/classes/ReleaseService.cls"
+  ],
+  "shard": {
+    "index": 0,
+    "total": 1
+  },
+  "jobs": 2,
+  "reports": {
+    "junit": "artifacts/{shard}/junit.xml",
+    "sarif": "artifacts/{shard}/results.sarif",
+    "coverage": "artifacts/{shard}/coverage.xml"
+  },
+  "policy": {
+    "maxTestFailures": 0,
+    "minLineCoverage": 80.0,
+    "minBranchCoverage": 100.0
+  }
+}

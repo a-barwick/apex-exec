@@ -65,7 +65,7 @@ jobs:
       - name: Protect the accepted real-world lexer frontier
         run: cargo test --locked --test north_star lexes_json_parse -- --ignored --exact
 
-      - name: Run and replay both hermetic Apex CI shards
+      - name: Run and replay hermetic Apex CI gates
         shell: bash
         run: |
           set -euo pipefail
@@ -84,6 +84,17 @@ jobs:
               --shard "${shard}/2" \
               --replay
           done
+          target/debug/apex-exec ci run \
+            examples/milestone15-project/apex-exec-ci.json \
+            --changed-list apex-exec-release-inputs.txt \
+            --cache-dir .ci-cache/release-m15 \
+            --shard 0/1
+          target/debug/apex-exec ci run \
+            examples/milestone15-project/apex-exec-ci.json \
+            --changed-list apex-exec-release-inputs.txt \
+            --cache-dir .ci-cache/release-m15 \
+            --shard 0/1 \
+            --replay
 
       - name: Retain release verification evidence
         if: always()
@@ -93,6 +104,7 @@ jobs:
           path: |
             artifacts/release-apex/
             examples/milestone14-project/artifacts/
+            examples/milestone15-project/artifacts/
           if-no-files-found: warn
           retention-days: 14
 

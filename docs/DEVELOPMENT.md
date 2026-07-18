@@ -16,6 +16,8 @@ cargo run -- check examples/milestone5-project
 cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
 cargo run -- ci run examples/milestone14-project/apex-exec-ci.json --shard 0/2
+cargo run -- hybrid examples/milestone15-project/apex-exec-ci.json \
+  --validation-snapshot milestone15-validation.json
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
@@ -52,10 +54,14 @@ required gate depends on:
 - actionlint, workflow security checks, formatting, Clippy, rustdoc, and
   `cargo package`;
 - the complete Rust suite on Linux, macOS, and Windows;
-- 15 complex anonymous and SFDX Apex executions spanning M4 through M13;
+- 16 complex anonymous and SFDX Apex executions spanning M4 through M15;
 - the accepted lexer frontier over the pinned 14,740-line North Star corpus;
-- both M14 hermetic CI shards, including exact cache replay and uploaded JUnit,
-  Cobertura, and SARIF reports.
+- both M14 hermetic CI shards and the M15 release-gate project, including exact
+  cache replay and uploaded JUnit, Cobertura, and SARIF reports.
+
+Compiled Cargo state may be restored across compatible jobs, but M14 result
+artifacts are scoped to the exact Git commit. This prevents an unchanged
+package version from replaying a result produced by an older compiler commit.
 
 Run the end-to-end Apex layer locally with:
 

@@ -36,6 +36,7 @@ fn run() -> Result<ExitCode, String> {
             | "dap"
             | "oracle"
             | "ci"
+            | "hybrid"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
@@ -76,6 +77,10 @@ fn run() -> Result<ExitCode, String> {
 
     if command == "ci" {
         return run_ci(args);
+    }
+
+    if command == "hybrid" {
+        return run_hybrid(args);
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -442,6 +447,84 @@ fn run_ci(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     }
 }
 
+fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut target_org = None;
+    let mut snapshot_path = None;
+    let mut record_path = None;
+    let mut report_path = None;
+    let mut ci_options = apex_exec::ci::CiRunOptions::default();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--target-org" => set_once(
+                &mut target_org,
+                required_value(&mut args, "--target-org")?,
+                "`--target-org` was provided more than once",
+            )?,
+            "--validation-snapshot" => set_once(
+                &mut snapshot_path,
+                PathBuf::from(required_value(&mut args, "--validation-snapshot")?),
+                "`--validation-snapshot` was provided more than once",
+            )?,
+            "--record-validation" => set_once(
+                &mut record_path,
+                PathBuf::from(required_value(&mut args, "--record-validation")?),
+                "`--record-validation` was provided more than once",
+            )?,
+            "--report" => set_once(
+                &mut report_path,
+                PathBuf::from(required_value(&mut args, "--report")?),
+                "`--report` was provided more than once",
+            )?,
+            "--cache-dir" => set_once(
+                &mut ci_options.cache_dir,
+                PathBuf::from(required_value(&mut args, "--cache-dir")?),
+                "`--cache-dir` was provided more than once",
+            )?,
+            "--no-cache" => ci_options.no_cache = true,
+            "--replay" => ci_options.replay_only = true,
+            _ => {
+                return Err(format!("unknown hybrid option `{argument}`\n\n{}", usage()));
+            }
+        }
+    }
+    if target_org.is_some() == snapshot_path.is_some() {
+        return Err(
+            "hybrid validation requires exactly one of `--target-org` or `--validation-snapshot`"
+                .to_owned(),
+        );
+    }
+    if record_path.is_some() && target_org.is_none() {
+        return Err("`--record-validation` requires `--target-org`".to_owned());
+    }
+    if ci_options.no_cache && ci_options.replay_only {
+        return Err("`--no-cache` and `--replay` cannot be combined".to_owned());
+    }
+    let source = match (target_org, snapshot_path) {
+        (Some(target), None) => apex_exec::hybrid::ValidationSource::TargetOrg(target),
+        (None, Some(path)) => apex_exec::hybrid::ValidationSource::Snapshot(path),
+        _ => unreachable!("exclusive validation source was checked"),
+    };
+    let manifest = apex_exec::ci::CiManifest::load(manifest_path)?;
+    let outcome = apex_exec::hybrid::run(
+        &manifest,
+        &source,
+        &apex_exec::hybrid::HybridRunOptions { ci: ci_options },
+    )?;
+    println!("{}", outcome.report.render_console());
+    if let Some(path) = record_path {
+        outcome.validation_snapshot.write(path)?;
+    }
+    if let Some(path) = report_path {
+        outcome.report.write(path)?;
+    }
+    Ok(if outcome.report.is_ready() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn required_value(args: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("`{option}` requires a value"))
@@ -608,6 +691,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> (--target-org <alias> | --validation-snapshot <path>) [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--replay | --no-cache]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }
