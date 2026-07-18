@@ -59,7 +59,7 @@ for the documented case.
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
 | `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot |
-| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supported |
+| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supports primitive, `Object`, custom-class, and core-exception elements |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
@@ -68,7 +68,7 @@ for the documented case.
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
-| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
+| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, `interface extends`, and cycle-checked hierarchy edges |
 | Nested types and enums | No | No | No | Unsupported | Qualified nested identities, enums, and type literals are planned in M20 |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
@@ -86,12 +86,12 @@ for the documented case.
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; `SeeAllData=true` is explicit |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
-| Batch Apex | Yes | Yes | Via drain | Simplified | Checked `Database.Batchable<T>` contract with List-returning `start`, deterministic chunking, context job ID, and `finish` |
+| Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract whose declared `T` binds the List-returning `start` and `execute` scope types, plus deterministic chunking, context job ID, and `finish` |
 | Scheduled Apex | Yes | Yes | Via drain | Simplified | Checked Schedulable contract, seven-field cron shape validation, deterministic submission, and trigger ID |
 | Platform events | Yes | Yes | Via drain | Simplified | `EventBus.publish` queues imported `__e` records for after-insert trigger delivery; no retention or replay |
 | JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization and recursive untyped deserialization |
 | Regex | Yes | Yes | Yes | Compatible | `Pattern.compile`/`quote` and stateful `Matcher` match/find/group/start/end |
-| Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
+| Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag; qualified and unqualified Schema type spellings are accepted |
 | HTTP callouts | Yes | Yes | Via host | Simplified | Stateful request/response APIs, queued mock responses, captured requests, and no live network |
 | Persistent REPL | Yes | Yes | Yes | Simplified | Accepted snippets share deterministic replayed state; failed snippets do not commit |
 | Statement debugger | N/A | N/A | Yes | Simplified | Breakpoints, step in/over/out, frames, variables, database events, and transaction timelines over immutable snapshots |
@@ -186,12 +186,14 @@ bare member access resolve at compile time.
 
 Classes may extend one virtual/abstract class and implement interfaces.
 Abstract, virtual, and override declarations are validated, interface
-obligations are enforced, and instance calls use virtual dispatch. User types
-participate in assignment, overload ranking, and related up/downcasts. Access
-checks cover public, private, protected, and global members, including
-accessor-specific property visibility. Nested types, enums, explicit
-superclass-constructor calls, custom exception classes, and the full Apex
-conversion system remain unsupported.
+obligations are enforced, every superclass/interface edge participates in
+iterative cycle validation, and instance calls use virtual dispatch. Interfaces
+extend interfaces; an `implements` clause on an interface is rejected as
+invalid syntax before contract traversal. User types participate in assignment,
+overload ranking, and related up/downcasts. Access checks cover public, private,
+protected, and global members, including accessor-specific property visibility.
+Nested types, enums, explicit superclass-constructor calls, custom exception
+classes, and the full Apex conversion system remain unsupported.
 Sharing modifiers parse so class declarations remain structurally inspectable,
 but semantic checking rejects them because sharing/security behavior is
 deferred rather than silently ignored.
@@ -378,9 +380,12 @@ SObject Id/reference fields retain their earlier String surface; standalone
 Classes may implement the checked built-in `Queueable`,
 `Database.Batchable<T>`, and `Schedulable` contracts. The checker records their
 execute/start/finish targets in HIR, validates context and scope types, and
-rejects incomplete contracts before runtime. `@future` methods must be
-public/global static void methods and accept only supported primitive values or
-Lists/Sets of those primitives.
+rejects incomplete contracts before runtime. `Database.Batchable` requires
+exactly one retained type argument, and that declared type determines the
+`List<T>` returned by `start` and the `List<T>` passed to `execute`. Generic
+arguments on `Queueable`, `Schedulable`, and user-defined interfaces are
+rejected explicitly. `@future` methods must be public/global static void methods
+and accept only supported primitive values or Lists/Sets of those primitives.
 
 `System.enqueueJob`, future calls, `Database.executeBatch`, `System.schedule`,
 and `EventBus.publish` append work to one interpreter-owned FIFO. Submission
@@ -586,6 +591,9 @@ language or Salesforce compatibility claim.
 
 - Unknown characters and invalid strings fail lexing.
 - Invalid or unsupported syntax fails parsing.
+- Public raw-token parser construction requires exactly one terminal EOF, one
+  source identity, and ordered non-overlapping spans; malformed streams return
+  structured `TokenStreamError` values before parsing.
 - Unknown variables, generic mismatches, invalid iteration/indexing, and
   invalid built-in or user-defined calls fail semantic checking.
 - Duplicate method signatures, ambiguous/no-match overloads, invalid return
@@ -593,6 +601,9 @@ language or Salesforce compatibility claim.
 - Duplicate/unknown classes, inheritance cycles, inaccessible members, invalid
   static/instance access, bad overrides, and missing abstract/interface
   implementations fail semantic checking.
+- Invalid interface hierarchy syntax and unsupported hierarchy type arguments
+  fail explicitly; `Database.Batchable<T>` retains and checks its declared
+  element type rather than inferring it from methods.
 - Supported runtime language faults are typed, catchable exceptions. Internal
   checked-state violations remain distinct diagnostics.
 - Unsupported built-in methods are rejected explicitly rather than silently

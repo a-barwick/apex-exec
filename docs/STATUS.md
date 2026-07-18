@@ -13,7 +13,8 @@ the bounded S0 process-safety and correctness criteria pass.
 
 Initial S0 work may begin in three disjoint packages:
 
-- S0-01 — frontend process safety and correctness
+- S0-01 — frontend process safety and correctness (in Review on
+  `codex/stab-frontend-safety` at `e42bb2a`)
 - S0-02 — opt-in runtime instrumentation
 - S0-05 — CI, maintainability ratchet, and release-document gates
 
@@ -43,7 +44,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Recursive `List<T>`, `Set<T>`, and `Map<K,V>` types, including nested
   collections
 - One-dimensional `T[]` syntax as an alias for `List<T>`
-- Empty, copy, literal, and sized-array construction
+- Empty, copy, literal, and sized-array construction, including custom,
+  `Object`, and core-exception element types
 - List indexing, indexed assignment, and indexed increment/decrement
 - Collection reference aliasing with independent shallow copies from copy
   constructors and `clone()`
@@ -67,6 +69,9 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Source-mapped runtime call stacks and exception type/message/accessor support
 - `tokens`, `ast`, `check`, and `run` CLI commands
 - Source-span compile and runtime diagnostics
+- Public raw-token parser construction that rejects empty, malformed-EOF,
+  mixed-source, reversed, overlapping, and non-monotonic streams before
+  lookahead
 - Focused compiler/runtime unit tests and public-pipeline integration tests
 - Disk-backed scenarios run through every compiler stage and the CLI
 - The unchanged M3 acceptance program executes from both the library and CLI
@@ -86,7 +91,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Public, private, protected, and global member access checks, including
   accessor-specific visibility
 - Class inheritance, abstract/virtual methods, overrides, interfaces, subtype
-  assignment, and contract validation
+  assignment, iterative cycle validation across every hierarchy edge, and
+  cycle-safe interface contract collection
 - Object identity, inherited storage, class casts, and source-mapped class call
   execution
 - SFDX `packageDirectories` discovery, recursive `.cls` loading, filename/type
@@ -202,7 +208,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   coverage, plus ten Rust integration tests covering success, failure,
   determinism, mocking, checking, and runtime boundaries
 - Checked platform contracts for `Queueable`, `Database.Batchable<T>`, and
-  `Schedulable`, including their context parameter types and required methods
+  `Schedulable`, including preserved declared batch element types, matching
+  start/execute signatures, context parameter types, and required methods
 - Checked `@future` methods with public/global static void signatures and
   serializable primitive or primitive-collection parameters
 - Deterministic `System.enqueueJob`, `Database.executeBatch`, and
@@ -329,7 +336,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 302 ordinary tests pass with no failures (14 separate North Star goal tests
+- 315 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
