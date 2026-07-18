@@ -4,6 +4,7 @@ use std::{
     io::{self, BufRead, BufReader, IsTerminal},
     path::{Path, PathBuf},
     process::ExitCode,
+    time::Duration,
 };
 
 fn main() -> ExitCode {
@@ -453,6 +454,10 @@ fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String
     let mut snapshot_path = None;
     let mut record_path = None;
     let mut report_path = None;
+    let mut expected_target_org = None;
+    let mut expected_org_id = None;
+    let mut maximum_evidence_age = apex_exec::hybrid::DEFAULT_MAX_EVIDENCE_AGE;
+    let mut maximum_age_set = false;
     let mut ci_options = apex_exec::ci::CiRunOptions::default();
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -476,6 +481,34 @@ fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String
                 PathBuf::from(required_value(&mut args, "--report")?),
                 "`--report` was provided more than once",
             )?,
+            "--expected-target-org" => set_once(
+                &mut expected_target_org,
+                required_value(&mut args, "--expected-target-org")?,
+                "`--expected-target-org` was provided more than once",
+            )?,
+            "--expected-org-id" => set_once(
+                &mut expected_org_id,
+                required_value(&mut args, "--expected-org-id")?,
+                "`--expected-org-id` was provided more than once",
+            )?,
+            "--max-evidence-age-hours" => {
+                if maximum_age_set {
+                    return Err("`--max-evidence-age-hours` was provided more than once".to_owned());
+                }
+                let hours = required_value(&mut args, "--max-evidence-age-hours")?
+                    .parse::<u64>()
+                    .map_err(|_| {
+                        "`--max-evidence-age-hours` requires a positive integer".to_owned()
+                    })?;
+                let seconds = hours
+                    .checked_mul(60 * 60)
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| {
+                        "`--max-evidence-age-hours` is outside the supported range".to_owned()
+                    })?;
+                maximum_evidence_age = Duration::from_secs(seconds);
+                maximum_age_set = true;
+            }
             "--cache-dir" => set_once(
                 &mut ci_options.cache_dir,
                 PathBuf::from(required_value(&mut args, "--cache-dir")?),
@@ -500,6 +533,32 @@ fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String
     if ci_options.no_cache && ci_options.replay_only {
         return Err("`--no-cache` and `--replay` cannot be combined".to_owned());
     }
+    if target_org.is_some() {
+        if ci_options.no_cache {
+            return Err(
+                "authenticated hybrid validation requires a cacheable CI artifact; remove `--no-cache`"
+                    .to_owned(),
+            );
+        }
+        if ci_options.replay_only {
+            return Err("`--replay` applies only to `--validation-snapshot`".to_owned());
+        }
+        if expected_target_org.is_some() || expected_org_id.is_some() {
+            return Err(
+                "expected target assertions apply only to `--validation-snapshot`".to_owned(),
+            );
+        }
+    } else {
+        if !ci_options.replay_only {
+            return Err("`--validation-snapshot` requires `--replay`".to_owned());
+        }
+        if expected_target_org.is_none() || expected_org_id.is_none() {
+            return Err(
+                "`--validation-snapshot` requires `--expected-target-org` and `--expected-org-id`"
+                    .to_owned(),
+            );
+        }
+    }
     let source = match (target_org, snapshot_path) {
         (Some(target), None) => apex_exec::hybrid::ValidationSource::TargetOrg(target),
         (None, Some(path)) => apex_exec::hybrid::ValidationSource::Snapshot(path),
@@ -509,7 +568,12 @@ fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String
     let outcome = apex_exec::hybrid::run(
         &manifest,
         &source,
-        &apex_exec::hybrid::HybridRunOptions { ci: ci_options },
+        &apex_exec::hybrid::HybridRunOptions {
+            ci: ci_options,
+            maximum_evidence_age,
+            expected_target_org,
+            expected_org_id,
+        },
     )?;
     println!("{}", outcome.report.render_console());
     if let Some(path) = record_path {
@@ -691,6 +755,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> (--target-org <alias> | --validation-snapshot <path>) [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--replay | --no-cache]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

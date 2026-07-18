@@ -1,9 +1,8 @@
 use apex_exec::{
-    ci::{CiManifest, CiReports},
+    ci::{CiManifest, CiReports, CiRunOptions},
     hybrid::{
-        ComponentSelectionMode, DeploymentValidation, DriftKind, HYBRID_SCHEMA_VERSION,
-        HybridRunOptions, OrgInventory, SalesforceValidationCli, ValidationSnapshot,
-        ValidationSource, ValidationTest, run, select_affected_components,
+        ComponentSelectionMode, DriftKind, HybridRunOptions, OrgInventory, SalesforceValidationCli,
+        ValidationSnapshot, ValidationSource, run_with_cli, select_affected_components,
     },
     project,
 };
@@ -16,17 +15,68 @@ use std::{
 
 const PROJECT: &str = "examples/milestone15-project";
 const MANIFEST: &str = "examples/milestone15-project/apex-exec-ci.json";
+const TARGET: &str = "recorded-staging";
+const ORG_ID: &str = "00D000000000001";
+const READY_DEPLOY: &str = r#"{
+  "status": 0,
+  "result": {
+    "id": "0Af000000000001",
+    "success": true,
+    "details": {
+      "runTestResult": {
+        "successes": [
+          {"name": "ReleaseServiceTest", "methodName": "preparesPriorityInvoice"},
+          {"name": "ReleaseServiceTest", "methodName": "preparesStandardInvoice"}
+        ]
+      }
+    }
+  }
+}"#;
+const FAILED_DEPLOY: &str = r#"{
+  "status": 1,
+  "result": {
+    "id": "0Af000000000002",
+    "success": false,
+    "details": {
+      "componentFailures": [{
+        "fullName": "ReleaseService",
+        "problem": "controlled compile failure"
+      }],
+      "runTestResult": {
+        "successes": [{
+          "name": "ReleaseServiceTest",
+          "methodName": "preparesStandardInvoice"
+        }],
+        "failures": [{
+          "name": "ReleaseServiceTest",
+          "methodName": "preparesPriorityInvoice",
+          "message": "controlled org-only assertion"
+        }]
+      }
+    }
+  }
+}"#;
+const MISSING_TEST_DEPLOY: &str = r#"{
+  "status": 0,
+  "result": {
+    "id": "0Af000000000003",
+    "success": true,
+    "details": {
+      "runTestResult": {
+        "successes": [{
+          "name": "ReleaseServiceTest",
+          "methodName": "preparesPriorityInvoice"
+        }]
+      }
+    }
+  }
+}"#;
 
+#[cfg(unix)]
 #[test]
 fn recorded_org_snapshot_produces_a_targeted_release_ready_decision() {
-    let (mut manifest, snapshot_path) = ready_fixture("targeted");
-    manifest.reports = CiReports::default();
-    let outcome = run(
-        &manifest,
-        &ValidationSource::Snapshot(snapshot_path),
-        &no_cache(),
-    )
-    .unwrap();
+    let fixture = ready_fixture("targeted");
+    let outcome = replay(&fixture).unwrap();
 
     assert!(
         outcome.report.is_ready(),
@@ -69,33 +119,18 @@ fn recorded_org_snapshot_produces_a_targeted_release_ready_decision() {
     assert!(outcome.report.render_console().contains("RELEASE READY"));
 }
 
+#[cfg(unix)]
 #[test]
 fn schema_or_configuration_drift_blocks_release_without_treating_code_as_drift() {
-    let (mut manifest, snapshot_path) = ready_fixture("drift");
-    manifest.reports = CiReports::default();
-    let mut snapshot = ValidationSnapshot::load(&snapshot_path).unwrap();
-    let permission = snapshot
-        .inventory
-        .components
-        .iter_mut()
-        .find(|component| component.metadata_type == "PermissionSet")
-        .unwrap();
-    permission.sha256 = "f".repeat(64);
-    let class = snapshot
-        .inventory
-        .components
-        .iter_mut()
-        .find(|component| component.selector() == "ApexClass:AuditService")
-        .unwrap();
-    class.sha256 = "e".repeat(64);
-    snapshot.write(&snapshot_path).unwrap();
-
-    let outcome = run(
-        &manifest,
-        &ValidationSource::Snapshot(snapshot_path),
-        &no_cache(),
+    let fixture = live_fixture("drift", READY_DEPLOY, "drift");
+    let outcome = run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&fixture.cache),
+        &fixture.cli,
     )
     .unwrap();
+
     assert!(!outcome.report.is_ready());
     assert_eq!(outcome.report.drift.len(), 1);
     assert_eq!(
@@ -112,24 +147,18 @@ fn schema_or_configuration_drift_blocks_release_without_treating_code_as_drift()
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn local_versus_org_test_mismatch_and_dry_run_failure_are_both_reported() {
-    let (mut manifest, snapshot_path) = ready_fixture("mismatch");
-    manifest.reports = CiReports::default();
-    let mut snapshot = ValidationSnapshot::load(&snapshot_path).unwrap();
-    snapshot.validation.success = false;
-    snapshot.validation.component_failures =
-        vec!["ApexClass:ReleaseService: compile failure".to_owned()];
-    snapshot.validation.tests[0].outcome = "fail".to_owned();
-    snapshot.validation.tests[0].message = Some("org-only assertion".to_owned());
-    snapshot.write(&snapshot_path).unwrap();
-
-    let outcome = run(
-        &manifest,
-        &ValidationSource::Snapshot(snapshot_path),
-        &no_cache(),
+    let fixture = live_fixture("mismatch", FAILED_DEPLOY, "clean");
+    let outcome = run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&fixture.cache),
+        &fixture.cli,
     )
     .unwrap();
+
     assert!(!outcome.report.is_ready());
     assert_eq!(outcome.report.differential_percentage, 50.0);
     assert_eq!(
@@ -174,17 +203,18 @@ fn metadata_changes_conservatively_select_every_deployable_component() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn validation_snapshots_are_portable_and_strictly_versioned() {
-    let (_, snapshot_path) = ready_fixture("portable");
-    let snapshot = ValidationSnapshot::load(&snapshot_path).unwrap();
-    assert!(!snapshot.authenticated);
-    assert_eq!(snapshot.target, "recorded-staging");
+    let fixture = ready_fixture("portable");
+    let snapshot = ValidationSnapshot::load(&fixture.snapshot).unwrap();
+    assert!(snapshot.authenticated);
+    assert_eq!(snapshot.evidence.target, TARGET);
     let mut json = serde_json::to_value(snapshot).unwrap();
-    json["schemaVersion"] = serde_json::json!(HYBRID_SCHEMA_VERSION + 1);
-    fs::write(&snapshot_path, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    json["schemaVersion"] = serde_json::json!(3);
+    fs::write(&fixture.snapshot, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
     assert!(
-        ValidationSnapshot::load(&snapshot_path)
+        ValidationSnapshot::load(&fixture.snapshot)
             .unwrap_err()
             .contains("unsupported validation snapshot schema version")
     );
@@ -192,97 +222,89 @@ fn validation_snapshots_are_portable_and_strictly_versioned() {
 
 #[cfg(unix)]
 #[test]
-fn authenticated_adapter_uses_non_secret_auth_retrieve_and_check_only_deploy() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let root = fixture_root("sf-cli");
-    let executable = root.join("sf");
-    let log = root.join("commands.log");
-    fs::write(
-        &executable,
-        r#"#!/bin/sh
-set -eu
-dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-printf '%s\n' "$*" >> "$dir/commands.log"
-if [ "$1 $2" = "org display" ]; then
-  printf '%s\n' '{"status":0,"result":{"id":"00D000000000001","connectedStatus":"Connected"}}'
-elif [ "$1 $2 $3" = "project retrieve start" ]; then
-  out=""
-  while [ "$#" -gt 0 ]; do
-    if [ "$1" = "--output-dir" ]; then
-      shift
-      out="$1"
-    fi
-    shift
-  done
-  mkdir -p "$out"
-  cp -R force-app "$out/"
-  printf '%s\n' '{"status":0,"result":{"success":true}}'
-elif [ "$1 $2 $3" = "project deploy start" ]; then
-  printf '%s\n' '{"status":0,"result":{"id":"0Af000000000001","success":true,"details":{"runTestResult":{"successes":[{"name":"ReleaseServiceTest","methodName":"preparesPriorityInvoice"},{"name":"ReleaseServiceTest","methodName":"preparesStandardInvoice"}]}}}}'
-else
-  printf '%s\n' '{"status":1,"message":"unexpected command"}'
-fi
-"#,
+fn authenticated_adapter_uses_non_secret_auth_repeated_retrieve_and_check_only_deploy() {
+    let fixture = live_fixture("sf-cli", READY_DEPLOY, "reformat-second");
+    let outcome = run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&fixture.cache),
+        &fixture.cli,
     )
     .unwrap();
-    let mut permissions = fs::metadata(&executable).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&executable, permissions).unwrap();
-
-    let manifest = CiManifest::load(MANIFEST).unwrap();
-    let compilation = project::compile(PROJECT).unwrap();
-    let inventory = OrgInventory::capture(PROJECT, "local").unwrap();
-    let affected = select_affected_components(&manifest, &compilation, &inventory);
-    let tests = vec![
-        "ReleaseServiceTest.preparesPriorityInvoice".to_owned(),
-        "ReleaseServiceTest.preparesStandardInvoice".to_owned(),
-    ];
-    let snapshot = SalesforceValidationCli::new(&executable)
-        .validate(Path::new(PROJECT), "staging", &inventory, &affected, &tests)
-        .unwrap();
-    assert!(snapshot.authenticated);
-    assert_eq!(snapshot.org_id.as_deref(), Some("00D000000000001"));
-    assert!(snapshot.validation.success);
-    assert_eq!(snapshot.validation.tests.len(), 2);
-    let commands = fs::read_to_string(log).unwrap();
-    assert!(commands.contains("org display --target-org staging --json"));
+    assert!(outcome.validation_snapshot.authenticated);
+    assert_eq!(outcome.validation_snapshot.evidence.org_id, ORG_ID);
+    assert_eq!(outcome.validation_snapshot.evidence.retrieval_count, 2);
+    assert_eq!(outcome.validation_snapshot.evidence.api_version, "65.0");
+    assert_eq!(
+        outcome.validation_snapshot.evidence.salesforce_cli_version,
+        "2.30.8"
+    );
+    assert_eq!(
+        outcome.validation_snapshot.evidence.request.changed_paths,
+        [PathBuf::from(
+            "force-app/main/default/classes/ReleaseService.cls"
+        )]
+    );
+    assert_eq!(
+        outcome.validation_snapshot.evidence.request.test_level,
+        apex_exec::hybrid::DeploymentTestLevel::RunSpecifiedTests
+    );
+    assert!(
+        outcome
+            .validation_snapshot
+            .evidence
+            .request
+            .affected_components
+            .iter()
+            .all(|component| component.sha256.len() == 64)
+    );
+    assert!(outcome.validation_snapshot.validation.success);
+    assert_eq!(outcome.validation_snapshot.validation.tests.len(), 2);
+    let commands = fs::read_to_string(fixture.root.join("commands.log")).unwrap();
+    assert!(commands.contains("org display --target-org recorded-staging --json"));
     assert!(!commands.contains("--verbose"));
-    assert!(commands.contains("project retrieve start"));
+    assert_eq!(commands.matches("project retrieve start").count(), 2);
+    assert!(commands.contains("--api-version 65.0"));
     assert!(commands.contains("--metadata CustomField:Invoice__c.Amount__c"));
     assert!(commands.contains("project deploy start --dry-run"));
     assert!(commands.contains("--test-level RunSpecifiedTests"));
     assert!(commands.contains("--tests ReleaseServiceTest.preparesPriorityInvoice"));
+
+    let snapshot = serde_json::to_string(&outcome.validation_snapshot).unwrap();
+    let report = serde_json::to_string(&outcome.report).unwrap();
+    for secret in [
+        "secret-access-token",
+        "https://staging.example.invalid",
+        "force://client:secret:refresh-token@example.invalid",
+    ] {
+        assert!(!snapshot.contains(secret));
+        assert!(!report.contains(secret));
+    }
 }
 
+#[cfg(unix)]
+#[test]
+fn repeated_retrieval_content_changes_fail_before_deployment() {
+    let fixture = live_fixture("unstable-retrieval", READY_DEPLOY, "diverge-second");
+    let error = run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&fixture.cache),
+        &fixture.cli,
+    )
+    .unwrap_err();
+    assert!(error.contains("did not normalize identically"), "{error}");
+    let commands = fs::read_to_string(fixture.root.join("commands.log")).unwrap();
+    assert_eq!(commands.matches("project retrieve start").count(), 2);
+    assert!(!commands.contains("project deploy start"));
+}
+
+#[cfg(unix)]
 #[test]
 fn hybrid_cli_replays_snapshot_writes_json_and_sets_readiness_exit_status() {
-    let root = fixture_root("cli");
-    copy_tree(Path::new(PROJECT), &root);
-    let manifest_path = root.join("apex-exec-ci.json");
-    let mut manifest = CiManifest::generate(&root).unwrap();
-    manifest.changed_files = vec![PathBuf::from(
-        "force-app/main/default/classes/ReleaseService.cls",
-    )];
-    manifest.reports = CiReports::default();
-    manifest.write(&manifest_path).unwrap();
-    let inventory = OrgInventory::capture(&root, "recorded-staging").unwrap();
-    let snapshot_path = root.join("validation.json");
-    ready_snapshot(inventory).write(&snapshot_path).unwrap();
-    let report_path = root.join("readiness.json");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_apex-exec"))
-        .args([
-            "hybrid",
-            manifest_path.to_str().unwrap(),
-            "--validation-snapshot",
-            snapshot_path.to_str().unwrap(),
-            "--report",
-            report_path.to_str().unwrap(),
-            "--no-cache",
-        ])
-        .output()
-        .unwrap();
+    let fixture = ready_fixture("cli-ready");
+    let report_path = fixture.root.join("readiness.json");
+    let output = hybrid_cli(&fixture, &report_path);
     assert!(
         output.status.success(),
         "{}",
@@ -293,65 +315,200 @@ fn hybrid_cli_replays_snapshot_writes_json_and_sets_readiness_exit_status() {
         serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
     assert_eq!(report["ready"], true);
 
-    let mut snapshot = ValidationSnapshot::load(&snapshot_path).unwrap();
-    snapshot.validation.tests.pop();
-    snapshot.write(&snapshot_path).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_apex-exec"))
-        .args([
-            "hybrid",
-            manifest_path.to_str().unwrap(),
-            "--validation-snapshot",
-            snapshot_path.to_str().unwrap(),
-            "--no-cache",
-        ])
-        .output()
-        .unwrap();
+    let blocked = live_fixture("cli-blocked", MISSING_TEST_DEPLOY, "clean");
+    let live = run_with_cli(
+        &blocked.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&blocked.cache),
+        &blocked.cli,
+    )
+    .unwrap();
+    live.validation_snapshot.write(&blocked.snapshot).unwrap();
+    let output = hybrid_cli(&blocked, &blocked.root.join("blocked.json"));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("RELEASE BLOCKED"));
 }
 
-fn ready_fixture(label: &str) -> (CiManifest, PathBuf) {
+#[cfg(unix)]
+#[test]
+fn tampered_replay_fails_before_writing_a_readiness_report() {
+    let fixture = ready_fixture("cli-tamper");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.snapshot).unwrap()).unwrap();
+    json["evidence"]["capturedAt"] = serde_json::json!("2026-07-18T00:00:00Z");
+    fs::write(&fixture.snapshot, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    let report = fixture.root.join("must-not-exist.json");
+    let output = hybrid_cli(&fixture, &report);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("snapshot digest does not match"));
+    assert!(!report.exists());
+}
+
+#[cfg(unix)]
+struct Fixture {
+    root: PathBuf,
+    manifest_path: PathBuf,
+    manifest: CiManifest,
+    cli: SalesforceValidationCli,
+    cache: PathBuf,
+    snapshot: PathBuf,
+}
+
+#[cfg(unix)]
+fn ready_fixture(label: &str) -> Fixture {
+    let fixture = live_fixture(label, READY_DEPLOY, "clean");
+    let outcome = run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::TargetOrg(TARGET.to_owned()),
+        &live_options(&fixture.cache),
+        &fixture.cli,
+    )
+    .unwrap();
+    outcome
+        .validation_snapshot
+        .write(&fixture.snapshot)
+        .unwrap();
+    fixture
+}
+
+#[cfg(unix)]
+fn replay(fixture: &Fixture) -> Result<apex_exec::hybrid::HybridRunOutcome, String> {
+    run_with_cli(
+        &fixture.manifest,
+        &ValidationSource::Snapshot(fixture.snapshot.clone()),
+        &replay_options(&fixture.cache),
+        &fixture.cli,
+    )
+}
+
+#[cfg(unix)]
+fn live_fixture(label: &str, deploy: &str, retrieve_mode: &str) -> Fixture {
+    use std::os::unix::fs::PermissionsExt;
+
     let root = fixture_root(label);
-    let inventory = OrgInventory::capture(PROJECT, "recorded-staging").unwrap();
-    let path = root.join("validation.json");
-    ready_snapshot(inventory).write(&path).unwrap();
-    (CiManifest::load(MANIFEST).unwrap(), path)
-}
+    let executable = root.join("sf");
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
+set -eu
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+printf '%s\n' "$*" >> "$dir/commands.log"
+if [ "${1:-}" = "--version" ]; then
+  printf '%s\n' '@salesforce/cli/2.30.8 darwin-arm64 node-v20.11.1'
+elif [ "$1 $2" = "org display" ]; then
+  cat "$dir/auth.json"
+elif [ "$1 $2 $3" = "project retrieve start" ]; then
+  out=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--output-dir" ]; then
+      shift
+      out="$1"
+    fi
+    shift
+  done
+  count=0
+  if [ -f "$dir/retrieve-count" ]; then count=$(cat "$dir/retrieve-count"); fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$dir/retrieve-count"
+  mkdir -p "$out"
+  cp -R force-app "$out/"
+  mode=$(cat "$dir/retrieve-mode")
+  permission="$out/force-app/main/default/permissionsets/Release_Manager.permissionset-meta.xml"
+  if [ "$mode" = "drift" ]; then
+    printf '%s\n' '<PermissionSet><label>Controlled Drift</label></PermissionSet>' > "$permission"
+  elif [ "$mode" = "reformat-second" ] && [ "$count" -eq 2 ]; then
+    tr -d '\n' < "$permission" > "$permission.compact"
+    mv "$permission.compact" "$permission"
+  elif [ "$mode" = "diverge-second" ] && [ "$count" -eq 2 ]; then
+    printf '%s\n' '<PermissionSet><label>Unstable Retrieval</label></PermissionSet>' > "$permission"
+  fi
+  printf '%s\n' '{"status":0,"result":{"success":true}}'
+elif [ "$1 $2 $3" = "project deploy start" ]; then
+  cat "$dir/deploy.json"
+else
+  printf '%s\n' '{"status":1,"message":"unexpected command"}'
+fi
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+    fs::write(root.join("retrieve-mode"), retrieve_mode).unwrap();
+    fs::write(root.join("deploy.json"), deploy).unwrap();
+    fs::write(
+        root.join("auth.json"),
+        format!(
+            r#"{{"status":0,"result":{{"orgId":"{ORG_ID}","connectedStatus":"Connected","accessToken":"secret-access-token","instanceUrl":"https://staging.example.invalid","sfdxAuthUrl":"force://client:secret:refresh-token@example.invalid"}}}}"#
+        ),
+    )
+    .unwrap();
 
-fn ready_snapshot(inventory: OrgInventory) -> ValidationSnapshot {
-    ValidationSnapshot {
-        schema_version: HYBRID_SCHEMA_VERSION,
-        target: inventory.target.clone(),
-        authenticated: false,
-        org_id: Some("00D-recorded".to_owned()),
-        inventory,
-        validation: DeploymentValidation {
-            success: true,
-            deployment_id: Some("0Af-recorded".to_owned()),
-            component_failures: Vec::new(),
-            tests: vec![
-                ValidationTest {
-                    name: "ReleaseServiceTest.preparesPriorityInvoice".to_owned(),
-                    outcome: "pass".to_owned(),
-                    message: None,
-                },
-                ValidationTest {
-                    name: "ReleaseServiceTest.preparesStandardInvoice".to_owned(),
-                    outcome: "pass".to_owned(),
-                    message: None,
-                },
-            ],
-        },
+    let project = root.join("project");
+    copy_tree(Path::new(PROJECT), &project);
+    let manifest_path = project.join("apex-exec-ci.json");
+    let mut manifest = CiManifest::load(&manifest_path).unwrap();
+    manifest.reports = CiReports::default();
+    manifest.write(&manifest_path).unwrap();
+    Fixture {
+        cache: root.join("cache"),
+        snapshot: root.join("validation.json"),
+        cli: SalesforceValidationCli::new(&executable),
+        manifest_path,
+        manifest,
+        root,
     }
 }
 
-fn no_cache() -> HybridRunOptions {
+#[cfg(unix)]
+fn live_options(cache: &Path) -> HybridRunOptions {
     HybridRunOptions {
-        ci: apex_exec::ci::CiRunOptions {
-            no_cache: true,
-            ..apex_exec::ci::CiRunOptions::default()
+        ci: CiRunOptions {
+            cache_dir: Some(cache.to_owned()),
+            ..CiRunOptions::default()
         },
+        ..HybridRunOptions::default()
     }
+}
+
+#[cfg(unix)]
+fn replay_options(cache: &Path) -> HybridRunOptions {
+    HybridRunOptions {
+        ci: CiRunOptions {
+            cache_dir: Some(cache.to_owned()),
+            replay_only: true,
+            ..CiRunOptions::default()
+        },
+        expected_target_org: Some(TARGET.to_owned()),
+        expected_org_id: Some(ORG_ID.to_owned()),
+        ..HybridRunOptions::default()
+    }
+}
+
+#[cfg(unix)]
+fn hybrid_cli(fixture: &Fixture, report: &Path) -> std::process::Output {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![fixture.root.clone()];
+    paths.extend(std::env::split_paths(&path));
+    Command::new(env!("CARGO_BIN_EXE_apex-exec"))
+        .args([
+            "hybrid",
+            fixture.manifest_path.to_str().unwrap(),
+            "--validation-snapshot",
+            fixture.snapshot.to_str().unwrap(),
+            "--expected-target-org",
+            TARGET,
+            "--expected-org-id",
+            ORG_ID,
+            "--replay",
+            "--cache-dir",
+            fixture.cache.to_str().unwrap(),
+            "--report",
+            report.to_str().unwrap(),
+        ])
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap()
 }
 
 fn copy_tree(source: &Path, destination: &Path) {
