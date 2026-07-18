@@ -9,7 +9,9 @@ use crate::{
     project::Compilation,
     runtime::{ExecutionTrace, Interpreter},
 };
+use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeSet,
     path::PathBuf,
     sync::{
         Mutex,
@@ -33,7 +35,7 @@ impl Default for TestOptions {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestReport {
     pub tests: Vec<TestResult>,
     pub coverage: CoverageReport,
@@ -56,7 +58,7 @@ impl TestReport {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestResult {
     pub name: String,
     pub class_name: String,
@@ -65,14 +67,14 @@ pub struct TestResult {
     pub failure: Option<TestFailure>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestFailure {
     pub exception_type: Option<String>,
     pub message: String,
     pub rendered: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CoverageReport {
     pub files: Vec<FileCoverage>,
     pub total_lines: usize,
@@ -81,7 +83,7 @@ pub struct CoverageReport {
     pub covered_branches: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileCoverage {
     pub path: PathBuf,
     pub total_lines: usize,
@@ -99,11 +101,42 @@ struct ExecutedCase {
 }
 
 pub fn run(compilation: &Compilation, options: &TestOptions) -> Result<TestReport, String> {
+    run_internal(compilation, options, None, false)
+}
+
+/// Runs the exact qualified test names supplied by a CI selection pass.
+///
+/// An empty selection is a valid no-op report: a dependency analysis may
+/// correctly determine that an isolated production change impacts no Apex
+/// tests.
+pub fn run_selected(
+    compilation: &Compilation,
+    options: &TestOptions,
+    selected: &BTreeSet<String>,
+) -> Result<TestReport, String> {
+    run_internal(compilation, options, Some(selected), true)
+}
+
+fn run_internal(
+    compilation: &Compilation,
+    options: &TestOptions,
+    selected: Option<&BTreeSet<String>>,
+    allow_empty: bool,
+) -> Result<TestReport, String> {
     if options.jobs == 0 {
         return Err("test jobs must be at least 1".to_owned());
     }
-    let cases = discover_tests(compilation, options.filter.as_deref());
+    let mut cases = discover_tests(compilation, options.filter.as_deref());
+    if let Some(selected) = selected {
+        cases.retain(|case| selected.contains(&case.name));
+    }
     if cases.is_empty() {
+        if allow_empty {
+            return Ok(TestReport {
+                tests: Vec::new(),
+                coverage: build_coverage(compilation, std::iter::empty()),
+            });
+        }
         return Err(match &options.filter {
             Some(filter) => format!("no Apex tests matched filter `{filter}`"),
             None => "no Apex tests were discovered".to_owned(),

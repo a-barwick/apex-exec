@@ -8,14 +8,15 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first thirteen milestones provide the core language, typed collections,
+The first fourteen milestones provide the core language, typed collections,
 exceptions, classes and inheritance, SFDX project compilation, isolated Apex
 tests with coverage, metadata-backed SObjects, SQLite transactions, checked
 SOQL/SOSL and DML, triggers with rollback, and a curated platform API profile.
 That profile includes date/time/decimal/ID/Blob values, JSON, regex, schema
 describe, deterministic context and limits, and host-mocked HTTP callouts.
-Deterministic async execution, editor/REPL debugging, and a measured
-Salesforce differential oracle complete the current local feedback loop.
+Deterministic async execution, editor/REPL debugging, a measured Salesforce
+differential oracle, and hermetic content-addressed enterprise CI complete the
+current local feedback loop.
 Apex identifiers, types, and method names are case-insensitive.
 
 ```console
@@ -98,6 +99,21 @@ cargo run -- oracle examples/milestone13-oracle/oracle-manifest.json \
 # Re-run the local side against reviewed, versioned Salesforce evidence.
 cargo run -- oracle examples/milestone13-oracle/oracle-manifest.json \
   --salesforce-snapshot milestone13-salesforce.json
+```
+
+The M14 CI manifest seals project inputs, selects impacted tests, runs
+independent deterministic shards, caches exact results, and emits
+JUnit/Cobertura/SARIF:
+
+```bash
+cargo run -- ci run \
+  examples/milestone14-project/apex-exec-ci.json \
+  --shard 0/2
+
+# Require the exact verified artifact without falling back to execution.
+cargo run -- ci run \
+  examples/milestone14-project/apex-exec-ci.json \
+  --shard 0/2 --replay
 ```
 
 Compiler stages can be inspected independently:

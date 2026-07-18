@@ -283,7 +283,7 @@ reported as measured coverage, not asserted as a blanket claim.
 
 ## M14 — Enterprise CI
 
-**Status:** Active
+**Status:** Complete
 
 - Incremental compilation and impacted-test selection
 - Content-addressed caches, sharding, and distributed workers
@@ -298,7 +298,7 @@ A large Apex repository can validate a pull request without provisioning an org.
 
 ## M15 — Hybrid deployment confidence
 
-**Status:** Planned
+**Status:** Active
 
 - Optional validation-org authentication
 - Affected-component and affected-test selection

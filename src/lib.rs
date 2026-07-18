@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod ci;
 pub mod dap;
 pub mod debugger;
 pub mod diagnostic;

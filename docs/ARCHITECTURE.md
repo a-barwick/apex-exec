@@ -166,6 +166,7 @@ state between interpreters.
 | `lsp` | Stdio Language Server Protocol requests and document diagnostics |
 | `dap` | Stdio Debug Adapter Protocol launch and inspection workflows |
 | `oracle` | Versioned conformance manifests, local/Salesforce adapters, normalized snapshots, differential reports, and measured compatibility coverage |
+| `ci` | Hermetic input manifests, content-addressed result artifacts, impacted-test selection, deterministic sharding, standard reports, and policy gates |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 
@@ -351,16 +352,42 @@ promoted implicitly.
 API-version, sharing, limits, and security behavior should eventually be
 explicit runtime profiles. They must not appear as scattered conditionals.
 
+## Enterprise CI architecture
+
+M14 keeps orchestration above the compiler and runtime. A versioned CI manifest
+records the Apex Exec version, every file below the SFDX package roots, the
+project configuration, SHA-256 digests, changed paths, shard topology, report
+destinations, and policy. A run refuses modified, missing, unrecorded, unsafe,
+or symlinked inputs before consulting its cache. The normalized manifest,
+sealed inputs, policy, and effective shard form the content address.
+
+On a cache miss, project compilation remains the sole owner of parsing,
+semantic analysis, and its dependency graph. Changed `.cls` files select test
+classes through the transitive reverse dependency closure. Metadata, triggers,
+deleted files, and paths absent from the current graph deliberately select all
+tests because their effects cannot be proven local. Qualified test names are
+sorted and partitioned by stable index modulo shard count; workers therefore
+need no shared scheduler and can publish independent artifacts.
+
+The cache artifact contains the compile outcome, exact test selection,
+deterministic test/coverage observations, measured durations, and policy
+outcome. Artifacts carry a result digest and are published by atomic rename.
+Replay first verifies current inputs and then requires an exact cache key and
+result digest. JUnit, Cobertura, and SARIF are regenerated from either an
+executed or replayed artifact. GitHub Actions, GitLab CI, and Jenkins templates
+obtain changed paths from their pull-request base and run the same manifest on
+two independent shards.
+
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.
-The current foundation already includes class dependency graphs, parsed-unit
-reuse, isolated parallel test execution, and per-file coverage aggregation.
-Further project-scale performance work will rely on:
+The current foundation includes class dependency graphs, parsed-unit reuse,
+isolated parallel test execution, per-file coverage aggregation, hermetic CI
+manifests, content-addressed whole-run reuse, and deterministic distributed
+shards. Further project-scale performance work can rely on:
 
 - Interned names and types
 - Dependency-scoped incremental semantic analysis
-- Cached typed or lowered IR
-- Content-addressed CI artifacts
+- Cached typed or lowered IR within the existing content-addressed boundary
 
 These optimizations must preserve deterministic results and source diagnostics.

@@ -25,7 +25,17 @@ fn run() -> Result<ExitCode, String> {
     }
     if !matches!(
         command.as_str(),
-        "run" | "tokens" | "ast" | "check" | "invoke" | "test" | "repl" | "lsp" | "dap" | "oracle"
+        "run"
+            | "tokens"
+            | "ast"
+            | "check"
+            | "invoke"
+            | "test"
+            | "repl"
+            | "lsp"
+            | "dap"
+            | "oracle"
+            | "ci"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
@@ -62,6 +72,10 @@ fn run() -> Result<ExitCode, String> {
 
     if command == "oracle" {
         return run_oracle(args);
+    }
+
+    if command == "ci" {
+        return run_ci(args);
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -224,6 +238,260 @@ fn run_oracle(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String
     })
 }
 
+fn run_ci(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let subcommand = args.next().ok_or_else(usage)?;
+    match subcommand.as_str() {
+        "manifest" => {
+            let project = PathBuf::from(args.next().ok_or_else(usage)?);
+            let mut output = None;
+            let mut changed_files = Vec::new();
+            let mut changed_list = None;
+            let mut shards = 1usize;
+            let mut jobs = 1usize;
+            let mut junit = None;
+            let mut sarif = None;
+            let mut coverage = None;
+            let mut min_line_coverage = None;
+            let mut min_branch_coverage = None;
+            let mut max_duration_ms = None;
+            let mut compatibility_report = None;
+            let mut min_compatibility = None;
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--output" => set_once(
+                        &mut output,
+                        PathBuf::from(required_value(&mut args, "--output")?),
+                        "`--output` was provided more than once",
+                    )?,
+                    "--changed" => {
+                        changed_files.push(PathBuf::from(required_value(&mut args, "--changed")?))
+                    }
+                    "--changed-list" => set_once(
+                        &mut changed_list,
+                        PathBuf::from(required_value(&mut args, "--changed-list")?),
+                        "`--changed-list` was provided more than once",
+                    )?,
+                    "--shards" => {
+                        shards = positive_usize(required_value(&mut args, "--shards")?, "--shards")?
+                    }
+                    "--jobs" => {
+                        jobs = positive_usize(required_value(&mut args, "--jobs")?, "--jobs")?
+                    }
+                    "--junit" => set_once(
+                        &mut junit,
+                        PathBuf::from(required_value(&mut args, "--junit")?),
+                        "`--junit` was provided more than once",
+                    )?,
+                    "--sarif" => set_once(
+                        &mut sarif,
+                        PathBuf::from(required_value(&mut args, "--sarif")?),
+                        "`--sarif` was provided more than once",
+                    )?,
+                    "--coverage" => set_once(
+                        &mut coverage,
+                        PathBuf::from(required_value(&mut args, "--coverage")?),
+                        "`--coverage` was provided more than once",
+                    )?,
+                    "--min-line-coverage" => {
+                        set_once(
+                            &mut min_line_coverage,
+                            percentage_value(
+                                required_value(&mut args, "--min-line-coverage")?,
+                                "--min-line-coverage",
+                            )?,
+                            "`--min-line-coverage` was provided more than once",
+                        )?;
+                    }
+                    "--min-branch-coverage" => {
+                        set_once(
+                            &mut min_branch_coverage,
+                            percentage_value(
+                                required_value(&mut args, "--min-branch-coverage")?,
+                                "--min-branch-coverage",
+                            )?,
+                            "`--min-branch-coverage` was provided more than once",
+                        )?;
+                    }
+                    "--max-duration-ms" => {
+                        set_once(
+                            &mut max_duration_ms,
+                            required_value(&mut args, "--max-duration-ms")?
+                                .parse::<u64>()
+                                .map_err(|_| {
+                                    "`--max-duration-ms` requires a non-negative integer".to_owned()
+                                })?,
+                            "`--max-duration-ms` was provided more than once",
+                        )?;
+                    }
+                    "--compatibility-report" => set_once(
+                        &mut compatibility_report,
+                        PathBuf::from(required_value(&mut args, "--compatibility-report")?),
+                        "`--compatibility-report` was provided more than once",
+                    )?,
+                    "--min-compatibility" => {
+                        set_once(
+                            &mut min_compatibility,
+                            percentage_value(
+                                required_value(&mut args, "--min-compatibility")?,
+                                "--min-compatibility",
+                            )?,
+                            "`--min-compatibility` was provided more than once",
+                        )?;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unknown CI manifest option `{argument}`\n\n{}",
+                            usage()
+                        ));
+                    }
+                }
+            }
+            let output = output.ok_or_else(|| "`ci manifest` requires `--output`".to_owned())?;
+            if let Some(path) = changed_list {
+                changed_files.extend(read_changed_list(&path)?);
+            }
+            let mut manifest = apex_exec::ci::CiManifest::generate(project)?;
+            manifest.changed_files = changed_files;
+            manifest.shard.total = shards;
+            manifest.jobs = jobs;
+            if junit.is_some() {
+                manifest.reports.junit = junit;
+            }
+            if sarif.is_some() {
+                manifest.reports.sarif = sarif;
+            }
+            if coverage.is_some() {
+                manifest.reports.coverage = coverage;
+            }
+            manifest.policy.min_line_coverage = min_line_coverage;
+            manifest.policy.min_branch_coverage = min_branch_coverage;
+            manifest.policy.max_duration_ms = max_duration_ms;
+            manifest.policy.compatibility_report = compatibility_report;
+            manifest.policy.min_compatibility = min_compatibility;
+            manifest.refresh_inputs()?;
+            manifest.write(&output)?;
+            println!(
+                "Wrote hermetic CI manifest {} ({} inputs)",
+                output.display(),
+                manifest.inputs.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "run" => {
+            let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+            let mut options = apex_exec::ci::CiRunOptions::default();
+            let mut changed_list = None;
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--cache-dir" => {
+                        set_once(
+                            &mut options.cache_dir,
+                            PathBuf::from(required_value(&mut args, "--cache-dir")?),
+                            "`--cache-dir` was provided more than once",
+                        )?;
+                    }
+                    "--shard" => {
+                        set_once(
+                            &mut options.shard,
+                            parse_shard(&required_value(&mut args, "--shard")?)?,
+                            "`--shard` was provided more than once",
+                        )?;
+                    }
+                    "--changed-list" => set_once(
+                        &mut changed_list,
+                        PathBuf::from(required_value(&mut args, "--changed-list")?),
+                        "`--changed-list` was provided more than once",
+                    )?,
+                    "--no-cache" => options.no_cache = true,
+                    "--replay" => options.replay_only = true,
+                    _ => {
+                        return Err(format!("unknown CI run option `{argument}`\n\n{}", usage()));
+                    }
+                }
+            }
+            if options.no_cache && options.replay_only {
+                return Err("`--no-cache` and `--replay` cannot be combined".to_owned());
+            }
+            let mut manifest = apex_exec::ci::CiManifest::load(manifest_path)?;
+            if let Some(path) = changed_list {
+                manifest.changed_files = read_changed_list(&path)?;
+            }
+            let result = apex_exec::ci::run(&manifest, &options)?;
+            println!("{}", result.render_console());
+            Ok(if result.is_success() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        "integrations" => {
+            let manifest = PathBuf::from(args.next().ok_or_else(usage)?);
+            let output = PathBuf::from(args.next().ok_or_else(usage)?);
+            if args.next().is_some() {
+                return Err(usage());
+            }
+            for path in apex_exec::ci::write_integrations(output, manifest)? {
+                println!("Wrote {}", path.display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err(format!(
+            "unknown CI subcommand `{subcommand}`\n\n{}",
+            usage()
+        )),
+    }
+}
+
+fn required_value(args: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
+    args.next()
+        .ok_or_else(|| format!("`{option}` requires a value"))
+}
+
+fn positive_usize(value: String, option: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| format!("`{option}` requires a positive integer"))
+}
+
+fn percentage_value(value: String, option: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+        .ok_or_else(|| format!("`{option}` requires a percentage between 0 and 100"))
+}
+
+fn parse_shard(value: &str) -> Result<apex_exec::ci::CiShard, String> {
+    let (index, total) = value
+        .split_once('/')
+        .ok_or_else(|| "`--shard` requires zero-based INDEX/TOTAL".to_owned())?;
+    let index = index
+        .parse::<usize>()
+        .map_err(|_| "`--shard` requires zero-based INDEX/TOTAL".to_owned())?;
+    let total = positive_usize(total.to_owned(), "--shard")?;
+    if index >= total {
+        return Err("`--shard` index must be below its total".to_owned());
+    }
+    Ok(apex_exec::ci::CiShard { index, total })
+}
+
+fn read_changed_list(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "failed to read changed-file list `{}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
 fn set_once<T>(slot: &mut Option<T>, value: T, duplicate: &str) -> Result<(), String> {
     if slot.is_some() {
         return Err(duplicate.to_owned());
@@ -340,6 +608,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }
