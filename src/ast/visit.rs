@@ -423,6 +423,20 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
             visitor.visit_type_name(ty);
             visitor.visit_expression(expression);
         }
+        Expression::Conditional {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            visitor.visit_expression(condition);
+            visitor.visit_expression(when_true);
+            visitor.visit_expression(when_false);
+        }
+        Expression::Instanceof { value, target, .. } => {
+            visitor.visit_expression(value);
+            visitor.visit_type_name(target);
+        }
         Expression::Unary { operand, .. } | Expression::Postfix { operand, .. } => {
             visitor.visit_expression(operand);
         }

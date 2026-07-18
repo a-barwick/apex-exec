@@ -14,7 +14,7 @@ impl Parser {
     }
 
     pub(super) fn parse_assignment(&mut self) -> Result<Expression, Diagnostic> {
-        let expression = self.parse_or()?;
+        let expression = self.parse_conditional()?;
         if !self.check(&TokenKind::Equal) {
             return Ok(expression);
         }
@@ -51,6 +51,29 @@ impl Parser {
         })
     }
 
+    pub(super) fn parse_conditional(&mut self) -> Result<Expression, Diagnostic> {
+        let condition = self.parse_or()?;
+        if !self.check(&TokenKind::Question) {
+            return Ok(condition);
+        }
+
+        let question = self.advance();
+        let when_true = self.parse_expression()?;
+        self.expect_simple(
+            TokenKind::Colon,
+            "expected `:` after the true branch of conditional expression",
+        )?;
+        let when_false = self.parse_conditional()?;
+        let span = condition.span().merge(when_false.span());
+        Ok(Expression::Conditional {
+            condition: Box::new(condition),
+            when_true: Box::new(when_true),
+            when_false: Box::new(when_false),
+            question_span: question.span,
+            span,
+        })
+    }
+
     pub(super) fn parse_or(&mut self) -> Result<Expression, Diagnostic> {
         self.parse_binary_level(Self::parse_and, &[(TokenKind::OrOr, BinaryOperator::Or)])
     }
@@ -73,15 +96,45 @@ impl Parser {
     }
 
     pub(super) fn parse_comparison(&mut self) -> Result<Expression, Diagnostic> {
-        self.parse_binary_level(
-            Self::parse_term,
-            &[
+        let mut expression = self.parse_term()?;
+        loop {
+            if self.check(&TokenKind::Instanceof) {
+                let operator = self.advance();
+                let (target, target_span) = self.parse_type_name()?;
+                let span = expression.span().merge(target_span);
+                expression = Expression::Instanceof {
+                    value: Box::new(expression),
+                    target,
+                    target_span,
+                    operator_span: operator.span,
+                    span,
+                };
+                continue;
+            }
+            let operator = [
                 (TokenKind::Less, BinaryOperator::Less),
                 (TokenKind::LessEqual, BinaryOperator::LessEqual),
                 (TokenKind::Greater, BinaryOperator::Greater),
                 (TokenKind::GreaterEqual, BinaryOperator::GreaterEqual),
-            ],
-        )
+            ]
+            .iter()
+            .find(|(kind, _)| self.check(kind))
+            .map(|(_, operator)| *operator);
+            let Some(operator) = operator else {
+                break;
+            };
+            let operator_token = self.advance();
+            let right = self.parse_term()?;
+            let span = expression.span().merge(right.span());
+            expression = Expression::Binary {
+                left: Box::new(expression),
+                operator,
+                right: Box::new(right),
+                operator_span: operator_token.span,
+                span,
+            };
+        }
+        Ok(expression)
     }
 
     pub(super) fn parse_term(&mut self) -> Result<Expression, Diagnostic> {

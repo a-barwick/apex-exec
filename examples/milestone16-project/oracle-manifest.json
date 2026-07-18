@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "conditional-and-runtime-type-output",
+      "project": ".",
+      "entrypoint": {
+        "kind": "invoke",
+        "target": "ConditionalTypes.run"
+      },
+      "compare": [
+        "compile",
+        "output"
+      ]
+    },
+    {
+      "name": "conditional-and-runtime-type-tests",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "ConditionalTypesTest.coversBothConditionalAndRuntimeTypeBranches"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

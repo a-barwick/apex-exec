@@ -1685,6 +1685,20 @@ impl Checker {
                 span,
             } => self.member_access_type(receiver, member, *span, false),
             Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
+            Expression::Conditional {
+                condition,
+                when_true,
+                when_false,
+                question_span,
+                ..
+            } => self.conditional_type(condition, when_true, when_false, *question_span),
+            Expression::Instanceof {
+                value,
+                target,
+                target_span,
+                operator_span,
+                ..
+            } => self.instanceof_type(value, target, *target_span, *operator_span),
             Expression::Unary {
                 operator,
                 operand,
@@ -3015,6 +3029,141 @@ impl Checker {
                     ))
                 }
             }
+        }
+    }
+
+    fn conditional_type(
+        &mut self,
+        condition: &Expression,
+        when_true: &Expression,
+        when_false: &Expression,
+        question_span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        self.require_operand(condition, &TypeName::Boolean, condition.span())?;
+        let true_type = self.expression_type(when_true)?;
+        let false_type = self.expression_type(when_false)?;
+        match (&true_type, &false_type) {
+            (ExpressionType::Void, _) | (_, ExpressionType::Void) => Err(Diagnostic::new(
+                format!(
+                    "conditional branches must produce values, found {} and {}",
+                    true_type.name(),
+                    false_type.name()
+                ),
+                question_span,
+            )),
+            (ExpressionType::Null, ExpressionType::Null) => Ok(ExpressionType::Null),
+            (ExpressionType::Null, ExpressionType::Value(ty))
+            | (ExpressionType::Value(ty), ExpressionType::Null) => {
+                Ok(ExpressionType::Value(ty.clone()))
+            }
+            (ExpressionType::Value(left), ExpressionType::Value(right)) if left == right => {
+                Ok(ExpressionType::Value(left.clone()))
+            }
+            (ExpressionType::Value(left), ExpressionType::Value(right))
+                if self.is_subtype(left, right) =>
+            {
+                Ok(ExpressionType::Value(right.clone()))
+            }
+            (ExpressionType::Value(left), ExpressionType::Value(right))
+                if self.is_subtype(right, left) =>
+            {
+                Ok(ExpressionType::Value(left.clone()))
+            }
+            (ExpressionType::Value(_), ExpressionType::Value(_)) => {
+                Ok(ExpressionType::Value(TypeName::Object))
+            }
+        }
+    }
+
+    fn instanceof_type(
+        &mut self,
+        value: &Expression,
+        target: &TypeName,
+        target_span: Span,
+        operator_span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        self.validate_type(target, target_span)?;
+        let actual = self.expression_type(value)?;
+        match actual {
+            ExpressionType::Null => Ok(ExpressionType::Value(TypeName::Boolean)),
+            ExpressionType::Void => Err(Diagnostic::new(
+                "`instanceof` left operand cannot be void",
+                value.span(),
+            )),
+            ExpressionType::Value(actual) => {
+                if self.is_runtime_subtype(&actual, target) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`instanceof` test is always true because {} is a {}",
+                            actual.apex_name(),
+                            target.apex_name()
+                        ),
+                        operator_span,
+                    ));
+                }
+                if !self.instanceof_types_can_overlap(&actual, target) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "{} is not a viable runtime type for {}",
+                            target.apex_name(),
+                            actual.apex_name()
+                        ),
+                        target_span,
+                    ));
+                }
+                Ok(ExpressionType::Value(TypeName::Boolean))
+            }
+        }
+    }
+
+    fn is_runtime_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        if actual == expected || *expected == TypeName::Object {
+            return true;
+        }
+        if *expected == TypeName::Exception && actual.is_exception() {
+            return true;
+        }
+        if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
+            return true;
+        }
+        let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
+            return false;
+        };
+        let Some(actual_id) = self.class_ids.get(&actual.canonical).copied() else {
+            return false;
+        };
+        let Some(expected_id) = self.class_ids.get(&expected.canonical).copied() else {
+            return false;
+        };
+        self.class_is_or_inherits(actual_id, expected_id)
+    }
+
+    fn instanceof_types_can_overlap(&self, declared: &TypeName, target: &TypeName) -> bool {
+        if self.is_runtime_subtype(target, declared) {
+            return true;
+        }
+        let (TypeName::Custom(declared), TypeName::Custom(target)) = (declared, target) else {
+            return false;
+        };
+        let (Some(declared_id), Some(target_id)) = (
+            self.class_ids.get(&declared.canonical).copied(),
+            self.class_ids.get(&target.canonical).copied(),
+        ) else {
+            return false;
+        };
+        let declared_class = &self.classes[declared_id];
+        let target_class = &self.classes[target_id];
+        match (declared_class.kind, target_class.kind) {
+            (ClassKind::Interface, ClassKind::Interface) => true,
+            (ClassKind::Class, ClassKind::Interface) => {
+                declared_class.modifiers.contains(&Modifier::Virtual)
+                    || declared_class.modifiers.contains(&Modifier::Abstract)
+            }
+            (ClassKind::Interface, ClassKind::Class) => {
+                target_class.modifiers.contains(&Modifier::Virtual)
+                    || target_class.modifiers.contains(&Modifier::Abstract)
+            }
+            (ClassKind::Class, ClassKind::Class) => false,
         }
     }
 

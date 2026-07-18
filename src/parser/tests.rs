@@ -78,6 +78,77 @@ fn assignment_parses_right_associatively() {
 }
 
 #[test]
+fn conditional_is_right_associative_and_binds_between_or_and_assignment() {
+    let program = parse(
+        "Boolean first = true; Boolean second = false; Integer value = 0; \
+         value = first || second ? 1 : second ? 2 : 3;",
+    );
+    let Statement::Expression { expression, .. } = &program.statements[3] else {
+        panic!("expected assignment statement");
+    };
+    let Expression::Assignment { value, .. } = expression else {
+        panic!("expected assignment at the expression root");
+    };
+    let Expression::Conditional {
+        condition,
+        when_false,
+        ..
+    } = value.as_ref()
+    else {
+        panic!("expected conditional below assignment");
+    };
+    assert!(matches!(
+        condition.as_ref(),
+        Expression::Binary {
+            operator: BinaryOperator::Or,
+            ..
+        }
+    ));
+    assert!(matches!(
+        when_false.as_ref(),
+        Expression::Conditional { .. }
+    ));
+}
+
+#[test]
+fn instanceof_binds_as_a_comparison_and_preserves_generic_target() {
+    let program = parse(
+        "Object value = new List<String>(); \
+         Boolean result = value instanceof List<String> == true;",
+    );
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[1] else {
+        panic!("expected declaration");
+    };
+    let Expression::Binary {
+        left,
+        operator: BinaryOperator::Equal,
+        ..
+    } = initializer
+    else {
+        panic!("expected equality at the expression root");
+    };
+    assert!(matches!(
+        left.as_ref(),
+        Expression::Instanceof {
+            target: TypeName::List(element),
+            ..
+        } if element.as_ref() == &TypeName::String
+    ));
+}
+
+#[test]
+fn conditional_requires_a_false_branch_in_the_parser() {
+    let error = Parser::new(Lexer::new("Integer value = true ? 1;").tokenize().unwrap())
+        .parse_program()
+        .unwrap_err();
+
+    assert_eq!(
+        error.message,
+        "expected `:` after the true branch of conditional expression"
+    );
+}
+
+#[test]
 fn else_binds_to_the_nearest_if() {
     let program = parse("if (true) if (false) System.debug('inner'); else System.debug('else');");
     let Statement::If {
