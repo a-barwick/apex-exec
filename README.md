@@ -8,12 +8,14 @@ debugging local-first. Salesforce remains the final compatibility oracle, but
 developers should not need to deploy to an org to discover routine compiler or
 unit-test failures.
 
-The first ten milestones provide the core language, typed collections,
+The first thirteen milestones provide the core language, typed collections,
 exceptions, classes and inheritance, SFDX project compilation, isolated Apex
 tests with coverage, metadata-backed SObjects, SQLite transactions, checked
 SOQL/SOSL and DML, triggers with rollback, and a curated platform API profile.
 That profile includes date/time/decimal/ID/Blob values, JSON, regex, schema
 describe, deterministic context and limits, and host-mocked HTTP callouts.
+Deterministic async execution, editor/REPL debugging, and a measured
+Salesforce differential oracle complete the current local feedback loop.
 Apex identifiers, types, and method names are case-insensitive.
 
 ```console
@@ -81,6 +83,21 @@ $ cargo run -- invoke examples/milestone10-project PlatformDemo.run
 2026-07-18 | 2026-07-17 10:00:00 | 10 | 12.25 | bWlsZXN0b25lLTEw | 10 | true | BYg
 $ cargo run -- test examples/milestone10-project
 Summary: 4 passed, 0 failed, 4 total; 13/13 lines (100.00%), 0/0 branches (100.00%)
+```
+
+The M13 oracle manifest runs identical project entry points locally and in an
+authenticated scratch org, records normalized Salesforce evidence, and reports
+measured compatibility by selected dimension:
+
+```bash
+cargo run -- oracle examples/milestone13-oracle/oracle-manifest.json \
+  --target-org my-scratch \
+  --record-salesforce milestone13-salesforce.json \
+  --report milestone13-report.json
+
+# Re-run the local side against reviewed, versioned Salesforce evidence.
+cargo run -- oracle examples/milestone13-oracle/oracle-manifest.json \
+  --salesforce-snapshot milestone13-salesforce.json
 ```
 
 Compiler stages can be inspected independently:

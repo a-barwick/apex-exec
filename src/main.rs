@@ -25,7 +25,7 @@ fn run() -> Result<ExitCode, String> {
     }
     if !matches!(
         command.as_str(),
-        "run" | "tokens" | "ast" | "check" | "invoke" | "test" | "repl" | "lsp" | "dap"
+        "run" | "tokens" | "ast" | "check" | "invoke" | "test" | "repl" | "lsp" | "dap" | "oracle"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
@@ -58,6 +58,10 @@ fn run() -> Result<ExitCode, String> {
         apex_exec::dap::serve(BufReader::new(io::stdin().lock()), io::stdout().lock())
             .map_err(|error| format!("DAP transport failed: {error}"))?;
         return Ok(ExitCode::SUCCESS);
+    }
+
+    if command == "oracle" {
+        return run_oracle(args);
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -135,6 +139,97 @@ fn run() -> Result<ExitCode, String> {
     result
         .map(|_| ExitCode::SUCCESS)
         .map_err(|diagnostic| diagnostic.render(&path, &source))
+}
+
+fn run_oracle(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut target_org = None;
+    let mut snapshot_path = None;
+    let mut record_path = None;
+    let mut report_path = None;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--target-org" => {
+                set_once(
+                    &mut target_org,
+                    args.next()
+                        .ok_or_else(|| "`--target-org` requires an alias or username".to_owned())?,
+                    "`--target-org` was provided more than once",
+                )?;
+            }
+            "--salesforce-snapshot" => {
+                set_once(
+                    &mut snapshot_path,
+                    PathBuf::from(
+                        args.next()
+                            .ok_or_else(|| "`--salesforce-snapshot` requires a path".to_owned())?,
+                    ),
+                    "`--salesforce-snapshot` was provided more than once",
+                )?;
+            }
+            "--record-salesforce" => {
+                set_once(
+                    &mut record_path,
+                    PathBuf::from(
+                        args.next()
+                            .ok_or_else(|| "`--record-salesforce` requires a path".to_owned())?,
+                    ),
+                    "`--record-salesforce` was provided more than once",
+                )?;
+            }
+            "--report" => {
+                set_once(
+                    &mut report_path,
+                    PathBuf::from(
+                        args.next()
+                            .ok_or_else(|| "`--report` requires a path".to_owned())?,
+                    ),
+                    "`--report` was provided more than once",
+                )?;
+            }
+            _ => return Err(format!("unknown oracle option `{argument}`\n\n{}", usage())),
+        }
+    }
+    if target_org.is_some() == snapshot_path.is_some() {
+        return Err(
+            "oracle requires exactly one of `--target-org` or `--salesforce-snapshot`".to_owned(),
+        );
+    }
+    if record_path.is_some() && target_org.is_none() {
+        return Err("`--record-salesforce` requires `--target-org`".to_owned());
+    }
+
+    let manifest = apex_exec::oracle::ConformanceManifest::load(&manifest_path)?;
+    let local = apex_exec::oracle::run_local(&manifest);
+    let salesforce = match (target_org, snapshot_path) {
+        (Some(target_org), None) => {
+            let snapshot = apex_exec::oracle::run_salesforce(&manifest, &target_org)?;
+            if let Some(path) = record_path {
+                snapshot.write(path)?;
+            }
+            snapshot
+        }
+        (None, Some(path)) => apex_exec::oracle::OracleSnapshot::load(path)?,
+        _ => unreachable!("exclusive provider selection was validated"),
+    };
+    let report = apex_exec::oracle::compare(&manifest, &local, &salesforce)?;
+    println!("{}", report.render_console());
+    if let Some(path) = report_path {
+        report.write(path)?;
+    }
+    Ok(if report.is_match() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, duplicate: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(duplicate.to_owned());
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn run_repl() -> Result<ExitCode, String> {
@@ -245,6 +340,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

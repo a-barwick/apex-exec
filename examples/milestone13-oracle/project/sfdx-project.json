@@ -1,0 +1,11 @@
+{
+  "packageDirectories": [
+    {
+      "path": "force-app",
+      "default": true
+    }
+  ],
+  "name": "apex-exec-milestone13-oracle",
+  "namespace": "",
+  "sourceApiVersion": "61.0"
+}

@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M13 — Salesforce compatibility oracle
+M14 — Enterprise CI
 
 ## Completed
 
@@ -222,19 +222,36 @@ M13 — Salesforce compatibility oracle
   configurations, and in-editor covered/uncovered line decorations
 - A complete M12 debug example plus protocol, editor, debugger, REPL, project
   timeline, CLI, and coverage integration tests
-- 240 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 83.96% overall,
-  including 100.00% for REPL, 94.21% for debugger, 93.80% for LSP, 92.91% for
-  DAP, 88.37% for protocol framing, and 82.68% for editor indexing
+- Versioned Salesforce conformance manifests with validated fixture names,
+  project containment, compile/invoke/test entry points, and explicit measured
+  dimensions
+- Provider-neutral snapshots covering compile outcome/category, named JSON
+  values, output, exceptions and stack frames, SOQL/SOSL, DML, trigger order,
+  and Apex test outcomes
+- A local oracle adapter over project compilation, structured runtime host
+  events, source mapping, and the isolated test runner
+- An authenticated Salesforce CLI adapter for metadata deployment, anonymous
+  Apex, and individual Apex tests, including normalized deployment/test JSON
+  and debug-log query, DML, trigger, output, exception, and stack observations
+- Durable Salesforce snapshot recording and offline replay plus JSON/console
+  differential reports with overall and per-dimension compatibility coverage
+- A deployable M13 SFDX example and 13 focused unit/integration tests covering
+  every comparison dimension, unsafe manifests, phase categories, live
+  transport shapes, snapshot round trips, regression detection, and CLI status
+- 253 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 83.87% overall,
+  including 83.98% for the new oracle, 100.00% for REPL, 94.21% for debugger,
+  93.80% for LSP, 92.91% for DAP, 88.37% for protocol framing, and 82.68% for
+  editor indexing
 
 ## Immediate target
 
-Begin M13 by defining a Salesforce differential fixture manifest and result
-model before adding scratch-org authentication or transport.
+Begin M14 with content-addressed build artifacts and correct dependency-based
+impacted-test selection.
 
 ## North Star indicators
 
-At M12 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M13 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -358,6 +375,16 @@ compatibility percentages.
 - LSP navigation and rename cover checked project classes and members.
   Local-variable rename, completion, hover, formatting, semantic tokens, code
   actions, and unsaved multi-file semantic linking remain future work.
+- The M13 oracle shells out to an already-installed, authenticated Salesforce
+  CLI and deploys fixtures to a caller-selected org. It does not create,
+  authenticate, reset, or delete scratch orgs.
+- Salesforce debug-log parsing currently measures the supported SOQL, DML, and
+  Apex-trigger event shapes. Other automation, namespaced log variants,
+  provider log truncation, and platform features outside the local
+  compatibility surface require additional permanent fixtures.
+- Recorded oracle matches are scoped to their selected dimensions and
+  Salesforce environment. They do not make unmeasured behavior exact, and no
+  behavior is promoted to Exact until reviewed org evidence is committed.
 
 ## Handoff checklist
 
