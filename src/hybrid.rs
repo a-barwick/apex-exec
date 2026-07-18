@@ -1170,15 +1170,23 @@ fn metadata_member_name(file: &str) -> Option<&str> {
 fn normalize_contents(path: &Path, bytes: &[u8]) -> Vec<u8> {
     if path.extension().is_some_and(|extension| extension == "xml") {
         let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
-        let mut normalized = text.trim().to_owned();
-        while normalized.contains("> \n<")
-            || normalized.contains(">\n<")
-            || normalized.contains(">  <")
-        {
-            normalized = normalized
-                .replace("> \n<", "><")
-                .replace(">\n<", "><")
-                .replace(">  <", "><");
+        let characters = text.trim().chars().collect::<Vec<_>>();
+        let mut normalized = String::with_capacity(text.len());
+        let mut index = 0;
+        while index < characters.len() {
+            let character = characters[index];
+            normalized.push(character);
+            index += 1;
+            if character != '>' {
+                continue;
+            }
+            let whitespace_start = index;
+            while index < characters.len() && characters[index].is_whitespace() {
+                index += 1;
+            }
+            if index >= characters.len() || characters[index] != '<' {
+                normalized.extend(characters[whitespace_start..index].iter());
+            }
         }
         normalized.into_bytes()
     } else {
@@ -1381,6 +1389,26 @@ mod tests {
                 .unwrap()
                 .category,
             ComponentCategory::Configuration
+        );
+
+        let reformatted = fixture_root("inventory-reformatted");
+        write(
+            &reformatted.join("force-app/main/default/classes/Demo.cls"),
+            "public class Demo {}",
+        );
+        write(
+            &reformatted.join("force-app/main/default/classes/Demo.cls-meta.xml"),
+            "<ApexClass>\r\n\t<apiVersion>65.0</apiVersion>   \r\n</ApexClass>",
+        );
+        let reformatted = OrgInventory::capture(&reformatted, "org").unwrap();
+        assert_eq!(
+            class.sha256,
+            reformatted
+                .components
+                .iter()
+                .find(|component| component.selector() == "ApexClass:Demo")
+                .unwrap()
+                .sha256
         );
     }
 

@@ -48,3 +48,4 @@ history.
 - [0016 — Debug through deterministic runtime snapshots](0016-deterministic-debug-snapshots.md)
 - [0017 — Compare providers through normalized oracle snapshots](0017-normalized-differential-oracle.md)
 - [0018 — Seal CI runs behind content-addressed manifests](0018-content-addressed-enterprise-ci.md)
+- [0019 — Compose hybrid validation above hermetic CI](0019-compose-hybrid-validation-above-hermetic-ci.md)

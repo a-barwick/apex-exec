@@ -16,6 +16,8 @@ cargo run -- check examples/milestone5-project
 cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
 cargo run -- ci run examples/milestone14-project/apex-exec-ci.json --shard 0/2
+cargo run -- hybrid examples/milestone15-project/apex-exec-ci.json \
+  --validation-snapshot milestone15-validation.json
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
