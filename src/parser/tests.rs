@@ -1,7 +1,7 @@
 use super::*;
 use crate::ast::{
     AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Program, ReturnType,
-    Statement, TypeName,
+    Statement, TypeName, UnaryOperator,
 };
 use crate::lexer::Lexer;
 use crate::span::SourceId;
@@ -599,6 +599,105 @@ fn distinguishes_casts_from_grouped_expressions() {
             operator: BinaryOperator::Multiply,
             ..
         } if matches!(left.as_ref(), Expression::Binary { operator: BinaryOperator::Add, .. })
+    ));
+}
+
+#[test]
+fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
+    let program = parse(
+        "public class Box { public Integer value; } \
+         Box box = new Box(); \
+         Integer other = 2; \
+         Integer[] values = new Integer[] { 1 }; \
+         Integer member = (box.value) + other; \
+         Integer indexed = (values)[0]; \
+         (box.value)++; \
+         Integer plus = (other) + -other; \
+         Integer minus = (other) - +other; \
+         Object boxed = box; \
+         Box customCast = (Box) boxed; \
+         Integer signedCast = (Integer) -other;",
+    );
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[3] else {
+        panic!("expected grouped member declaration");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Binary {
+            left,
+            operator: BinaryOperator::Add,
+            ..
+        } if matches!(left.as_ref(), Expression::MemberAccess { .. })
+    ));
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[4] else {
+        panic!("expected grouped index declaration");
+    };
+    assert!(matches!(initializer, Expression::Index { .. }));
+
+    let Statement::Expression { expression, .. } = &program.statements[5] else {
+        panic!("expected grouped member postfix expression");
+    };
+    assert!(matches!(
+        expression,
+        Expression::Postfix { operand, .. }
+            if matches!(operand.as_ref(), Expression::MemberAccess { .. })
+    ));
+
+    for (index, operator, unary) in [
+        (6, BinaryOperator::Add, UnaryOperator::Negate),
+        (7, BinaryOperator::Subtract, UnaryOperator::Positive),
+    ] {
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[index] else {
+            panic!("expected signed grouped expression");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::Binary {
+                left,
+                operator: actual_operator,
+                right,
+                ..
+            } if *actual_operator == operator
+                && matches!(left.as_ref(), Expression::Variable(_))
+                && matches!(
+                    right.as_ref(),
+                    Expression::Unary {
+                        operator: actual_unary,
+                        ..
+                    } if *actual_unary == unary
+                )
+        ));
+    }
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[9] else {
+        panic!("expected genuine custom cast");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Cast {
+            ty: TypeName::Custom(name),
+            ..
+        } if name.canonical == "box"
+    ));
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[10] else {
+        panic!("expected genuine signed core cast");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Cast {
+            ty: TypeName::Integer,
+            expression,
+            ..
+        } if matches!(
+            expression.as_ref(),
+            Expression::Unary {
+                operator: UnaryOperator::Negate,
+                ..
+            }
+        )
     ));
 }
 

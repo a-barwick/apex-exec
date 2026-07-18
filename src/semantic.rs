@@ -81,6 +81,13 @@ struct HierarchyTraversal {
     edges_examined: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InheritanceTraversal {
+    matched: bool,
+    nodes_visited: usize,
+    edges_examined: usize,
+}
+
 struct HierarchyGraph {
     edges: Vec<Vec<usize>>,
 }
@@ -1347,20 +1354,45 @@ impl Checker {
     }
 
     fn class_is_or_inherits(&self, actual_id: usize, expected_id: usize) -> bool {
-        if actual_id == expected_id {
-            return true;
+        self.class_inheritance_traversal(actual_id, expected_id)
+            .matched
+    }
+
+    fn class_inheritance_traversal(
+        &self,
+        actual_id: usize,
+        expected_id: usize,
+    ) -> InheritanceTraversal {
+        let mut traversal = InheritanceTraversal {
+            matched: false,
+            nodes_visited: 0,
+            edges_examined: 0,
+        };
+        let mut visited = vec![false; self.classes.len()];
+        let mut pending = vec![actual_id];
+        while let Some(class_id) = pending.pop() {
+            if visited[class_id] {
+                continue;
+            }
+            visited[class_id] = true;
+            traversal.nodes_visited += 1;
+            if class_id == expected_id {
+                traversal.matched = true;
+                break;
+            }
+            for interface in self.classes[class_id].interfaces.iter().rev() {
+                if let Some(interface_id) = self.class_ids.get(&interface.canonical).copied() {
+                    traversal.edges_examined += 1;
+                    pending.push(interface_id);
+                }
+            }
+            if let Some(parent_id) = self.parent_class_id(class_id) {
+                traversal.edges_examined += 1;
+                pending.push(parent_id);
+            }
         }
-        if self
-            .parent_class_id(actual_id)
-            .is_some_and(|parent| self.class_is_or_inherits(parent, expected_id))
-        {
-            return true;
-        }
-        self.classes[actual_id].interfaces.iter().any(|interface| {
-            self.class_ids
-                .get(&interface.canonical)
-                .is_some_and(|interface_id| self.class_is_or_inherits(*interface_id, expected_id))
-        })
+        debug_assert!(traversal.nodes_visited <= self.classes.len());
+        traversal
     }
 
     fn require_assignable(
@@ -1814,8 +1846,10 @@ impl Checker {
                 Ok(ExpressionType::Value(expected))
             }
             Expression::NewCollection {
-                ty, initializer, ..
-            } => self.new_collection_type(ty, initializer),
+                ty,
+                initializer,
+                span,
+            } => self.new_collection_type(ty, initializer, *span),
             Expression::NewException {
                 exception_type,
                 arguments,
@@ -2562,7 +2596,9 @@ impl Checker {
         &mut self,
         ty: &TypeName,
         initializer: &CollectionInitializer,
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        self.validate_type(ty, span)?;
         match initializer {
             CollectionInitializer::Arguments(arguments) => {
                 self.check_collection_constructor(ty, arguments)?;

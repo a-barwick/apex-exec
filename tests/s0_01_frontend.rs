@@ -1,5 +1,8 @@
 use apex_exec::{
-    ast::{BinaryOperator, CollectionInitializer, Expression, NamedType, Statement, TypeName},
+    ast::{
+        BinaryOperator, CollectionInitializer, Expression, NamedType, Statement, TypeName,
+        UnaryOperator,
+    },
     check, execute, parse,
     parser::{Parser, TokenStreamErrorKind},
     semantic,
@@ -118,6 +121,79 @@ fn parser_groups_parenthesized_identifiers_and_preserves_interface_arguments() {
 }
 
 #[test]
+fn cast_group_disambiguation_survives_parse_check_execute_and_postfix_shapes() {
+    let source = "\
+        public class Box { public Integer value; }
+        Box box = new Box();
+        box.value = 1;
+        Integer other = 2;
+        Integer[] values = new Integer[] { 4 };
+        Integer member = (box.value) + other;
+        Integer indexed = (values)[0];
+        (box.value)++;
+        Integer plus = (other) + -other;
+        Integer minus = (other) - +other;
+        Object boxed = box;
+        Box customCast = (Box) boxed;
+        Integer signedCast = (Integer) -other;
+        System.debug(member);
+        System.debug(indexed);
+        System.debug(box.value);
+        System.debug(plus);
+        System.debug(minus);
+        System.debug(customCast.value);
+        System.debug(signedCast);";
+
+    let program = parse(source).unwrap();
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[4] else {
+        panic!("expected grouped member expression");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Binary {
+            left,
+            operator: BinaryOperator::Add,
+            ..
+        } if matches!(left.as_ref(), Expression::MemberAccess { .. })
+    ));
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[5] else {
+        panic!("expected grouped index expression");
+    };
+    assert!(matches!(initializer, Expression::Index { .. }));
+    let Statement::Expression { expression, .. } = &program.statements[6] else {
+        panic!("expected grouped member postfix expression");
+    };
+    assert!(matches!(
+        expression,
+        Expression::Postfix { operand, .. }
+            if matches!(operand.as_ref(), Expression::MemberAccess { .. })
+    ));
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[11] else {
+        panic!("expected genuine signed core cast");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Cast {
+            ty: TypeName::Integer,
+            expression,
+            ..
+        } if matches!(
+            expression.as_ref(),
+            Expression::Unary {
+                operator: UnaryOperator::Negate,
+                ..
+            }
+        )
+    ));
+
+    check(source).unwrap();
+    assert_eq!(
+        execute(source).unwrap(),
+        ["3", "4", "2", "0", "0", "2", "-2"]
+    );
+}
+
+#[test]
 fn parser_and_checker_accept_sized_arrays_across_supported_element_categories() {
     let source = "\
         public class Foo {}
@@ -163,6 +239,14 @@ fn parser_and_checker_accept_sized_arrays_across_supported_element_categories() 
     )
     .unwrap();
     assert_eq!(output, ["3", "2", "1"]);
+
+    for invalid in [
+        "Object values = new Missing[3];",
+        "Object values = new List<Missing>();",
+    ] {
+        let error = check(invalid).unwrap_err();
+        assert!(error.message.contains("unknown type `Missing`"));
+    }
 }
 
 #[test]
@@ -207,8 +291,25 @@ fn hierarchy_validation_covers_superclass_and_interface_edges_without_recursion(
             index - 1
         ));
     }
-    deep.push_str(" public class DeepImplementation implements I1023 {}");
+    deep.push_str(
+        " public class DeepImplementation implements I1023 {} \
+         I0 root = new DeepImplementation();",
+    );
     check(&deep).unwrap();
+}
+
+#[test]
+fn subtype_queries_cover_mixed_edges_case_insensitively_and_negative_paths() {
+    let hierarchy = "\
+        public interface Root {}
+        public interface Branch extends Root {}
+        public virtual class Base implements Branch {}
+        public class Leaf extends Base {}
+        public interface Unrelated {}";
+    check(&format!("{hierarchy} rOoT accepted = new lEaF();")).unwrap();
+
+    let error = check(&format!("{hierarchy} Unrelated rejected = new Leaf();")).unwrap_err();
+    assert!(error.message.contains("cannot assign Leaf to Unrelated"));
 }
 
 #[test]
@@ -321,10 +422,21 @@ fn cli_reproductions_return_bounded_success_or_diagnostics() {
     let supported = run_cli_script(
         "supported",
         "\
-        public class Foo {}
+        public class Foo { public Integer value; }
         Integer foo = 1;
         Integer bar = 2;
         Integer result = (foo) + bar;
+        Foo box = new Foo();
+        box.value = 1;
+        Integer member = (box.value) + bar;
+        Integer[] indexedValues = new Integer[] { 1 };
+        Integer indexed = (indexedValues)[0];
+        (box.value)++;
+        Integer plus = (bar) + -bar;
+        Integer minus = (bar) - +bar;
+        Object boxed = box;
+        Foo customCast = (Foo) boxed;
+        Integer signedCast = (Integer) -bar;
         Foo[] customValues = new Foo[3];
         Object[] objectValues = new Object[2];
         Exception[] errors = new Exception[1];
@@ -368,6 +480,14 @@ fn cli_reproductions_return_bounded_success_or_diagnostics() {
         String::from_utf8(generic_mismatch.stderr)
             .unwrap()
             .contains("List<Integer>")
+    );
+
+    let missing_array = run_cli_script("missing-array-element", "Object values = new Missing[3];");
+    assert!(!missing_array.status.success());
+    assert!(
+        String::from_utf8(missing_array.stderr)
+            .unwrap()
+            .contains("unknown type `Missing`")
     );
 }
 
