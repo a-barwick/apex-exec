@@ -9,6 +9,7 @@ use crate::{
     ci::{self, CiManifest, CiRunOptions, SelectionMode},
     project::{self, Compilation},
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -19,9 +20,13 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime},
 };
 
-pub const HYBRID_SCHEMA_VERSION: u32 = 1;
+pub const HYBRID_SCHEMA_VERSION: u32 = 2;
+pub const DEFAULT_MAX_EVIDENCE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+const REQUIRED_RETRIEVALS: usize = 2;
+const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,6 +156,10 @@ impl OrgInventory {
         }
         Ok(())
     }
+
+    fn sha256(&self) -> Result<String, String> {
+        canonical_sha256(self, "retrieved metadata inventory")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -174,19 +183,213 @@ pub struct DeploymentValidation {
     pub tests: Vec<ValidationTest>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ComponentSelectionMode {
+    All,
+    Impacted,
+    ConservativeAll,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum DeploymentTestLevel {
+    NoTestRun,
+    RunSpecifiedTests,
+}
+
+impl DeploymentTestLevel {
+    fn for_tests(tests: &[String]) -> Self {
+        if tests.is_empty() {
+            Self::NoTestRun
+        } else {
+            Self::RunSpecifiedTests
+        }
+    }
+
+    fn as_salesforce_value(self) -> &'static str {
+        match self {
+            Self::NoTestRun => "NoTestRun",
+            Self::RunSpecifiedTests => "RunSpecifiedTests",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CandidateEvidence {
+    pub manifest_sha256: String,
+    pub ci_cache_key: String,
+    pub ci_result_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AffectedComponentEvidence {
+    pub selector: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ValidationRequest {
+    pub changed_paths: Vec<PathBuf>,
+    pub component_selection: ComponentSelectionMode,
+    pub affected_components: Vec<AffectedComponentEvidence>,
+    pub selected_tests: Vec<String>,
+    pub test_level: DeploymentTestLevel,
+}
+
+impl ValidationRequest {
+    fn sha256(&self) -> Result<String, String> {
+        canonical_sha256(self, "validation request")
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let mut paths = BTreeSet::new();
+        for path in &self.changed_paths {
+            validate_evidence_relative(path, "changed path")?;
+            if !paths.insert(path.clone()) {
+                return Err(format!(
+                    "validation request records changed path `{}` more than once",
+                    path.display()
+                ));
+            }
+        }
+        if !self.changed_paths.windows(2).all(|pair| pair[0] < pair[1]) {
+            return Err(
+                "validation request changed paths must use canonical sorted order".to_owned(),
+            );
+        }
+        let mut components = BTreeSet::new();
+        for component in &self.affected_components {
+            if component.selector.trim().is_empty() {
+                return Err("affected component selector cannot be empty".to_owned());
+            }
+            validate_sha256(&component.sha256, "affected component")?;
+            if !components.insert(component.selector.to_ascii_lowercase()) {
+                return Err(format!(
+                    "validation request records component `{}` more than once",
+                    component.selector
+                ));
+            }
+        }
+        if !self.affected_components.windows(2).all(|pair| {
+            pair[0].selector.to_ascii_lowercase() < pair[1].selector.to_ascii_lowercase()
+        }) {
+            return Err(
+                "validation request affected components must use canonical sorted order".to_owned(),
+            );
+        }
+        let mut tests = BTreeSet::new();
+        for test in &self.selected_tests {
+            if test.trim().is_empty() {
+                return Err("selected validation test cannot be empty".to_owned());
+            }
+            if !tests.insert(test.to_ascii_lowercase()) {
+                return Err(format!(
+                    "validation request records test `{test}` more than once"
+                ));
+            }
+        }
+        if !self
+            .selected_tests
+            .windows(2)
+            .all(|pair| pair[0].to_ascii_lowercase() < pair[1].to_ascii_lowercase())
+        {
+            return Err("validation request tests must use canonical sorted order".to_owned());
+        }
+        if self.test_level != DeploymentTestLevel::for_tests(&self.selected_tests) {
+            return Err("validation request test level does not match selected tests".to_owned());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ValidationEvidence {
+    pub candidate: CandidateEvidence,
+    pub request: ValidationRequest,
+    pub request_sha256: String,
+    pub target: String,
+    pub org_id: String,
+    pub api_version: String,
+    pub apex_exec_version: String,
+    pub salesforce_cli_version: String,
+    pub captured_at: String,
+    pub maximum_age_seconds: u64,
+    pub retrieved_inventory_sha256: String,
+    pub retrieval_count: usize,
+}
+
+impl ValidationEvidence {
+    fn validate(&self) -> Result<(), String> {
+        validate_sha256(&self.candidate.manifest_sha256, "CI manifest")?;
+        validate_sha256(&self.candidate.ci_cache_key, "CI cache key")?;
+        validate_sha256(&self.candidate.ci_result_sha256, "CI result")?;
+        self.request.validate()?;
+        validate_sha256(&self.request_sha256, "validation request")?;
+        if self.request.sha256()? != self.request_sha256 {
+            return Err("validation request digest does not match its contents".to_owned());
+        }
+        if self.target.trim().is_empty() {
+            return Err("validation evidence target cannot be empty".to_owned());
+        }
+        validate_org_id(&self.org_id)?;
+        validate_api_version(&self.api_version)?;
+        if self.apex_exec_version.trim().is_empty() {
+            return Err("validation evidence Apex Exec version cannot be empty".to_owned());
+        }
+        if self.salesforce_cli_version.trim().is_empty() {
+            return Err("validation evidence Salesforce CLI version cannot be empty".to_owned());
+        }
+        parse_capture_time(&self.captured_at)?;
+        if self.maximum_age_seconds == 0 {
+            return Err("validation evidence maximum age must be greater than zero".to_owned());
+        }
+        validate_sha256(
+            &self.retrieved_inventory_sha256,
+            "retrieved metadata inventory",
+        )?;
+        if self.retrieval_count < REQUIRED_RETRIEVALS {
+            return Err(format!(
+                "validation evidence requires at least {REQUIRED_RETRIEVALS} normalized retrievals"
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidationSnapshot {
     pub schema_version: u32,
-    pub target: String,
     pub authenticated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub org_id: Option<String>,
+    pub evidence: ValidationEvidence,
     pub inventory: OrgInventory,
     pub validation: DeploymentValidation,
+    pub snapshot_sha256: String,
 }
 
 impl ValidationSnapshot {
+    fn new(
+        evidence: ValidationEvidence,
+        inventory: OrgInventory,
+        validation: DeploymentValidation,
+    ) -> Result<Self, String> {
+        let mut snapshot = Self {
+            schema_version: HYBRID_SCHEMA_VERSION,
+            authenticated: true,
+            evidence,
+            inventory,
+            validation,
+            snapshot_sha256: String::new(),
+        };
+        snapshot.snapshot_sha256 = snapshot.compute_sha256()?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
         let source = fs::read_to_string(path).map_err(|error| {
@@ -214,12 +417,24 @@ impl ValidationSnapshot {
                 self.schema_version, HYBRID_SCHEMA_VERSION
             ));
         }
-        if self.target.trim().is_empty() {
-            return Err("validation snapshot target cannot be empty".to_owned());
+        if !self.authenticated {
+            return Err(
+                "validation snapshot is not authenticated live Salesforce evidence".to_owned(),
+            );
         }
+        self.evidence.validate()?;
         self.inventory.validate()?;
-        if !self.target.eq_ignore_ascii_case(&self.inventory.target) {
+        if !self
+            .evidence
+            .target
+            .eq_ignore_ascii_case(&self.inventory.target)
+        {
             return Err("validation snapshot and inventory targets do not match".to_owned());
+        }
+        if self.inventory.sha256()? != self.evidence.retrieved_inventory_sha256 {
+            return Err(
+                "retrieved metadata inventory digest does not match its contents".to_owned(),
+            );
         }
         let mut tests = BTreeSet::new();
         for test in &self.validation.tests {
@@ -239,16 +454,34 @@ impl ValidationSnapshot {
                 ));
             }
         }
+        validate_sha256(&self.snapshot_sha256, "validation snapshot")?;
+        if self.compute_sha256()? != self.snapshot_sha256 {
+            return Err("validation snapshot digest does not match its contents".to_owned());
+        }
         Ok(())
     }
-}
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum ComponentSelectionMode {
-    All,
-    Impacted,
-    ConservativeAll,
+    fn compute_sha256(&self) -> Result<String, String> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SnapshotIdentity<'a> {
+            schema_version: u32,
+            authenticated: bool,
+            evidence: &'a ValidationEvidence,
+            inventory: &'a OrgInventory,
+            validation: &'a DeploymentValidation,
+        }
+        canonical_sha256(
+            &SnapshotIdentity {
+                schema_version: self.schema_version,
+                authenticated: self.authenticated,
+                evidence: &self.evidence,
+                inventory: &self.inventory,
+                validation: &self.validation,
+            },
+            "validation snapshot",
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -305,8 +538,9 @@ pub struct LocalReadiness {
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseReadinessReport {
     pub schema_version: u32,
-    pub target: String,
-    pub authenticated: bool,
+    pub evidence: ValidationEvidence,
+    pub validation_snapshot_sha256: String,
+    pub replayed: bool,
     pub ready: bool,
     pub affected_components: ComponentSelection,
     pub affected_tests: Vec<String>,
@@ -331,12 +565,19 @@ impl ReleaseReadinessReport {
         let mut lines = vec![
             format!(
                 "Release readiness for {} ({})",
-                self.target,
-                if self.authenticated {
-                    "authenticated validation org"
+                self.evidence.target,
+                if self.replayed {
+                    "candidate-bound evidence replay"
                 } else {
-                    "recorded validation snapshot"
-                }
+                    "authenticated validation org"
+                },
+            ),
+            format!(
+                "Evidence: {} captured {} with sf {} (API {})",
+                self.validation_snapshot_sha256,
+                self.evidence.captured_at,
+                self.evidence.salesforce_cli_version,
+                self.evidence.api_version
             ),
             format!(
                 "Affected: {} components ({:?}), {} tests",
@@ -388,9 +629,23 @@ pub enum ValidationSource {
     Snapshot(PathBuf),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HybridRunOptions {
     pub ci: CiRunOptions,
+    pub maximum_evidence_age: Duration,
+    pub expected_target_org: Option<String>,
+    pub expected_org_id: Option<String>,
+}
+
+impl Default for HybridRunOptions {
+    fn default() -> Self {
+        Self {
+            ci: CiRunOptions::default(),
+            maximum_evidence_age: DEFAULT_MAX_EVIDENCE_AGE,
+            expected_target_org: None,
+            expected_org_id: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -404,11 +659,12 @@ pub fn run(
     source: &ValidationSource,
     options: &HybridRunOptions,
 ) -> Result<HybridRunOutcome, String> {
-    run_with_cli(
+    run_with_cli_at(
         manifest,
         source,
         options,
         &SalesforceValidationCli::default(),
+        SystemTime::now(),
     )
 }
 
@@ -418,21 +674,82 @@ pub fn run_with_cli(
     options: &HybridRunOptions,
     cli: &SalesforceValidationCli,
 ) -> Result<HybridRunOutcome, String> {
+    run_with_cli_at(manifest, source, options, cli, SystemTime::now())
+}
+
+#[doc(hidden)]
+pub fn run_with_cli_at(
+    manifest: &CiManifest,
+    source: &ValidationSource,
+    options: &HybridRunOptions,
+    cli: &SalesforceValidationCli,
+    now: SystemTime,
+) -> Result<HybridRunOutcome, String> {
+    validate_run_options(source, options)?;
     manifest.verify_inputs()?;
+    let api_version = project_api_version(manifest.project_root())?;
+    let replayed_snapshot = match source {
+        ValidationSource::TargetOrg(_) => None,
+        ValidationSource::Snapshot(path) => Some(ValidationSnapshot::load(path)?),
+    };
+    let salesforce_cli_version = cli.version(manifest.project_root())?;
+    if let Some(snapshot) = &replayed_snapshot {
+        validate_replay_environment(
+            snapshot,
+            options,
+            &api_version,
+            &salesforce_cli_version,
+            now,
+        )?;
+    }
     let local_inventory = OrgInventory::capture(manifest.project_root(), "local")?;
     let compilation = project::compile(manifest.project_root()).map_err(|error| error.render())?;
     let affected = select_affected_components(manifest, &compilation, &local_inventory);
     let ci_result = ci::run(manifest, &options.ci)?;
     let affected_tests = ci_result.selected_tests.clone();
+    let candidate = CandidateEvidence {
+        manifest_sha256: manifest.sha256()?,
+        ci_cache_key: ci_result.cache_key.clone(),
+        ci_result_sha256: ci::result_sha256(&ci_result)?,
+    };
+    let request = validation_request(manifest, &affected, &affected_tests)?;
     let validation_snapshot = match source {
-        ValidationSource::TargetOrg(target) => cli.validate(
-            manifest.project_root(),
-            target,
-            &local_inventory,
-            &affected,
-            &affected_tests,
-        )?,
-        ValidationSource::Snapshot(path) => ValidationSnapshot::load(path)?,
+        ValidationSource::TargetOrg(target) => {
+            let capture = cli.validate(
+                manifest.project_root(),
+                target,
+                &api_version,
+                &local_inventory,
+                &affected,
+                &affected_tests,
+            )?;
+            let request_sha256 = request.sha256()?;
+            let retrieved_inventory_sha256 = capture.inventory.sha256()?;
+            ValidationSnapshot::new(
+                ValidationEvidence {
+                    candidate,
+                    request,
+                    request_sha256,
+                    target: capture.target,
+                    org_id: capture.org_id,
+                    api_version,
+                    apex_exec_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    salesforce_cli_version,
+                    captured_at: format_capture_time(now),
+                    maximum_age_seconds: options.maximum_evidence_age.as_secs(),
+                    retrieved_inventory_sha256,
+                    retrieval_count: capture.retrieval_count,
+                },
+                capture.inventory,
+                capture.validation,
+            )?
+        }
+        ValidationSource::Snapshot(_) => {
+            let snapshot = replayed_snapshot
+                .expect("snapshot sources load evidence before candidate evaluation");
+            validate_candidate_binding(&snapshot, &candidate, &request)?;
+            snapshot
+        }
     };
     let drift = detect_drift(
         &local_inventory,
@@ -491,8 +808,9 @@ pub fn run_with_cli(
     Ok(HybridRunOutcome {
         report: ReleaseReadinessReport {
             schema_version: HYBRID_SCHEMA_VERSION,
-            target: validation_snapshot.target.clone(),
-            authenticated: validation_snapshot.authenticated,
+            evidence: validation_snapshot.evidence.clone(),
+            validation_snapshot_sha256: validation_snapshot.snapshot_sha256.clone(),
+            replayed: matches!(source, ValidationSource::Snapshot(_)),
             ready,
             affected_components: affected,
             affected_tests,
@@ -505,6 +823,222 @@ pub fn run_with_cli(
         },
         validation_snapshot,
     })
+}
+
+fn validate_run_options(
+    source: &ValidationSource,
+    options: &HybridRunOptions,
+) -> Result<(), String> {
+    if options.maximum_evidence_age.as_secs() == 0 {
+        return Err("maximum validation-evidence age must be at least one second".to_owned());
+    }
+    match source {
+        ValidationSource::TargetOrg(_) => {
+            if options.ci.no_cache {
+                return Err(
+                    "authenticated validation requires a cacheable M14 CI artifact; `--no-cache` is not supported"
+                        .to_owned(),
+                );
+            }
+            if options.ci.replay_only {
+                return Err("authenticated validation cannot use CI replay-only mode".to_owned());
+            }
+            if options.expected_target_org.is_some() || options.expected_org_id.is_some() {
+                return Err(
+                    "expected target and org ID assertions apply only to evidence replay"
+                        .to_owned(),
+                );
+            }
+        }
+        ValidationSource::Snapshot(_) => {
+            if !options.ci.replay_only {
+                return Err(
+                    "validation snapshot replay requires `--replay` so the exact M14 CI result is reused"
+                        .to_owned(),
+                );
+            }
+            if options
+                .expected_target_org
+                .as_deref()
+                .is_none_or(str::is_empty)
+            {
+                return Err("validation snapshot replay requires an expected target org".to_owned());
+            }
+            if options.expected_org_id.as_deref().is_none_or(str::is_empty) {
+                return Err("validation snapshot replay requires an expected org ID".to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validation_request(
+    manifest: &CiManifest,
+    affected: &ComponentSelection,
+    selected_tests: &[String],
+) -> Result<ValidationRequest, String> {
+    let mut changed_paths = manifest
+        .changed_files
+        .iter()
+        .map(|path| normalize_relative(path))
+        .collect::<Vec<_>>();
+    changed_paths.sort();
+    let mut affected_components = affected
+        .components
+        .iter()
+        .map(|component| AffectedComponentEvidence {
+            selector: component.selector(),
+            sha256: component.sha256.clone(),
+        })
+        .collect::<Vec<_>>();
+    affected_components.sort_by(|left, right| {
+        left.selector
+            .to_ascii_lowercase()
+            .cmp(&right.selector.to_ascii_lowercase())
+    });
+    let mut selected_tests = selected_tests.to_vec();
+    selected_tests.sort_by_key(|test| test.to_ascii_lowercase());
+    let request = ValidationRequest {
+        changed_paths,
+        component_selection: affected.mode,
+        affected_components,
+        test_level: DeploymentTestLevel::for_tests(&selected_tests),
+        selected_tests,
+    };
+    request.validate()?;
+    Ok(request)
+}
+
+fn validate_replay_environment(
+    snapshot: &ValidationSnapshot,
+    options: &HybridRunOptions,
+    api_version: &str,
+    salesforce_cli_version: &str,
+    now: SystemTime,
+) -> Result<(), String> {
+    let evidence = &snapshot.evidence;
+    let expected_target = options
+        .expected_target_org
+        .as_deref()
+        .expect("replay options require an expected target");
+    if !evidence.target.eq_ignore_ascii_case(expected_target) {
+        return Err(format!(
+            "validation evidence target mismatch: snapshot records `{}`, replay expected `{expected_target}`",
+            evidence.target
+        ));
+    }
+    let expected_org_id = options
+        .expected_org_id
+        .as_deref()
+        .expect("replay options require an expected org ID");
+    if evidence.org_id != expected_org_id {
+        return Err(format!(
+            "validation evidence org ID mismatch: snapshot records `{}`, replay expected `{expected_org_id}`",
+            evidence.org_id
+        ));
+    }
+    if evidence.api_version != api_version {
+        return Err(format!(
+            "validation evidence API version mismatch: snapshot records {}, candidate requires {api_version}",
+            evidence.api_version
+        ));
+    }
+    if evidence.apex_exec_version != env!("CARGO_PKG_VERSION") {
+        return Err(format!(
+            "validation evidence Apex Exec version mismatch: snapshot records {}, this binary is {}",
+            evidence.apex_exec_version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    if evidence.salesforce_cli_version != salesforce_cli_version {
+        return Err(format!(
+            "validation evidence Salesforce CLI version mismatch: snapshot records {}, installed CLI is {salesforce_cli_version}",
+            evidence.salesforce_cli_version
+        ));
+    }
+    if evidence.maximum_age_seconds != options.maximum_evidence_age.as_secs() {
+        return Err(format!(
+            "validation evidence maximum-age mismatch: snapshot records {} seconds, replay requires {} seconds",
+            evidence.maximum_age_seconds,
+            options.maximum_evidence_age.as_secs()
+        ));
+    }
+    validate_capture_age(evidence, now, options.maximum_evidence_age)
+}
+
+fn validate_capture_age(
+    evidence: &ValidationEvidence,
+    now: SystemTime,
+    maximum_age: Duration,
+) -> Result<(), String> {
+    let captured = parse_capture_time(&evidence.captured_at)?;
+    let now = DateTime::<Utc>::from(now);
+    let skew = chrono::Duration::from_std(MAX_CLOCK_SKEW)
+        .map_err(|_| "failed to represent validation clock skew".to_owned())?;
+    if captured > now + skew {
+        return Err(format!(
+            "validation evidence capture time {} is in the future",
+            evidence.captured_at
+        ));
+    }
+    if captured > now {
+        return Ok(());
+    }
+    let age = (now - captured)
+        .to_std()
+        .map_err(|_| "failed to compute validation evidence age".to_owned())?;
+    if age > maximum_age {
+        return Err(format!(
+            "validation evidence expired after {} seconds; maximum age is {} seconds",
+            age.as_secs(),
+            maximum_age.as_secs()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_candidate_binding(
+    snapshot: &ValidationSnapshot,
+    candidate: &CandidateEvidence,
+    request: &ValidationRequest,
+) -> Result<(), String> {
+    let recorded = &snapshot.evidence.candidate;
+    if recorded.manifest_sha256 != candidate.manifest_sha256 {
+        return Err("validation evidence does not match the current M14 manifest".to_owned());
+    }
+    if recorded.ci_cache_key != candidate.ci_cache_key {
+        return Err("validation evidence does not match the current M14 CI cache key".to_owned());
+    }
+    if recorded.ci_result_sha256 != candidate.ci_result_sha256 {
+        return Err("validation evidence does not match the exact M14 CI result".to_owned());
+    }
+    let recorded = &snapshot.evidence.request;
+    if recorded.changed_paths != request.changed_paths {
+        return Err(
+            "validation evidence changed paths do not match the current request".to_owned(),
+        );
+    }
+    if recorded.component_selection != request.component_selection {
+        return Err(
+            "validation evidence component-selection mode does not match the current request"
+                .to_owned(),
+        );
+    }
+    if recorded.affected_components != request.affected_components {
+        return Err(
+            "validation evidence affected component selectors or digests do not match the current request"
+                .to_owned(),
+        );
+    }
+    if recorded.selected_tests != request.selected_tests {
+        return Err(
+            "validation evidence selected tests do not match the current request".to_owned(),
+        );
+    }
+    if recorded.test_level != request.test_level {
+        return Err("validation evidence test level does not match the current request".to_owned());
+    }
+    Ok(())
 }
 
 pub fn select_affected_components(
@@ -703,6 +1237,14 @@ pub struct SalesforceValidationCli {
     wait_minutes: u32,
 }
 
+struct LiveValidationCapture {
+    target: String,
+    org_id: String,
+    inventory: OrgInventory,
+    validation: DeploymentValidation,
+    retrieval_count: usize,
+}
+
 impl Default for SalesforceValidationCli {
     fn default() -> Self {
         Self {
@@ -720,17 +1262,19 @@ impl SalesforceValidationCli {
         }
     }
 
-    pub fn validate(
+    fn validate(
         &self,
         project_root: &Path,
         target_org: &str,
+        api_version: &str,
         local_inventory: &OrgInventory,
         affected: &ComponentSelection,
         tests: &[String],
-    ) -> Result<ValidationSnapshot, String> {
+    ) -> Result<LiveValidationCapture, String> {
         if target_org.trim().is_empty() {
             return Err("Salesforce validation org cannot be empty".to_owned());
         }
+        validate_api_version(api_version)?;
         let auth = self.command_json(
             project_root,
             &[
@@ -747,36 +1291,67 @@ impl SalesforceValidationCli {
                 response_message(&auth)
             ));
         }
-        let org_id = find_string(&auth, &["orgId", "id"]).map(str::to_owned);
+        let org_id = find_string(&auth, &["orgId", "id"])
+            .ok_or_else(|| {
+                "Salesforce validation-org response did not include an org ID".to_owned()
+            })?
+            .to_owned();
+        validate_org_id(&org_id)?;
         let retrieve_components = retrieval_scope(local_inventory, affected);
-        let temp = temporary_directory()?;
-        let mut retrieve_args = vec![
-            OsString::from("project"),
-            OsString::from("retrieve"),
-            OsString::from("start"),
-            OsString::from("--target-org"),
-            OsString::from(target_org),
-            OsString::from("--output-dir"),
-            temp.as_os_str().to_owned(),
-            OsString::from("--wait"),
-            OsString::from(self.wait_minutes.to_string()),
-            OsString::from("--json"),
-        ];
-        for component in &retrieve_components {
-            retrieve_args.push(OsString::from("--metadata"));
-            retrieve_args.push(OsString::from(component.selector()));
-        }
-        let retrieve = self.command_json(project_root, &retrieve_args)?;
-        if !response_success(&retrieve) {
+        let mut inventories = Vec::with_capacity(REQUIRED_RETRIEVALS);
+        for _ in 0..REQUIRED_RETRIEVALS {
+            let temp = temporary_directory(project_root)?;
+            let inventory = (|| {
+                let source_root = temp.join("main/default");
+                fs::create_dir_all(&source_root).map_err(|error| {
+                    format!(
+                        "failed to prepare Salesforce retrieve output `{}`: {error}",
+                        source_root.display()
+                    )
+                })?;
+                let mut retrieve_args = vec![
+                    OsString::from("project"),
+                    OsString::from("retrieve"),
+                    OsString::from("start"),
+                    OsString::from("--target-org"),
+                    OsString::from(target_org),
+                    OsString::from("--api-version"),
+                    OsString::from(api_version),
+                    OsString::from("--output-dir"),
+                    temp.as_os_str().to_owned(),
+                    OsString::from("--wait"),
+                    OsString::from(self.wait_minutes.to_string()),
+                    OsString::from("--json"),
+                ];
+                for component in &retrieve_components {
+                    retrieve_args.push(OsString::from("--metadata"));
+                    retrieve_args.push(OsString::from(component.selector()));
+                }
+                let retrieve = self.command_json(project_root, &retrieve_args)?;
+                if !response_success(&retrieve) {
+                    return Err(format!(
+                        "failed to retrieve validation-org metadata: {}",
+                        response_message(&retrieve)
+                    ));
+                }
+                OrgInventory::capture(&temp, target_org)
+            })();
             let _ = fs::remove_dir_all(&temp);
-            return Err(format!(
-                "failed to retrieve validation-org metadata: {}",
-                response_message(&retrieve)
-            ));
+            inventories.push(inventory?);
         }
-        let inventory = OrgInventory::capture(&temp, target_org);
-        let _ = fs::remove_dir_all(&temp);
-        let inventory = inventory?;
+        let inventory = inventories
+            .first()
+            .expect("at least two retrievals are required")
+            .clone();
+        let inventory_sha256 = inventory.sha256()?;
+        for repeated in inventories.iter().skip(1) {
+            if repeated.sha256()? != inventory_sha256 {
+                return Err(
+                    "repeated Salesforce metadata retrievals did not normalize identically"
+                        .to_owned(),
+                );
+            }
+        }
 
         let mut deploy_args = vec![
             OsString::from("project"),
@@ -785,6 +1360,8 @@ impl SalesforceValidationCli {
             OsString::from("--dry-run"),
             OsString::from("--target-org"),
             OsString::from(target_org),
+            OsString::from("--api-version"),
+            OsString::from(api_version),
             OsString::from("--wait"),
             OsString::from(self.wait_minutes.to_string()),
             OsString::from("--json"),
@@ -793,30 +1370,55 @@ impl SalesforceValidationCli {
             deploy_args.push(OsString::from("--metadata"));
             deploy_args.push(OsString::from(component.selector()));
         }
-        if tests.is_empty() {
-            deploy_args.push(OsString::from("--test-level"));
-            deploy_args.push(OsString::from("NoTestRun"));
-        } else {
-            deploy_args.push(OsString::from("--test-level"));
-            deploy_args.push(OsString::from("RunSpecifiedTests"));
-            for test in tests {
+        let test_level = DeploymentTestLevel::for_tests(tests);
+        deploy_args.push(OsString::from("--test-level"));
+        deploy_args.push(OsString::from(test_level.as_salesforce_value()));
+        if test_level == DeploymentTestLevel::RunSpecifiedTests {
+            for test in salesforce_test_classes(tests) {
                 deploy_args.push(OsString::from("--tests"));
                 deploy_args.push(OsString::from(test));
             }
         }
         let deploy = self.command_json(project_root, &deploy_args)?;
-        Ok(ValidationSnapshot {
-            schema_version: HYBRID_SCHEMA_VERSION,
+        Ok(LiveValidationCapture {
             target: target_org.to_owned(),
-            authenticated: true,
             org_id,
             inventory,
             validation: parse_deployment_validation(&deploy),
+            retrieval_count: inventories.len(),
         })
     }
 
+    fn version(&self, current_dir: &Path) -> Result<String, String> {
+        let output = self.command_output(current_dir, &[OsString::from("--version")])?;
+        if !output.status.success() {
+            return Err(format!(
+                "Salesforce CLI version check failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_salesforce_cli_version(&String::from_utf8_lossy(&output.stdout))
+    }
+
     fn command_json(&self, current_dir: &Path, arguments: &[OsString]) -> Result<Value, String> {
-        let output = Command::new(&self.executable)
+        let output = self.command_output(current_dir, arguments)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(&stdout).map_err(|error| {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            format!(
+                "Salesforce CLI returned invalid JSON (status {}): {error}; stderr: {}",
+                output.status,
+                stderr.trim()
+            )
+        })
+    }
+
+    fn command_output(
+        &self,
+        current_dir: &Path,
+        arguments: &[OsString],
+    ) -> Result<std::process::Output, String> {
+        Command::new(&self.executable)
             .args(arguments)
             .current_dir(current_dir)
             .env("SF_DISABLE_LOG_FILE", "true")
@@ -829,16 +1431,7 @@ impl SalesforceValidationCli {
                     "failed to start Salesforce CLI `{}`: {error}",
                     Path::new(&self.executable).display()
                 )
-            })?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        serde_json::from_str(&stdout).map_err(|error| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            format!(
-                "Salesforce CLI returned invalid JSON (status {}): {error}; stderr: {}",
-                output.status,
-                stderr.trim()
-            )
-        })
+            })
     }
 }
 
@@ -877,6 +1470,19 @@ fn parse_deployment_validation(response: &Value) -> DeploymentValidation {
         component_failures,
         tests,
     }
+}
+
+fn salesforce_test_classes(tests: &[String]) -> Vec<String> {
+    let mut classes = BTreeMap::<String, String>::new();
+    for test in tests {
+        let class = test
+            .rsplit_once('.')
+            .map_or(test.as_str(), |(class, _)| class);
+        classes
+            .entry(class.to_ascii_lowercase())
+            .or_insert_with(|| class.to_owned());
+    }
+    classes.into_values().collect()
 }
 
 fn collect_validation_tests(value: &Value, tests: &mut Vec<ValidationTest>) {
@@ -1008,6 +1614,120 @@ fn find_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
         Value::Array(values) => values.iter().find_map(|child| find_string(child, keys)),
         _ => None,
     }
+}
+
+fn project_api_version(project_root: &Path) -> Result<String, String> {
+    let path = project_root.join("sfdx-project.json");
+    let source = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "failed to read Salesforce project configuration `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let json = serde_json::from_str::<Value>(&source).map_err(|error| {
+        format!(
+            "invalid Salesforce project configuration `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let version = json
+        .get("sourceApiVersion")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "Salesforce project configuration `{}` must declare `sourceApiVersion` for candidate-bound validation",
+                path.display()
+            )
+        })?
+        .to_owned();
+    validate_api_version(&version)?;
+    Ok(version)
+}
+
+fn validate_api_version(version: &str) -> Result<(), String> {
+    let Some((major, minor)) = version.split_once('.') else {
+        return Err(format!(
+            "Salesforce API version `{version}` must use `<major>.<minor>` format"
+        ));
+    };
+    if major.is_empty()
+        || minor.is_empty()
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "Salesforce API version `{version}` must use `<major>.<minor>` format"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_org_id(org_id: &str) -> Result<(), String> {
+    if !matches!(org_id.len(), 15 | 18)
+        || !org_id.starts_with("00D")
+        || !org_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(format!(
+            "Salesforce validation org ID `{org_id}` is not a 15- or 18-character 00D ID"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_salesforce_cli_version(output: &str) -> Result<String, String> {
+    let version = output
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("@salesforce/cli/"))
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Salesforce CLI version output was not recognized: {}",
+                output.trim()
+            )
+        })?;
+    Ok(version.to_owned())
+}
+
+fn format_capture_time(time: SystemTime) -> String {
+    DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn parse_capture_time(value: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|error| format!("invalid validation evidence capture time `{value}`: {error}"))
+}
+
+fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(format!("{label} has an invalid SHA-256 digest"));
+    }
+    Ok(())
+}
+
+fn canonical_sha256(value: &impl Serialize, label: &str) -> Result<String, String> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| format!("failed to serialize {label}: {error}"))?;
+    Ok(hex_digest(Sha256::digest(bytes)))
+}
+
+fn validate_evidence_relative(path: &Path, label: &str) -> Result<(), String> {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "{label} `{}` must be a safe relative path",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1288,9 +2008,12 @@ fn component_order(left: &MetadataComponent, right: &MetadataComponent) -> std::
         })
 }
 
-fn temporary_directory() -> Result<PathBuf, String> {
+fn temporary_directory(project_root: &Path) -> Result<PathBuf, String> {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    let parent = project_root.join(".apex-exec");
+    fs::create_dir_all(&parent)
+        .map_err(|error| format!("failed to create temporary metadata parent: {error}"))?;
+    let path = parent.join(format!(
         "apex-exec-hybrid-{}-{sequence}",
         std::process::id()
     ));
@@ -1343,6 +2066,18 @@ fn write_json(path: &Path, value: &impl Serialize, label: &str) -> Result<(), St
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn salesforce_transport_collapses_selected_methods_to_unique_test_classes() {
+        assert_eq!(
+            salesforce_test_classes(&[
+                "ReleaseServiceTest.preparesStandardInvoice".to_owned(),
+                "releaseServiceTest.preparesPriorityInvoice".to_owned(),
+                "SmokeTest".to_owned(),
+            ]),
+            ["ReleaseServiceTest", "SmokeTest"]
+        );
+    }
 
     #[test]
     fn inventory_groups_source_and_sidecars_and_classifies_metadata() {
@@ -1506,27 +2241,16 @@ mod tests {
     fn snapshots_reject_duplicate_tests_and_unsafe_component_paths() {
         let root = fixture_root("snapshot-validation");
         let path = root.join("snapshot.json");
-        let snapshot = ValidationSnapshot {
-            schema_version: HYBRID_SCHEMA_VERSION,
-            target: "staging".to_owned(),
-            authenticated: false,
-            org_id: None,
-            inventory: OrgInventory {
-                schema_version: HYBRID_SCHEMA_VERSION,
-                target: "staging".to_owned(),
-                components: vec![MetadataComponent {
-                    metadata_type: "CustomObject".to_owned(),
-                    full_name: "Invoice__c".to_owned(),
-                    category: ComponentCategory::Schema,
-                    sha256: "a".repeat(64),
-                    files: vec![PathBuf::from("../escape")],
-                }],
-            },
-            validation: DeploymentValidation::default(),
-        };
+        let mut snapshot = valid_snapshot();
+        snapshot.inventory.components.push(MetadataComponent {
+            metadata_type: "CustomObject".to_owned(),
+            full_name: "Invoice__c".to_owned(),
+            category: ComponentCategory::Schema,
+            sha256: "a".repeat(64),
+            files: vec![PathBuf::from("../escape")],
+        });
         assert!(snapshot.write(&path).unwrap_err().contains("safe relative"));
 
-        let mut snapshot = snapshot;
         snapshot.inventory.components.clear();
         snapshot.validation.tests = vec![
             ValidationTest {
@@ -1546,6 +2270,292 @@ mod tests {
                 .unwrap_err()
                 .contains("more than once")
         );
+    }
+
+    #[test]
+    fn snapshot_digest_rejects_tampered_validation_results() {
+        let root = fixture_root("snapshot-tamper");
+        let mut snapshot = valid_snapshot();
+        snapshot.validation.success = true;
+        assert!(
+            snapshot
+                .write(root.join("snapshot.json"))
+                .unwrap_err()
+                .contains("snapshot digest does not match")
+        );
+    }
+
+    #[test]
+    fn replay_environment_rejects_org_api_tool_age_and_clock_mismatches() {
+        let snapshot = valid_snapshot();
+        let now = system_time("2026-07-18T13:00:00Z");
+        let options = replay_options();
+        validate_replay_environment(&snapshot, &options, "65.0", "2.30.8", now).unwrap();
+
+        let mut mismatch = options.clone();
+        mismatch.expected_target_org = Some("production".to_owned());
+        assert!(
+            validate_replay_environment(&snapshot, &mismatch, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("target mismatch")
+        );
+
+        let mut mismatch = options.clone();
+        mismatch.expected_org_id = Some("00D000000000002".to_owned());
+        assert!(
+            validate_replay_environment(&snapshot, &mismatch, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("org ID mismatch")
+        );
+        assert!(
+            validate_replay_environment(&snapshot, &options, "66.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("API version mismatch")
+        );
+        assert!(
+            validate_replay_environment(&snapshot, &options, "65.0", "2.31.0", now)
+                .unwrap_err()
+                .contains("CLI version mismatch")
+        );
+
+        let mut mismatch = snapshot.clone();
+        mismatch.evidence.apex_exec_version = "different".to_owned();
+        assert!(
+            validate_replay_environment(&mismatch, &options, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("Apex Exec version mismatch")
+        );
+
+        let mut mismatch = options.clone();
+        mismatch.maximum_evidence_age = Duration::from_secs(60 * 60);
+        assert!(
+            validate_replay_environment(&snapshot, &mismatch, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("maximum-age mismatch")
+        );
+
+        assert!(
+            validate_replay_environment(
+                &snapshot,
+                &options,
+                "65.0",
+                "2.30.8",
+                system_time("2026-07-19T13:00:01Z"),
+            )
+            .unwrap_err()
+            .contains("expired")
+        );
+
+        let mut future = snapshot;
+        future.evidence.captured_at = "2026-07-18T13:06:00Z".to_owned();
+        assert!(
+            validate_replay_environment(&future, &options, "65.0", "2.30.8", now)
+                .unwrap_err()
+                .contains("in the future")
+        );
+    }
+
+    #[test]
+    fn candidate_binding_reports_manifest_result_and_request_mismatches() {
+        let snapshot = valid_snapshot();
+        let candidate = snapshot.evidence.candidate.clone();
+        let request = snapshot.evidence.request.clone();
+        validate_candidate_binding(&snapshot, &candidate, &request).unwrap();
+
+        let mut mismatch = candidate.clone();
+        mismatch.manifest_sha256 = "d".repeat(64);
+        assert!(
+            validate_candidate_binding(&snapshot, &mismatch, &request)
+                .unwrap_err()
+                .contains("M14 manifest")
+        );
+        let mut mismatch = candidate.clone();
+        mismatch.ci_result_sha256 = "d".repeat(64);
+        assert!(
+            validate_candidate_binding(&snapshot, &mismatch, &request)
+                .unwrap_err()
+                .contains("exact M14 CI result")
+        );
+        let mut mismatch = candidate.clone();
+        mismatch.ci_cache_key = "d".repeat(64);
+        assert!(
+            validate_candidate_binding(&snapshot, &mismatch, &request)
+                .unwrap_err()
+                .contains("M14 CI cache key")
+        );
+
+        let mut mismatch = request.clone();
+        mismatch.changed_paths = vec![PathBuf::from("force-app/changed.cls")];
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("changed paths")
+        );
+        let mut mismatch = request;
+        mismatch.affected_components = vec![AffectedComponentEvidence {
+            selector: "ApexClass:Changed".to_owned(),
+            sha256: "e".repeat(64),
+        }];
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("selectors or digests")
+        );
+
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.component_selection = ComponentSelectionMode::Impacted;
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("component-selection mode")
+        );
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.selected_tests = vec!["DemoTest.passes".to_owned()];
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("selected tests")
+        );
+        let mut mismatch = snapshot.evidence.request.clone();
+        mismatch.test_level = DeploymentTestLevel::RunSpecifiedTests;
+        assert!(
+            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+                .unwrap_err()
+                .contains("test level")
+        );
+    }
+
+    #[test]
+    fn validation_requests_reject_duplicates_and_inconsistent_test_levels() {
+        let mut request = ValidationRequest {
+            changed_paths: vec![PathBuf::from("force-app/Demo.cls")],
+            component_selection: ComponentSelectionMode::Impacted,
+            affected_components: Vec::new(),
+            selected_tests: vec!["DemoTest.passes".to_owned()],
+            test_level: DeploymentTestLevel::NoTestRun,
+        };
+        assert!(request.validate().unwrap_err().contains("test level"));
+        request.test_level = DeploymentTestLevel::RunSpecifiedTests;
+        request
+            .changed_paths
+            .push(PathBuf::from("force-app/Demo.cls"));
+        assert!(request.validate().unwrap_err().contains("more than once"));
+    }
+
+    #[test]
+    fn salesforce_cli_version_parser_requires_the_official_version_token() {
+        assert_eq!(
+            parse_salesforce_cli_version("@salesforce/cli/2.30.8 darwin-arm64 node-v20.11.1\n")
+                .unwrap(),
+            "2.30.8"
+        );
+        assert!(
+            parse_salesforce_cli_version("sf version unknown")
+                .unwrap_err()
+                .contains("not recognized")
+        );
+    }
+
+    #[test]
+    fn malformed_snapshot_fails_before_salesforce_cli_execution() {
+        let root = fixture_root("snapshot-error-phase");
+        let snapshot = root.join("invalid.json");
+        fs::write(&snapshot, "{}\n").unwrap();
+        let manifest = CiManifest::load("examples/milestone15-project/apex-exec-ci.json").unwrap();
+        let error = run_with_cli_at(
+            &manifest,
+            &ValidationSource::Snapshot(snapshot),
+            &replay_options(),
+            &SalesforceValidationCli::new(root.join("missing-sf")),
+            system_time("2026-07-18T13:00:00Z"),
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid validation snapshot"), "{error}");
+        assert!(!error.contains("failed to start Salesforce CLI"));
+    }
+
+    #[test]
+    fn run_options_require_cacheable_capture_and_exact_replay_assertions() {
+        let target = ValidationSource::TargetOrg("staging".to_owned());
+        let mut options = HybridRunOptions::default();
+        options.ci.no_cache = true;
+        assert!(
+            validate_run_options(&target, &options)
+                .unwrap_err()
+                .contains("cacheable M14 CI artifact")
+        );
+
+        let snapshot = ValidationSource::Snapshot(PathBuf::from("validation.json"));
+        let options = HybridRunOptions::default();
+        assert!(
+            validate_run_options(&snapshot, &options)
+                .unwrap_err()
+                .contains("requires `--replay`")
+        );
+        let mut options = HybridRunOptions::default();
+        options.ci.replay_only = true;
+        assert!(
+            validate_run_options(&snapshot, &options)
+                .unwrap_err()
+                .contains("expected target org")
+        );
+    }
+
+    fn valid_snapshot() -> ValidationSnapshot {
+        let inventory = OrgInventory {
+            schema_version: HYBRID_SCHEMA_VERSION,
+            target: "staging".to_owned(),
+            components: Vec::new(),
+        };
+        let request = ValidationRequest {
+            changed_paths: Vec::new(),
+            component_selection: ComponentSelectionMode::All,
+            affected_components: Vec::new(),
+            selected_tests: Vec::new(),
+            test_level: DeploymentTestLevel::NoTestRun,
+        };
+        ValidationSnapshot::new(
+            ValidationEvidence {
+                candidate: CandidateEvidence {
+                    manifest_sha256: "a".repeat(64),
+                    ci_cache_key: "b".repeat(64),
+                    ci_result_sha256: "c".repeat(64),
+                },
+                request_sha256: request.sha256().unwrap(),
+                request,
+                target: "staging".to_owned(),
+                org_id: "00D000000000001".to_owned(),
+                api_version: "65.0".to_owned(),
+                apex_exec_version: env!("CARGO_PKG_VERSION").to_owned(),
+                salesforce_cli_version: "2.30.8".to_owned(),
+                captured_at: "2026-07-18T12:00:00Z".to_owned(),
+                maximum_age_seconds: DEFAULT_MAX_EVIDENCE_AGE.as_secs(),
+                retrieved_inventory_sha256: inventory.sha256().unwrap(),
+                retrieval_count: REQUIRED_RETRIEVALS,
+            },
+            inventory,
+            DeploymentValidation::default(),
+        )
+        .unwrap()
+    }
+
+    fn replay_options() -> HybridRunOptions {
+        HybridRunOptions {
+            ci: CiRunOptions {
+                replay_only: true,
+                ..CiRunOptions::default()
+            },
+            expected_target_org: Some("staging".to_owned()),
+            expected_org_id: Some("00D000000000001".to_owned()),
+            ..HybridRunOptions::default()
+        }
+    }
+
+    fn system_time(value: &str) -> SystemTime {
+        let parsed = DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc);
+        parsed.into()
     }
 
     fn write(path: &Path, contents: &str) {

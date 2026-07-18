@@ -50,3 +50,4 @@ history.
 - [0018 — Seal CI runs behind content-addressed manifests](0018-content-addressed-enterprise-ci.md)
 - [0019 — Compose hybrid validation above hermetic CI](0019-compose-hybrid-validation-above-hermetic-ci.md)
 - [0020 — Check runtime-type expressions before execution](0020-check-runtime-type-expressions-before-execution.md)
+- [0021 — Bind live validation to sealed candidate evidence](0021-bind-live-validation-to-candidate-evidence.md)

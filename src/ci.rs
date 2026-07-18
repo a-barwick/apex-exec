@@ -170,6 +170,12 @@ impl CiManifest {
         &self.project_root
     }
 
+    pub fn sha256(&self) -> Result<String, String> {
+        let bytes = serde_json::to_vec(self)
+            .map_err(|error| format!("failed to serialize CI manifest identity: {error}"))?;
+        Ok(sha256(&bytes))
+    }
+
     pub fn refresh_inputs(&mut self) -> Result<(), String> {
         let discovered = project::discover(&self.project_root).map_err(|error| error.render())?;
         self.inputs = collect_inputs(
@@ -1059,7 +1065,7 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn result_sha256(result: &CiRunResult) -> Result<String, String> {
+pub fn result_sha256(result: &CiRunResult) -> Result<String, String> {
     let bytes = serde_json::to_vec(result)
         .map_err(|error| format!("failed to serialize CI cache result: {error}"))?;
     Ok(sha256(&bytes))

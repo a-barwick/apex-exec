@@ -143,12 +143,20 @@ cargo run -- hybrid \
 # Repeat the decision without credentials or Salesforce compute.
 cargo run -- hybrid \
   examples/milestone15-project/apex-exec-ci.json \
-  --validation-snapshot milestone15-validation.json
+  --validation-snapshot milestone15-validation.json \
+  --expected-target-org staging \
+  --expected-org-id 00D000000000001 \
+  --replay
 ```
 
-No real-org validation snapshot is tracked in this repository. Phase 2 M17
-binds the first accepted live evidence bundle to its exact candidate, request,
-org, API/tool versions, and capture age.
+M17 snapshot schema version 2 binds live evidence to the exact M14 manifest and
+CI result, affected request, org, API/tool versions, capture time, age policy,
+and normalized inventory. Capture performs two matching retrievals; replay
+requires the exact cached CI artifact and installed Salesforce CLI version.
+The reviewed clean and controlled-drift artifacts are tracked in
+`evidence/milestone17/`. They contain no auth material and intentionally expire
+under their recorded 24-hour replay policy; expiration does not erase their
+historical review value.
 
 The M16 sample executes right-associative lazy conditionals and checked runtime
 type tests, then runs both production branches through the Apex test runner:

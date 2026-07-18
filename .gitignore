@@ -7,6 +7,8 @@
 .vscode/
 *.swp
 *.swo
+**/.apex-exec/
+**/artifacts/
 
 # Local environment files
 .env

@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 2,
+  "authenticated": true,
+  "evidence": {
+    "candidate": {
+      "manifestSha256": "083fa8e495a2a5e79ab11e0ffb68753548167eb9971cd5e37eee27b9d9f6a002",
+      "ciCacheKey": "083fa8e495a2a5e79ab11e0ffb68753548167eb9971cd5e37eee27b9d9f6a002",
+      "ciResultSha256": "8f89c9a5960b3a59510d418b39ded7c64159657e4bacf9e467af3ea9a5e75f98"
+    },
+    "request": {
+      "changedPaths": [
+        "force-app/main/default/classes/ReleaseService.cls"
+      ],
+      "componentSelection": "impacted",
+      "affectedComponents": [
+        {
+          "selector": "ApexClass:ReleaseService",
+          "sha256": "d5ebadb3e097b543d011de071e486a998c6556afd0d13e6ad89a8d5e666ad194"
+        },
+        {
+          "selector": "ApexClass:ReleaseServiceTest",
+          "sha256": "1fce42c30dd124c2e20f7e663263d7f043d9f217c1b89eeb68464db2a4a7daf5"
+        }
+      ],
+      "selectedTests": [
+        "ReleaseServiceTest.preparesPriorityInvoice",
+        "ReleaseServiceTest.preparesStandardInvoice"
+      ],
+      "testLevel": "RunSpecifiedTests"
+    },
+    "requestSha256": "c268a28e3e612da39f957927793f6545fb3659bcd901da7cfbbebdf84262ac25",
+    "target": "apex-exec-m17",
+    "orgId": "00DdL000010oTXlUAM",
+    "apiVersion": "65.0",
+    "apexExecVersion": "0.1.0",
+    "salesforceCliVersion": "2.143.6",
+    "capturedAt": "2026-07-18T19:25:41Z",
+    "maximumAgeSeconds": 86400,
+    "retrievedInventorySha256": "83405de788d8fb9c0a67d0d58c9bef638b745aee0ffde8b54ebea16e4fd454e4",
+    "retrievalCount": 2
+  },
+  "inventory": {
+    "schemaVersion": 2,
+    "target": "apex-exec-m17",
+    "components": [
+      {
+        "metadataType": "ApexClass",
+        "fullName": "ReleaseService",
+        "category": "code",
+        "sha256": "18ec07b9cc103b703255377f49b364e1a32c02925f6861a0f83d84c8d2d7da06",
+        "files": [
+          "classes/ReleaseService.cls",
+          "classes/ReleaseService.cls-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "ApexClass",
+        "fullName": "ReleaseServiceTest",
+        "category": "code",
+        "sha256": "46c59080e748f43d385af0a5fc417ea1c235945c8ca7111d2c1d011e66a6826b",
+        "files": [
+          "classes/ReleaseServiceTest.cls",
+          "classes/ReleaseServiceTest.cls-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "CustomField",
+        "fullName": "Invoice__c.Amount__c",
+        "category": "schema",
+        "sha256": "b935ec7426c444eec58dce448fd40d79d75a6dd60c7d845a12480e47c6ec045f",
+        "files": [
+          "objects/Invoice__c/fields/Amount__c.field-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "CustomField",
+        "fullName": "Invoice__c.Status__c",
+        "category": "schema",
+        "sha256": "05dc65a091a8c768dbfe90800d1ac62dc1c1e08380bc9a7a30914fa3ac22108d",
+        "files": [
+          "objects/Invoice__c/fields/Status__c.field-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "CustomObject",
+        "fullName": "Invoice__c",
+        "category": "schema",
+        "sha256": "b51749d59116fb4e63379a0752ef4503033ce5e83d708811fe655f36994dd493",
+        "files": [
+          "objects/Invoice__c/Invoice__c.object-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "PermissionSet",
+        "fullName": "Release_Manager",
+        "category": "configuration",
+        "sha256": "df7f1ab409321c09f16757114ce1393436b2edbcf38384f99bb2ab2cd5f0c787",
+        "files": [
+          "permissionsets/Release_Manager.permissionset-meta.xml"
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "success": true,
+    "deploymentId": "0AfdL00000dst99SAA",
+    "tests": [
+      {
+        "name": "ReleaseServiceTest.preparesPriorityInvoice",
+        "outcome": "pass"
+      },
+      {
+        "name": "ReleaseServiceTest.preparesStandardInvoice",
+        "outcome": "pass"
+      }
+    ]
+  },
+  "snapshotSha256": "c6b29687ca18ff9c8f26bc43ae8baf896c3ac1910ef5a23e3e1825f641201fea"
+}
