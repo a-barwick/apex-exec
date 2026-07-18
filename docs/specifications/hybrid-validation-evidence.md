@@ -1,7 +1,7 @@
 # Hybrid Validation Evidence
 
-**Status:** Implemented in M17; milestone completion additionally requires the
-reviewed live evidence run described in `ROADMAP.md`.
+**Status:** Implemented and live-reviewed in M17. The clean, replayed, and
+controlled-blocker artifacts are in `evidence/milestone17/`.
 
 This specification defines the observable candidate-bound evidence contract
 for `apex-exec hybrid`. It sits above M14 hermetic CI and the M15 hybrid
@@ -43,11 +43,14 @@ An authenticated run:
 5. checks the supplied alias through non-verbose `sf org display --json` and
    retains only the org ID;
 6. retrieves the affected code plus project-owned schema/configuration twice,
-   with the explicit API version, into separate temporary directories;
+   with the explicit API version, into separate project-local `.apex-exec`
+   directories whose `main/default` output trees are prepared before invoking
+   the Salesforce CLI and removed after capture;
 7. rejects the run before deployment unless both normalized inventory digests
    match;
 8. runs an API-version-pinned check-only deployment with the bound component
-   selectors, selected tests, and test level; and
+   selectors and test level, converting method-qualified selected tests to
+   unique class names only at the Metadata API command boundary; and
 9. seals the sanitized snapshot and readiness report.
 
 `--no-cache` is rejected for authenticated evidence because it cannot guarantee
@@ -90,5 +93,9 @@ and verbose credential material do not enter the evidence bundle.
 
 The snapshot seal detects accidental or unreviewed alteration but is not a
 digital signature. Offline replay requires the recorded Salesforce CLI version
-to be installed. Candidate-bound hybrid evidence is release evidence, not a
-Salesforce compatibility percentage and not an **Exact** language claim.
+to be installed. Salesforce `RunSpecifiedTests` accepts class names at this
+boundary, so it may execute and report non-selected methods from the same
+class; the snapshot retains those observations, but readiness compares only
+the exact method-qualified tests sealed in the request. Candidate-bound hybrid
+evidence is release evidence, not a Salesforce compatibility percentage and
+not an **Exact** language claim.

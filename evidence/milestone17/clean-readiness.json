@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 2,
+  "evidence": {
+    "candidate": {
+      "manifestSha256": "083fa8e495a2a5e79ab11e0ffb68753548167eb9971cd5e37eee27b9d9f6a002",
+      "ciCacheKey": "083fa8e495a2a5e79ab11e0ffb68753548167eb9971cd5e37eee27b9d9f6a002",
+      "ciResultSha256": "8f89c9a5960b3a59510d418b39ded7c64159657e4bacf9e467af3ea9a5e75f98"
+    },
+    "request": {
+      "changedPaths": [
+        "force-app/main/default/classes/ReleaseService.cls"
+      ],
+      "componentSelection": "impacted",
+      "affectedComponents": [
+        {
+          "selector": "ApexClass:ReleaseService",
+          "sha256": "d5ebadb3e097b543d011de071e486a998c6556afd0d13e6ad89a8d5e666ad194"
+        },
+        {
+          "selector": "ApexClass:ReleaseServiceTest",
+          "sha256": "1fce42c30dd124c2e20f7e663263d7f043d9f217c1b89eeb68464db2a4a7daf5"
+        }
+      ],
+      "selectedTests": [
+        "ReleaseServiceTest.preparesPriorityInvoice",
+        "ReleaseServiceTest.preparesStandardInvoice"
+      ],
+      "testLevel": "RunSpecifiedTests"
+    },
+    "requestSha256": "c268a28e3e612da39f957927793f6545fb3659bcd901da7cfbbebdf84262ac25",
+    "target": "apex-exec-m17",
+    "orgId": "00DdL000010oTXlUAM",
+    "apiVersion": "65.0",
+    "apexExecVersion": "0.1.0",
+    "salesforceCliVersion": "2.143.6",
+    "capturedAt": "2026-07-18T19:26:29Z",
+    "maximumAgeSeconds": 86400,
+    "retrievedInventorySha256": "91d8126c4642584621cb5ab3c47079a5beb332a6f288a768e7ca2f02aec0cc6f",
+    "retrievalCount": 2
+  },
+  "validationSnapshotSha256": "95359bcc2cdd7ef4a83410eb2201b05d6ccac462586f66d4f3a856829078c052",
+  "replayed": false,
+  "ready": true,
+  "affectedComponents": {
+    "mode": "impacted",
+    "components": [
+      {
+        "metadataType": "ApexClass",
+        "fullName": "ReleaseService",
+        "category": "code",
+        "sha256": "d5ebadb3e097b543d011de071e486a998c6556afd0d13e6ad89a8d5e666ad194",
+        "files": [
+          "force-app/main/default/classes/ReleaseService.cls",
+          "force-app/main/default/classes/ReleaseService.cls-meta.xml"
+        ]
+      },
+      {
+        "metadataType": "ApexClass",
+        "fullName": "ReleaseServiceTest",
+        "category": "code",
+        "sha256": "1fce42c30dd124c2e20f7e663263d7f043d9f217c1b89eeb68464db2a4a7daf5",
+        "files": [
+          "force-app/main/default/classes/ReleaseServiceTest.cls",
+          "force-app/main/default/classes/ReleaseServiceTest.cls-meta.xml"
+        ]
+      }
+    ],
+    "directlyChanged": [
+      "ApexClass:ReleaseService"
+    ]
+  },
+  "affectedTests": [
+    "ReleaseServiceTest.preparesPriorityInvoice",
+    "ReleaseServiceTest.preparesStandardInvoice"
+  ],
+  "local": {
+    "compileSuccess": true,
+    "selectedTests": 2,
+    "passedTests": 2,
+    "failedTests": 0,
+    "lineCoverage": 87.5,
+    "branchCoverage": 100.0,
+    "policyViolations": [],
+    "selection": "impacted"
+  },
+  "orgValidation": {
+    "success": true,
+    "deploymentId": "0AfdL00000dsxB7SAI",
+    "tests": [
+      {
+        "name": "ReleaseServiceTest.preparesPriorityInvoice",
+        "outcome": "pass"
+      },
+      {
+        "name": "ReleaseServiceTest.preparesStandardInvoice",
+        "outcome": "pass"
+      }
+    ]
+  },
+  "drift": [],
+  "testDifferential": [
+    {
+      "name": "ReleaseServiceTest.preparesPriorityInvoice",
+      "localOutcome": "pass",
+      "orgOutcome": "pass",
+      "matched": true
+    },
+    {
+      "name": "ReleaseServiceTest.preparesStandardInvoice",
+      "localOutcome": "pass",
+      "orgOutcome": "pass",
+      "matched": true
+    }
+  ],
+  "differentialPercentage": 100.0,
+  "blockers": []
+}

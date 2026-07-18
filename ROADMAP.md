@@ -382,7 +382,7 @@ North Star blocker.
 
 ### M17 — Candidate-bound live Salesforce validation
 
-**Status:** Active
+**Status:** Complete
 
 #### Scope
 
@@ -403,9 +403,14 @@ count as live Salesforce evidence, and hybrid evidence alone does not promote
 language behavior to **Exact** without matching M13 conformance fixtures.
 
 The version-2 schema, replay enforcement, repeated-retrieval guard, CLI, and
-hermetic regression suite are implemented. The milestone remains **Active**
-until an authorized validation-org alias is supplied and the required clean,
-blocked, and replayed live evidence is reviewed.
+hermetic regression suite are implemented. The reviewed bundle in
+`evidence/milestone17/` binds one exact candidate to a user-supplied disposable
+Developer Edition. The final authenticated capture and offline replay are
+release-ready with two matching retrievals, a passing check-only deployment,
+two of two selected methods matching, and no drift. A controlled unchanged
+PermissionSet mutation keeps deployment and tests green but produces one drift
+finding and blocks release. The org baseline was restored and the clean capture
+was repeated afterward.
 
 #### Exit criterion
 
@@ -415,7 +420,7 @@ failure blocks release, and altered or expired evidence cannot be replayed.
 
 ### M18 — Null-aware expressions
 
-**Status:** Planned
+**Status:** Active
 
 #### Scope
 

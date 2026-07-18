@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M17 — Candidate-bound live Salesforce validation
+M18 — Null-aware expressions
 
 ## Completed
 
@@ -303,19 +303,26 @@ M17 — Candidate-bound live Salesforce validation
   for positive capture/replay, candidate/request/target/API/tool/age mismatch,
   controlled deployment blockers, drift, retrieval stability, tampering,
   error-phase ordering, CLI exit status, and output side effects
-- 301 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.34% overall
-  and 83.59% across the three changed production modules (`ci`, `hybrid`, and
+- Reviewed M17 live evidence in `evidence/milestone17/` for exact candidate
+  `083fa8e…`: two stable Salesforce retrievals, passing check-only deployment,
+  two of two selected test methods matching, zero clean drift, and successful
+  credential-free replay
+- Controlled live PermissionSet drift for that same candidate with a passing
+  deployment and matching tests but one unchanged-configuration finding that
+  blocks release; the disposable org baseline was restored and recaptured clean
+- Cross-version Salesforce retrieve handling that uses a project-local isolated
+  output directory, prepares the legacy `main/default` shape, and collapses
+  method-qualified local selections to unique Metadata API test-class flags
+- 302 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.33% overall
+  and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
 
 ## Immediate target
 
-Obtain an explicitly authorized staging/disposable org alias, then perform the
-M17 clean authenticated capture, exact offline replay, repeated clean retrieval
-review, and controlled live drift or deployment blocker. The candidate-bound
-schema and hermetic fake-CLI regression suite are complete, but those tests are
-not live Salesforce evidence and do not satisfy the milestone exit criterion.
-Local M18 work may continue if that external dependency is pending. The
+Implement M18 safe-navigation and null-coalescing expressions as complete
+lexer/parser/semantic/runtime slices, including precedence, chaining, lazy
+evaluation, side-effect, diagnostic-phase, and integration coverage. The
 complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
 `docs/PHASE_2_BASELINE.md`.
 
@@ -338,24 +345,27 @@ syntax-progress indicators, not semantic, execution, or Salesforce
 compatibility percentages. M21 requires all 14 original fixtures to pass
 without `#[ignore]` or corpus changes.
 
+M17 intentionally changes no Apex syntax, so its North Star movement is zero:
+lexer 5/7, parser 0/7, total 5/14.
+
 ## Phase 2 evidence baseline
 
-- After a refreshed fetch, `main` and `origin/main` both resolve to the M15
-  merge commit `bc92a9e`.
-- The ordinary suite passes 276 tests; all 14 separately ignored North Star
-  goals produce 1 pass and 13 failures when run explicitly.
-- M15 has seven integration tests and four focused unit tests. Its authenticated
-  integration uses a fake `sf`; no real validation snapshot or readiness
-  report is tracked.
+- At the M17 branch point, refreshed `main` and `origin/main` both resolved to
+  the M16 merge commit `35563e5`.
+- The reviewed live bundle in `evidence/milestone17/` records clean
+  authenticated capture, offline replay, controlled drift blocking, and final
+  baseline restoration for the same sealed candidate.
+- Fake-CLI tests remain the hermetic transport regression suite and are not
+  counted as the live Salesforce evidence.
 - No representative enterprise project or frozen Salesforce test denominator
   has been measured against the 60–80% vision target.
 - The M15 path classifier recognizes 28 static metadata types. Unknown
   unchanged metadata is omitted from drift accounting, and multi-part Custom
   Metadata full names are currently truncated.
-- Version-1 validation snapshots are not bound to a manifest/candidate digest,
-  affected request, capture time, API version, or tool provenance. M17 must
-  reject stale or mismatched evidence before the first live run is accepted as
-  durable release evidence.
+- Version-1 validation snapshots remain rejected. Schema-version-2 evidence
+  binds candidate, request, org, API/tool versions, capture age, inventory, and
+  the complete snapshot; altered, expired, or mismatched evidence fails before
+  readiness evaluation.
 
 ## Known limitations
 

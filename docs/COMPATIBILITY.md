@@ -512,11 +512,18 @@ Metadata filenames are currently truncated at the first dot. M26 replaces this
 curated classifier with explicit, API-versioned file accounting.
 
 With `--target-org`, Apex Exec verifies an existing authenticated alias,
-retrieves the scoped org metadata into a temporary directory, and runs
-`sf project deploy start --dry-run`. Only affected tests are requested through
-`RunSpecifiedTests`; a no-test selection uses `NoTestRun`. Auth inspection does
-not request verbose output or persist access tokens/auth URLs. The tool does
-not create, authenticate, reset, or delete orgs.
+retrieves the scoped org metadata into isolated project-local `.apex-exec`
+directories, and runs `sf project deploy start --dry-run`. Each retrieve
+directory is prepared with the legacy `main/default` output shape before the
+command and removed after inventory capture; this works with both the older
+and current Salesforce CLI output contracts exercised by M17. Method-qualified
+affected tests remain sealed in the evidence, while the Metadata API transport
+deduplicates them to class names for `RunSpecifiedTests`; readiness compares
+only the exact selected methods. A no-test selection uses `NoTestRun`.
+Salesforce may execute and report other methods in a selected class, but those
+extra observations do not expand the bound request. Auth inspection does not
+request verbose output or persist access tokens/auth URLs. The tool does not
+create, authenticate, reset, or delete orgs.
 
 Version-1 validation snapshots are rejected. M17 schema-version-2 snapshots
 bind the provider-neutral inventory and validation observations to the exact
@@ -533,8 +540,12 @@ hermetic local CI and policy pass, the Salesforce dry run passes, unaffected
 schema/configuration has no drift, and every affected local test outcome
 matches Salesforce. JSON and console reports include the evidence identity,
 affected components/tests, coverage, drift, differential percentage, and
-explicit blockers. This implementation does not itself count as reviewed live
-M17 evidence; the roadmap exit run still requires a user-supplied org.
+explicit blockers. The reviewed `evidence/milestone17/` bundle records a clean
+authenticated capture and exact offline replay for one sealed candidate, plus
+a controlled unchanged-PermissionSet drift that blocks release even though the
+check-only deployment and selected tests pass. The org baseline was restored
+and recaptured clean. This is release-readiness evidence, not an **Exact**
+language or Salesforce compatibility claim.
 
 ## Platform surface
 
@@ -565,7 +576,7 @@ M17 evidence; the roadmap exit run still requires a user-supplied org.
 | Enterprise CI | Implemented (hermetic manifests/replay, content cache, impacted tests, shards, standard reports, provider templates, and policy gates) | M14 |
 | Hybrid deployment confidence | Implemented (affected components/tests, optional validation org, drift, test differential, readiness reports, and snapshot replay) | M15 |
 | Governor limits | Deferred | Post-core compatibility profile |
-| Candidate-bound live validation evidence | Implemented (schema v2, exact replay, repeated retrieval; reviewed live evidence pending) | M17 |
+| Candidate-bound live validation evidence | Implemented (schema v2, exact replay, repeated retrieval, and reviewed clean/blocked live bundle) | M17 |
 | Broad metadata accounting and org-only drift | Planned | M26 |
 | Sharing/security behavior | Planned (profile-scoped) | M27 |
 | API-version differences | Planned | M25 |

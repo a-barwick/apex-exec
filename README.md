@@ -153,8 +153,10 @@ M17 snapshot schema version 2 binds live evidence to the exact M14 manifest and
 CI result, affected request, org, API/tool versions, capture time, age policy,
 and normalized inventory. Capture performs two matching retrievals; replay
 requires the exact cached CI artifact and installed Salesforce CLI version.
-No real-org validation snapshot is tracked until the required user-authorized
-M17 run is reviewed.
+The reviewed clean and controlled-drift artifacts are tracked in
+`evidence/milestone17/`. They contain no auth material and intentionally expire
+under their recorded 24-hour replay policy; expiration does not erase their
+historical review value.
 
 The M16 sample executes right-associative lazy conditionals and checked runtime
 type tests, then runs both production branches through the Apex test runner:

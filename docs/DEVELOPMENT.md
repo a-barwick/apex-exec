@@ -26,12 +26,12 @@ cargo run -- lsp .
 cargo run -- dap
 ```
 
-The repository does not ship a real-org snapshot until an M17 evidence bundle
-is reviewed. Produce one from an authorized staging alias with `--target-org`,
-`--record-validation`, and `--report`; do not commit credentials or auth URLs.
-Authenticated capture requires a cacheable M14 result and performs two scoped
-retrievals. Replay requires `--replay`, the recorded alias and org ID, the same
-maximum-age policy, and the recorded Salesforce CLI version. See
+The reviewed M17 clean and controlled-drift artifacts are in
+`evidence/milestone17/`. Produce a refresh from an authorized staging alias with
+`--target-org`, `--record-validation`, and `--report`; do not commit credentials
+or auth URLs. Authenticated capture requires a cacheable M14 result and performs
+two scoped retrievals. Replay requires `--replay`, the recorded alias and org
+ID, the same maximum-age policy, and the recorded Salesforce CLI version. See
 `docs/specifications/hybrid-validation-evidence.md` for the exact contract.
 
 The VS Code thin client is under `editors/vscode`; see its README for local

@@ -39,6 +39,14 @@ stable.
 - Retrieve the complete drift/affected scope twice into isolated temporary
   directories. Normalize both inventories through the existing provider-neutral
   inventory boundary and stop before deployment if their digests differ.
+- Place retrieve directories below the SFDX project-local `.apex-exec`
+  boundary and precreate `main/default`. This satisfies both the legacy CLI
+  conversion shape and the current CLI requirement that output remain inside a
+  Salesforce project; remove each directory after inventory capture.
+- Preserve method-qualified selected tests in the sealed request and
+  differential. At the Metadata API command boundary only, deduplicate those
+  names to test classes because `RunSpecifiedTests` does not accept
+  method-qualified names.
 - Persist only the allowlisted evidence model. Never serialize the Salesforce
   authentication response, access token, auth URL, instance URL, or verbose org
   display output.
@@ -54,6 +62,10 @@ stable.
   capture.
 - Live validation performs two metadata retrieves, increasing Salesforce time
   and API consumption in exchange for explicit normalization evidence.
+- Salesforce can execute additional methods when a selected class is passed to
+  `RunSpecifiedTests`. The snapshot retains returned observations, while
+  release readiness compares only the exact method-qualified tests bound to the
+  candidate.
 - The SHA-256 seal provides deterministic integrity and mismatch detection, not
   third-party authenticity or non-repudiation. Repository review and trusted CI
   artifact handling remain required.

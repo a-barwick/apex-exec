@@ -129,7 +129,9 @@ provenance, and binds the retrieved inventory and full snapshot by SHA-256.
 Authenticated capture retrieves the same scope twice and stops before deploy
 when normalized inventory digests differ. Replay remains above compiler and
 runtime phases, requires the exact M14 cache artifact, and rejects identity or
-age mismatches before readiness evaluation.
+age mismatches before readiness evaluation. The reviewed M17 bundle preserves
+the clean authenticated, exact replay, and controlled-drift blocker outcomes
+for one sealed candidate without adding org behavior to language phases.
 
 M16 adds dedicated conditional and runtime-type AST nodes without moving
 semantic state into parsed syntax. The checker records each expression's
@@ -425,19 +427,25 @@ not drift. Code differences are handled by the dry-run deployment and affected
 test differential instead of being mislabeled as configuration drift.
 
 An authenticated adapter first verifies an existing org alias without verbose
-output, retrieves the scoped metadata into an isolated temporary directory,
-and invokes `sf project deploy start --dry-run`. It never creates an org,
-authenticates interactively, requests an auth URL, or persists credentials.
-M17 records the resulting observations in strict schema-version-2 evidence.
-Live capture requires a cacheable M14 result, pins the project API version on
-both retrieves and deployment, and compares two independently retrieved
-normalized inventories. Offline replay asserts the expected alias and org ID,
-checks the installed Salesforce CLI and Apex Exec versions, enforces the exact
-recorded age policy, then reproduces the M14 cache key/result and affected
-request before release readiness is evaluated. The raw authentication response
-is never serialized. Release readiness still requires the hermetic local CI
-policy, check-only deployment, unaffected schema/configuration drift, and every
-selected test outcome to agree.
+output, retrieves the scoped metadata into isolated project-local
+`.apex-exec` directories, and invokes `sf project deploy start --dry-run`.
+Each retrieve directory is precreated with `main/default` so both legacy and
+current Salesforce CLI output contracts have a valid conversion target, then
+removed after inventory capture. It never creates an org, authenticates
+interactively, requests an auth URL, or persists credentials. M17 records the
+resulting observations in strict schema-version-2 evidence. Live capture
+requires a cacheable M14 result, pins the project API version on both retrieves
+and deployment, and compares two independently retrieved normalized
+inventories. The bound request retains method-qualified selected tests, while
+the Metadata API transport deduplicates them to test-class flags; differential
+evaluation remains limited to the exact bound methods even if Salesforce
+reports additional class methods. Offline replay asserts the expected alias
+and org ID, checks the installed Salesforce CLI and Apex Exec versions,
+enforces the exact recorded age policy, then reproduces the M14 cache
+key/result and affected request before release readiness is evaluated. The raw
+authentication response is never serialized. Release readiness still requires
+the hermetic local CI policy, check-only deployment, unaffected
+schema/configuration drift, and every selected test outcome to agree.
 
 ## Phase 2 architecture constraints
 
