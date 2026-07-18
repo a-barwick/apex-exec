@@ -116,6 +116,21 @@ cargo run -- ci run \
   --shard 0/2 --replay
 ```
 
+Repository pull requests, pushes to `main`, merge-queue candidates, and weekday
+scheduled builds run the same guarantees in GitHub Actions. The required gate
+combines Rust formatting, linting, documentation, and cross-platform tests with
+15 end-to-end Apex program/project cases and both hermetic enterprise-CI
+shards. A `v*` tag whose version matches `Cargo.toml` builds verified Linux,
+macOS, and Windows archives, adds SHA-256 checksums, and publishes a GitHub
+release.
+
+Run the realistic Apex regression layer locally after building the binary:
+
+```bash
+cargo build
+APEX_EXEC_BIN=target/debug/apex-exec .github/scripts/run-apex-regression.sh
+```
+
 Compiler stages can be inspected independently:
 
 ```console

@@ -1,0 +1,195 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RUST_VERSION: 1.88.0
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-verify
+
+      - name: Require a tag matching Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])'
+          )"
+          if [[ "${RELEASE_TAG}" != "v${package_version}" ]]; then
+            echo "Tag ${RELEASE_TAG} does not match crate version v${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Run required verification
+        run: |
+          cargo fmt --check
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run complex Apex release smoke suite
+        env:
+          APEX_EXEC_BIN: ${{ github.workspace }}/target/debug/apex-exec
+          CI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/release-apex
+        run: .github/scripts/run-apex-regression.sh
+
+      - name: Protect the accepted real-world lexer frontier
+        run: cargo test --locked --test north_star lexes_json_parse -- --ignored --exact
+
+      - name: Run and replay both hermetic Apex CI shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files > apex-exec-release-inputs.txt
+          for shard in 0 1
+          do
+            target/debug/apex-exec ci run \
+              examples/milestone14-project/apex-exec-ci.json \
+              --changed-list apex-exec-release-inputs.txt \
+              --cache-dir .ci-cache/release \
+              --shard "${shard}/2"
+            target/debug/apex-exec ci run \
+              examples/milestone14-project/apex-exec-ci.json \
+              --changed-list apex-exec-release-inputs.txt \
+              --cache-dir .ci-cache/release \
+              --shard "${shard}/2" \
+              --replay
+          done
+
+      - name: Retain release verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-verification
+          path: |
+            artifacts/release-apex/
+            examples/milestone14-project/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  binaries:
+    name: Build binary (${{ matrix.os }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-binary
+
+      - name: Build optimized binary
+        run: cargo build --locked --release
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          executable="target/release/apex-exec"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            executable="${executable}.exe"
+          fi
+          "${executable}" check examples/milestone5-project
+
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="$(printf '%s' "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
+          asset="apex-exec-${platform}-${RUNNER_ARCH}"
+          mkdir -p dist
+          cp target/release/apex-exec "dist/${asset}"
+          tar -C dist -czf "dist/${asset}.tar.gz" "${asset}"
+          rm "dist/${asset}"
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $asset = "apex-exec-windows-$env:RUNNER_ARCH"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/apex-exec.exe "dist/$asset.exe"
+          Compress-Archive -Path "dist/$asset.exe" -DestinationPath "dist/$asset.zip"
+          Remove-Item "dist/$asset.exe"
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apex-exec-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: apex-exec-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" --verify-tag --generate-notes
+          fi
+          gh release upload "${RELEASE_TAG}" dist/* --clobber

@@ -476,6 +476,15 @@ itself becomes a sealed input. `ci integrations` emits pull-request templates
 for GitHub Actions, GitLab CI, and Jenkins with two distributed shards. The
 templates invoke an `apex-exec` binary provisioned by the enterprise runner.
 
+The Apex Exec repository itself continuously exercises this contract on pull
+requests, `main` pushes, and merge-queue candidates. Its required GitHub gate
+runs both hermetic shards and immediately replays each content-addressed
+artifact, publishes source-mapped SARIF when permissions allow, and retains
+JUnit and Cobertura reports. A separate 15-case end-to-end suite executes
+increasingly complex anonymous and SFDX fixtures through M13, covering project
+linking, Apex tests, schema/SObjects, queries and DML, triggers and rollback,
+the curated platform profile, and all deterministic async forms.
+
 This is deterministic local CI selection, not a claim that implicit Salesforce
 dependencies can always be inferred. The conservative fallback is intentional,
 and coverage/performance gates on individual shards describe that shard unless

@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** 2026-07-17
+**Last updated:** 2026-07-18
 
 ## Active milestone
 
@@ -261,7 +261,17 @@ M15 — Hybrid deployment confidence
   integration tests covering manifests, drift, selection, fallback, shards,
   cache/replay, reports, policies, compile failures, provider templates, and
   the CLI
-- 265 ordinary tests pass with no failures (14 separate North Star goal tests
+- Required GitHub Actions gates for pull requests, `main` pushes, and merge
+  queues plus weekday scheduled builds, combining workflow syntax/security
+  linting, formatting, Clippy, rustdoc, packaging, cross-platform Rust tests,
+  the accepted 14,740-line North Star lexer frontier, 15 realistic Apex
+  executions, and both hermetic enterprise-CI shards
+- Source-mapped SARIF publication, retained JUnit/Cobertura/Apex execution
+  artifacts, content-addressed replay checks, concurrency cancellation, and
+  scheduled Cargo/GitHub Actions dependency update pull requests
+- Verified tag delivery for native Linux, macOS, and Windows archives with
+  Cargo-version matching, SHA-256 checksums, and GitHub release publication
+- 270 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 83.97% overall,
   including 90.14% for the new enterprise CI module
 

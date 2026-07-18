@@ -43,6 +43,33 @@ cargo clippy --all-targets -- -D warnings
 
 Run the relevant CLI example after changing command behavior or execution.
 
+## GitHub Actions confidence gates
+
+The repository workflow runs for pull requests, pushes to `main`, merge-queue
+candidates, weekday scheduled builds, and manual dispatches. Its single
+required gate depends on:
+
+- actionlint, workflow security checks, formatting, Clippy, rustdoc, and
+  `cargo package`;
+- the complete Rust suite on Linux, macOS, and Windows;
+- 15 complex anonymous and SFDX Apex executions spanning M4 through M13;
+- the accepted lexer frontier over the pinned 14,740-line North Star corpus;
+- both M14 hermetic CI shards, including exact cache replay and uploaded JUnit,
+  Cobertura, and SARIF reports.
+
+Run the end-to-end Apex layer locally with:
+
+```bash
+cargo build
+APEX_EXEC_BIN=target/debug/apex-exec .github/scripts/run-apex-regression.sh
+```
+
+Release tags must be `v<the Cargo.toml version>`. The release workflow repeats
+the required verification, Apex suite, North Star guard, and both hermetic CI
+shards before producing native Linux, macOS, and Windows archives, checksums,
+and a GitHub release. A manual release dispatch builds candidates but does not
+publish them.
+
 ## Git workflow
 
 - Create an appropriately scoped branch before changing files. Agent-created

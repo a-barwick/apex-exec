@@ -1,6 +1,11 @@
 # Rust build artifacts
 /target/
 
+# Local CI artifacts and content-addressed caches
+artifacts/
+.ci-cache/
+dist/
+
 # Editor and operating-system metadata
 .DS_Store
 .idea/
