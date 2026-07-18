@@ -7,6 +7,7 @@ executable fixture.
 - [Type system](type-system.md)
 - [Execution semantics](execution-semantics.md)
 - [Diagnostics](diagnostics.md)
+- [Hybrid validation evidence](hybrid-validation-evidence.md)
 
 Specifications may describe both current and target behavior, but every rule
 must be labeled **Implemented**, **Planned**, or **Deferred** when support is not

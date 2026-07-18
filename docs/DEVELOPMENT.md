@@ -17,17 +17,22 @@ cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
 cargo run -- ci run examples/milestone14-project/apex-exec-ci.json --shard 0/2
 cargo run -- hybrid examples/milestone15-project/apex-exec-ci.json \
-  --validation-snapshot /path/to/reviewed-milestone15-validation.json
+  --validation-snapshot /path/to/reviewed-milestone17-validation.json \
+  --expected-target-org staging \
+  --expected-org-id 00D000000000001 \
+  --replay
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
 ```
 
-The repository does not ship a real-org M15 snapshot. Produce one from an
-authorized staging alias with `--target-org`, `--record-validation`, and
-`--report`; do not commit credentials or auth URLs. Phase 2 M17 strengthens the
-snapshot schema before accepting the first live evidence bundle as a durable
-release gate.
+The repository does not ship a real-org snapshot until an M17 evidence bundle
+is reviewed. Produce one from an authorized staging alias with `--target-org`,
+`--record-validation`, and `--report`; do not commit credentials or auth URLs.
+Authenticated capture requires a cacheable M14 result and performs two scoped
+retrievals. Replay requires `--replay`, the recorded alias and org ID, the same
+maximum-age policy, and the recorded Salesforce CLI version. See
+`docs/specifications/hybrid-validation-evidence.md` for the exact contract.
 
 The VS Code thin client is under `editors/vscode`; see its README for local
 extension-host instructions.

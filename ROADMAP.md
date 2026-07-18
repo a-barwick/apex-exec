@@ -402,6 +402,11 @@ Fake-CLI tests remain the hermetic transport regression suite. They do not
 count as live Salesforce evidence, and hybrid evidence alone does not promote
 language behavior to **Exact** without matching M13 conformance fixtures.
 
+The version-2 schema, replay enforcement, repeated-retrieval guard, CLI, and
+hermetic regression suite are implemented. The milestone remains **Active**
+until an authorized validation-org alias is supplied and the required clean,
+blocked, and replayed live evidence is reviewed.
+
 #### Exit criterion
 
 A reviewed Salesforce evidence bundle for one exact sealed candidate passes

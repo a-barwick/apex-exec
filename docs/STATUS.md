@@ -287,17 +287,36 @@ M17 — Candidate-bound live Salesforce validation
 - A complete M16 project and oracle-ready manifest exercise ternary and
   `instanceof` through project checking, static invocation, isolated Apex
   tests, CLI workflows, branch coverage, and normalized differential dimensions
-- 287 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.26% overall
-  and 80.73% across the eight changed Rust source modules
+- Strict M17 validation-evidence schema version 2 with SHA-256 binding for the
+  serialized M14 manifest, exact cached CI result, changed paths, affected
+  selectors/digests, selected tests/test level, normalized inventory, and full
+  snapshot
+- Target alias/org ID, project API version, Apex Exec/Salesforce CLI versions,
+  UTC capture time, exact maximum-age policy, expected-target replay assertions,
+  future/expired evidence checks, and credential-free M14 replay-only enforcement
+- Two isolated, API-version-pinned Salesforce metadata retrievals per live
+  capture, with deployment prevented when their normalized inventories differ
+- Sanitized snapshot/report serialization that retains only allowlisted org
+  evidence and never records the raw authentication response, access token,
+  auth URL, or instance URL
+- Five focused M17 integration tests plus expanded M15 and hybrid unit coverage
+  for positive capture/replay, candidate/request/target/API/tool/age mismatch,
+  controlled deployment blockers, drift, retrieval stability, tampering,
+  error-phase ordering, CLI exit status, and output side effects
+- 300 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.23% overall
+  and 82.89% across the three changed production modules (`ci`, `hybrid`, and
+  the CLI)
 
 ## Immediate target
 
-Perform M17 against a user-supplied staging org with evidence bound to the
-exact release candidate. M17 requires the strengthened evidence schema and a
-real authenticated run; fake-CLI transport tests are not live evidence. Local
-M18 work may continue if that external dependency is pending. The complete
-Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
+Obtain an explicitly authorized staging/disposable org alias, then perform the
+M17 clean authenticated capture, exact offline replay, repeated clean retrieval
+review, and controlled live drift or deployment blocker. The candidate-bound
+schema and hermetic fake-CLI regression suite are complete, but those tests are
+not live Salesforce evidence and do not satisfy the milestone exit criterion.
+Local M18 work may continue if that external dependency is pending. The
+complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
 `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
@@ -490,9 +509,12 @@ without `#[ignore]` or corpus changes.
   release and excludes directly changed components as intended payload. It
   does not discover org configuration that has no corresponding local
   component.
-- Version-1 M15 snapshots do not seal the M14 candidate, affected request,
-  capture age, API version, or CLI/tool versions. Replay confidence therefore
-  depends on external review until M17 introduces candidate-bound evidence.
+- Version-1 M15 snapshots are rejected. Version-2 evidence detects candidate,
+  request, org, API/tool, age-policy, inventory, and snapshot mismatches, but
+  its SHA-256 seal is an integrity check rather than a digital signature.
+- Offline hybrid replay makes no org request but requires the recorded
+  Salesforce CLI version to remain installed and the exact M14 cache artifact
+  to be available.
 - Authenticated hybrid validation requires an already-installed Salesforce CLI
   and previously authenticated target alias. It does not create, authenticate,
   reset, or delete orgs, and dry-run results remain subject to Salesforce
