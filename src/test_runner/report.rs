@@ -93,6 +93,43 @@ impl TestReport {
         xml.push_str("</testsuite>\n");
         xml
     }
+
+    /// Renders deterministic Cobertura 0.4 XML for CI coverage consumers.
+    pub fn to_cobertura_xml(&self) -> String {
+        let mut xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<coverage line-rate=\"{:.6}\" branch-rate=\"{:.6}\" lines-covered=\"{}\" lines-valid=\"{}\" branches-covered=\"{}\" branches-valid=\"{}\" version=\"apex-exec\" timestamp=\"0\">\n",
+            rate(self.coverage.covered_lines, self.coverage.total_lines),
+            rate(self.coverage.covered_branches, self.coverage.total_branches),
+            self.coverage.covered_lines,
+            self.coverage.total_lines,
+            self.coverage.covered_branches,
+            self.coverage.total_branches,
+        );
+        xml.push_str("  <sources><source>.</source></sources>\n  <packages>\n");
+        for file in &self.coverage.files {
+            xml.push_str(&format!(
+                "    <package name=\"{}\" line-rate=\"{:.6}\" branch-rate=\"{:.6}\">\n      <classes>\n        <class name=\"{}\" filename=\"{}\" line-rate=\"{:.6}\" branch-rate=\"{:.6}\">\n          <methods/>\n          <lines>\n",
+                xml_escape(&file.path.display().to_string()),
+                rate(file.covered_lines, file.total_lines),
+                rate(file.covered_branches, file.total_branches),
+                xml_escape(&file.path.display().to_string()),
+                xml_escape(&file.path.display().to_string()),
+                rate(file.covered_lines, file.total_lines),
+                rate(file.covered_branches, file.total_branches),
+            ));
+            for line in &file.executable_line_numbers {
+                let hits = usize::from(file.covered_line_numbers.binary_search(line).is_ok());
+                xml.push_str(&format!(
+                    "            <line number=\"{line}\" hits=\"{hits}\"/>\n"
+                ));
+            }
+            xml.push_str(
+                "          </lines>\n        </class>\n      </classes>\n    </package>\n",
+            );
+        }
+        xml.push_str("  </packages>\n</coverage>\n");
+        xml
+    }
 }
 
 impl TestFailure {

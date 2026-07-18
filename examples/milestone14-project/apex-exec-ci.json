@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "toolVersion": "0.1.0",
+  "project": ".",
+  "inputs": [
+    {
+      "path": "force-app/main/default/classes/AuditService.cls",
+      "sha256": "120d5c7308eb9e89c454ee852c71a94792cc15986fd11f800dabd6fa8e354699"
+    },
+    {
+      "path": "force-app/main/default/classes/AuditServiceTest.cls",
+      "sha256": "8beb2aab913d768a7faeb3edae9323450a095b7f584531db44c40530752a7589"
+    },
+    {
+      "path": "force-app/main/default/classes/CheckoutService.cls",
+      "sha256": "394ba8ef43e1ef138bd5031c6623b447ea098fca89c6e88c9132298e2c687f57"
+    },
+    {
+      "path": "force-app/main/default/classes/CheckoutServiceTest.cls",
+      "sha256": "d32c5e7b1e1df49457fc5fdadc08ad0fbfc6e4bb62a86f10a4df1511b18708d8"
+    },
+    {
+      "path": "force-app/main/default/classes/PricingService.cls",
+      "sha256": "8e965eeb1b65aeea22495cdc616394dfcd7f92cdfcdcfc7f8e78e2545ab26190"
+    },
+    {
+      "path": "force-app/main/default/classes/PricingServiceTest.cls",
+      "sha256": "12cbedbb08da795ea7edd75e641e601dc36add7aefb206f6197bd0e350258da8"
+    },
+    {
+      "path": "sfdx-project.json",
+      "sha256": "271e731ae32f0ace02ee27f3a4f1da3db44ab79311f8105e45a38364dfa1fb91"
+    }
+  ],
+  "changedFiles": [
+    "force-app/main/default/classes/PricingService.cls"
+  ],
+  "shard": {
+    "index": 0,
+    "total": 2
+  },
+  "jobs": 2,
+  "reports": {
+    "junit": "artifacts/{shard}/junit.xml",
+    "sarif": "artifacts/{shard}/results.sarif",
+    "coverage": "artifacts/{shard}/coverage.xml"
+  },
+  "policy": {
+    "maxTestFailures": 0
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "packageDirectories": [
+    {
+      "path": "force-app",
+      "default": true
+    }
+  ],
+  "name": "apex-exec-milestone14",
+  "sourceApiVersion": "65.0"
+}

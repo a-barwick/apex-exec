@@ -15,6 +15,7 @@ cargo run -- run examples/control-flow.apex
 cargo run -- check examples/milestone5-project
 cargo run -- invoke examples/milestone5-project Entry.run
 cargo run -- test examples/milestone6-project --jobs 2
+cargo run -- ci run examples/milestone14-project/apex-exec-ci.json --shard 0/2
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
@@ -79,6 +80,8 @@ Behavior should be exercised at the narrowest useful layer:
 - CLI tests or examples for file handling, output, and rendered diagnostics
 - Project tests for SFDX discovery, cross-file resolution, dependency edges,
   cache reuse, and invalidation
+- CI tests for hermetic input drift, impacted selection, shards, cache/replay,
+  standard reports, and policy boundaries
 - Conformance fixtures for observable Apex behavior
 
 As coverage grows, place feature-focused integration tests under a

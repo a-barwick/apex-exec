@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M14 — Enterprise CI
+M15 — Hybrid deployment confidence
 
 ## Completed
 
@@ -238,20 +238,41 @@ M14 — Enterprise CI
 - A deployable M13 SFDX example and 13 focused unit/integration tests covering
   every comparison dimension, unsafe manifests, phase categories, live
   transport shapes, snapshot round trips, regression detection, and CLI status
-- 253 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 83.87% overall,
-  including 83.98% for the new oracle, 100.00% for REPL, 94.21% for debugger,
-  93.80% for LSP, 92.91% for DAP, 88.37% for protocol framing, and 82.68% for
-  editor indexing
+- Versioned hermetic CI manifests sealing project configuration and every
+  package-root input with SHA-256, tool version, changes, shard topology,
+  reports, and policy
+- Exact input-inventory verification that rejects modified, missing,
+  unrecorded, unsafe, and symlinked inputs before cache lookup or execution
+- Content-addressed whole-run artifacts with verified cache hits and an
+  explicit replay-only mode that never falls back to execution
+- Transitive dependency-based impacted-test selection for changed Apex classes,
+  with conservative all-test fallback for metadata, triggers, deletions, and
+  unknown paths
+- Stable qualified-test sharding for independent distributed workers plus the
+  existing bounded per-test parallel execution
+- SARIF 2.1 diagnostics, JUnit test results, and Cobertura line-coverage
+  reports regenerated identically from executed or replayed artifacts
+- Enforceable test-failure, line/branch coverage, duration, and M13 measured
+  compatibility gates
+- Generated GitHub Actions, GitLab CI, and Jenkins pull-request integrations
+  that collect changed paths and execute two deterministic shards
+- A complete M14 six-class SFDX example with four passing Apex tests and 100%
+  production line/branch coverage, plus five focused unit tests and seven
+  integration tests covering manifests, drift, selection, fallback, shards,
+  cache/replay, reports, policies, compile failures, provider templates, and
+  the CLI
+- 265 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 83.97% overall,
+  including 90.14% for the new enterprise CI module
 
 ## Immediate target
 
-Begin M14 with content-addressed build artifacts and correct dependency-based
-impacted-test selection.
+Begin M15 with affected-component selection and schema/configuration drift
+detection over the M14 hermetic manifest boundary.
 
 ## North Star indicators
 
-At M13 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M14 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -385,6 +406,15 @@ compatibility percentages.
 - Recorded oracle matches are scoped to their selected dimensions and
   Salesforce environment. They do not make unmeasured behavior exact, and no
   behavior is promoted to Exact until reviewed org evidence is committed.
+- M14 dependency selection follows explicit Apex class references. Metadata,
+  triggers, deleted files, and unknown paths select all tests; dynamic
+  Salesforce dependencies are never guessed. Coverage and duration policies
+  are evaluated per shard artifact unless the CI provider aggregates the
+  emitted standard reports.
+- Content-addressed artifacts cache normalized compile/test/report observations,
+  not serialized AST/HIR. A cache miss still performs project-wide semantic
+  linking after parsing reuse; persistent lowered-IR caching remains future
+  performance work.
 
 ## Handoff checklist
 

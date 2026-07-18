@@ -21,6 +21,16 @@ impl DependencyGraph {
     pub fn files(&self) -> impl Iterator<Item = &PathBuf> {
         self.edges.keys()
     }
+
+    /// Returns `paths` and every source file that depends on them, transitively.
+    pub fn dependent_closure(&self, paths: impl IntoIterator<Item = PathBuf>) -> BTreeSet<PathBuf> {
+        dependent_closure(&paths.into_iter().collect(), self)
+    }
+
+    /// Returns whether the graph contains an exact source path.
+    pub fn contains_file(&self, path: &Path) -> bool {
+        self.edges.contains_key(path)
+    }
 }
 
 pub(super) fn build_dependency_graph(
