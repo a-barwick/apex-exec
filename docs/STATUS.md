@@ -4,7 +4,7 @@
 
 ## Active milestone
 
-M15 — Hybrid deployment confidence
+Roadmap complete through M15 — compatibility expansion and hardening
 
 ## Completed
 
@@ -261,18 +261,36 @@ M15 — Hybrid deployment confidence
   integration tests covering manifests, drift, selection, fallback, shards,
   cache/replay, reports, policies, compile failures, provider templates, and
   the CLI
-- 265 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 83.97% overall,
-  including 90.14% for the new enterprise CI module
+- Provider-neutral SFDX metadata-component inventories that group source and
+  sidecars into stable Metadata API identities, categories, and SHA-256 digests
+- Affected deployment-component selection through the compiler dependency
+  graph, with conservative complete-project fallback for metadata, triggers,
+  deletions, and unknown paths
+- Optional validation-org authentication checks that never request verbose
+  credentials, scoped metadata retrieval into an isolated temporary directory,
+  and targeted `sf project deploy start --dry-run` execution
+- Unaffected schema/configuration drift detection that distinguishes intended
+  release changes from environmental drift
+- Normalized local-versus-org affected-test outcomes, versioned validation
+  snapshots for credential-free replay, and JSON/console release-readiness
+  reports with explicit blockers
+- A complete M15 four-class SFDX example with three passing Apex tests and 100%
+  full-suite production line/branch coverage, plus four focused unit tests and
+  seven integration tests covering inventory, safety, selection, fallback,
+  drift, differential failures, snapshots, authenticated CLI transport, report
+  output, and readiness exit status
+- 276 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 84.07% overall,
+  including 86.11% for the new hybrid deployment module
 
 ## Immediate target
 
-Begin M15 with affected-component selection and schema/configuration drift
-detection over the M14 hermetic manifest boundary.
+Expand measured real-project compatibility and selectively promote North Star
+grammar/runtime blockers without weakening the completed M15 release gate.
 
 ## North Star indicators
 
-At M14 completion, the pinned real-world lexer/parser goals pass 1 of 14
+At M15 completion, the pinned real-world lexer/parser goals pass 1 of 14
 indicators (**7.14%**): lexer 1 of 7 (**14.29%**) and parser 0 of 7 (**0%**).
 `JSONParse.cls` now parses through its class and ordinary members before
 stopping at unsupported `instanceof` syntax. Annotation tokenization moved the
@@ -415,6 +433,17 @@ compatibility percentages.
   not serialized AST/HIR. A cache miss still performs project-wide semantic
   linking after parsing reuse; persistent lowered-IR caching remains future
   performance work.
+- M15 inventories a curated common SFDX metadata layout rather than every
+  Metadata API type. Unknown changed paths conservatively validate the complete
+  project, while unknown unchanged metadata is outside drift accounting.
+- Drift compares project-owned schema/configuration content retrieved for the
+  release and excludes directly changed components as intended payload. It
+  does not discover org configuration that has no corresponding local
+  component.
+- Authenticated hybrid validation requires an already-installed Salesforce CLI
+  and previously authenticated target alias. It does not create, authenticate,
+  reset, or delete orgs, and dry-run results remain subject to Salesforce
+  availability and org compute limits.
 
 ## Handoff checklist
 
