@@ -169,7 +169,11 @@ impl<'compilation> EditorIndex<'compilation> {
 
 pub fn diagnostics(source: &str) -> Vec<EditorDiagnostic> {
     let diagnostic = crate::tokenize(source)
-        .and_then(|tokens| crate::parser::Parser::new(tokens).parse_program())
+        .and_then(|tokens| {
+            crate::parser::Parser::new(tokens)
+                .expect("the lexer always emits a valid parser token stream")
+                .parse_program()
+        })
         .and_then(|program| crate::semantic::check(&program))
         .err();
     diagnostic
@@ -338,6 +342,7 @@ impl<'program> IndexBuilder<'program> {
 impl<'ast> Visitor<'ast> for IndexBuilder<'_> {
     fn visit_named_type(&mut self, named_type: &'ast NamedType) {
         self.named_type(named_type);
+        visit::walk_named_type(self, named_type);
     }
 
     fn visit_identifier(&mut self, identifier: &'ast Identifier) {

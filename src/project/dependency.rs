@@ -97,6 +97,7 @@ impl DependencyCollector {
 impl<'ast> Visitor<'ast> for DependencyCollector {
     fn visit_named_type(&mut self, named_type: &'ast NamedType) {
         self.record_reference(&named_type.canonical);
+        visit::walk_named_type(self, named_type);
     }
 
     fn visit_expression(&mut self, expression: &'ast Expression) {

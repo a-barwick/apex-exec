@@ -1,6 +1,6 @@
 use super::Parser;
 use crate::{
-    ast::{NamedType, ReturnType, TypeName},
+    ast::{NamedType, ReturnType, TypeArgument, TypeName},
     diagnostic::Diagnostic,
     token::TokenKind,
 };
@@ -99,16 +99,31 @@ impl Parser {
             spelling.push_str(&nested.spelling);
             span = span.merge(nested.span);
         }
+        let mut type_arguments = Vec::new();
         if self.check(&TokenKind::Less) {
             self.advance();
-            let (_, argument_span) = self.parse_type_name()?;
+            loop {
+                let (ty, argument_span) = self.parse_type_name()?;
+                type_arguments.push(TypeArgument {
+                    ty,
+                    span: argument_span,
+                });
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
             let end = self.expect_simple(
                 TokenKind::Greater,
                 "expected `>` after interface type argument",
             )?;
-            span = span.merge(argument_span).merge(end.span);
+            span = span.merge(end.span);
         }
-        Ok(NamedType::new(spelling, span))
+        Ok(NamedType::with_type_arguments(
+            spelling,
+            type_arguments,
+            span,
+        ))
     }
 
     pub(super) fn is_declaration_start(&self) -> bool {
@@ -187,8 +202,30 @@ impl Parser {
         if !self.check(&TokenKind::LeftParen) {
             return false;
         }
-        self.type_end_at(self.cursor + 1)
-            .is_some_and(|end| matches!(self.token_at(end).kind, TokenKind::RightParen))
+        let type_start = self.cursor + 1;
+        let Some(end) = self.type_end_at(type_start) else {
+            return false;
+        };
+        if !matches!(self.token_at(end).kind, TokenKind::RightParen) {
+            return false;
+        }
+        let operand = &self.token_at(end + 1).kind;
+        if !is_unary_expression_start(operand) {
+            return false;
+        }
+        if matches!(
+            operand,
+            TokenKind::Plus | TokenKind::PlusPlus | TokenKind::Minus | TokenKind::MinusMinus
+        ) && end == type_start + 1
+            && matches!(
+                &self.token_at(type_start).kind,
+                TokenKind::Identifier(spelling)
+                    if TypeName::from_apex_name(spelling).is_none()
+            )
+        {
+            return false;
+        }
+        true
     }
 
     pub(super) fn is_for_each_start(&self) -> bool {
@@ -238,7 +275,9 @@ impl Parser {
             | "schedulablecontext"
             | "system.schedulablecontext"
             | "sobjecttype"
+            | "schema.sobjecttype"
             | "describesobjectresult"
+            | "schema.describesobjectresult"
             | "exception"
             | "nullpointerexception"
             | "listexception"
@@ -293,4 +332,24 @@ impl Parser {
             self.type_end_at(cursor)
         }
     }
+}
+
+fn is_unary_expression_start(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Identifier(_)
+            | TokenKind::StringLiteral(_)
+            | TokenKind::BooleanLiteral(_)
+            | TokenKind::IntegerLiteral(_)
+            | TokenKind::DecimalLiteral(_)
+            | TokenKind::Null
+            | TokenKind::New
+            | TokenKind::LeftBracket
+            | TokenKind::LeftParen
+            | TokenKind::Plus
+            | TokenKind::PlusPlus
+            | TokenKind::Minus
+            | TokenKind::MinusMinus
+            | TokenKind::Bang
+    )
 }

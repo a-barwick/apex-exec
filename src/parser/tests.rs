@@ -8,6 +8,7 @@ use crate::span::SourceId;
 
 fn parse(source: &str) -> Program {
     Parser::new(Lexer::new(source).tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap()
 }
@@ -20,6 +21,7 @@ fn preserves_source_identity_through_constructed_spans() {
             .tokenize()
             .unwrap(),
     )
+    .unwrap()
     .parse_program()
     .unwrap();
 
@@ -139,6 +141,7 @@ fn instanceof_binds_as_a_comparison_and_preserves_generic_target() {
 #[test]
 fn conditional_requires_a_false_branch_in_the_parser() {
     let error = Parser::new(Lexer::new("Integer value = true ? 1;").tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap_err();
 
@@ -410,6 +413,7 @@ fn rejects_more_than_one_array_suffix_explicitly() {
             .tokenize()
             .unwrap(),
     )
+    .unwrap()
     .parse_program()
     .unwrap_err();
 
@@ -534,6 +538,7 @@ fn parses_try_finally_without_a_catch() {
 #[test]
 fn requires_a_catch_or_finally_after_try() {
     let error = Parser::new(Lexer::new("try {}").tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap_err();
 
