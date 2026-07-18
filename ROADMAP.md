@@ -269,7 +269,7 @@ Developers can use Apex Exec as their normal inner loop from a supported editor.
 
 ## M13 — Salesforce compatibility oracle
 
-**Status:** Active
+**Status:** Complete
 
 Run identical conformance fixtures locally and in a scratch org, then compare:
 
@@ -283,7 +283,7 @@ reported as measured coverage, not asserted as a blanket claim.
 
 ## M14 — Enterprise CI
 
-**Status:** Planned
+**Status:** Active
 
 - Incremental compilation and impacted-test selection
 - Content-addressed caches, sharding, and distributed workers

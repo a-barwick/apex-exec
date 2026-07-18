@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "data-and-trigger-behavior",
+      "project": "project",
+      "entrypoint": {
+        "kind": "invoke",
+        "target": "OracleDemo.run"
+      },
+      "compare": [
+        "compile",
+        "values",
+        "output",
+        "queries",
+        "dml",
+        "triggers"
+      ]
+    },
+    {
+      "name": "runtime-exception",
+      "project": "project",
+      "entrypoint": {
+        "kind": "invoke",
+        "target": "OracleDemo.fail"
+      },
+      "compare": [
+        "compile",
+        "exceptions"
+      ]
+    },
+    {
+      "name": "apex-test-outcome",
+      "project": "project",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "OracleDemoTest.confirmsBehavior"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ pub mod editor;
 pub mod hir;
 pub mod lexer;
 pub mod lsp;
+pub mod oracle;
 pub mod parser;
 pub mod platform;
 pub mod project;

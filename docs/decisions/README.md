@@ -46,3 +46,4 @@ history.
 - [0014 — Keep curated platform APIs checked and host-backed](0014-checked-curated-platform-services.md)
 - [0015 — Drain asynchronous Apex explicitly and deterministically](0015-explicit-deterministic-async-drain.md)
 - [0016 — Debug through deterministic runtime snapshots](0016-deterministic-debug-snapshots.md)
+- [0017 — Compare providers through normalized oracle snapshots](0017-normalized-differential-oracle.md)

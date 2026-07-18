@@ -25,6 +25,9 @@ Platform kernel ─► normalized schema, checked queries/DML, and SQLite transa
     │
     ▼
 REPL / DAP / LSP ─► persistent inner loop and source-mapped editor services
+    │
+    ▼
+Compatibility oracle ─► normalized local/Salesforce snapshots and measured diffs
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -100,6 +103,14 @@ coverage overlays. The persistent REPL commits a snippet only after the
 accumulated source checks and executes successfully, then reconstructs state by
 deterministic replay.
 
+M13 adds a provider-neutral differential boundary above project compilation,
+runtime hosting, and the test runner. Versioned fixture manifests select a
+compile, static invocation, or test entry point plus the dimensions meaningful
+for that fixture. Local structured host events and Salesforce CLI JSON/logs
+normalize into the same snapshot model. Recorded Salesforce snapshots are
+durable conformance evidence and allow deterministic offline comparison; live
+scratch-org transport remains isolated in the oracle adapter.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in
@@ -154,6 +165,7 @@ state between interpreters.
 | `protocol` | Shared LSP/DAP `Content-Length` JSON message framing |
 | `lsp` | Stdio Language Server Protocol requests and document diagnostics |
 | `dap` | Stdio Debug Adapter Protocol launch and inspection workflows |
+| `oracle` | Versioned conformance manifests, local/Salesforce adapters, normalized snapshots, differential reports, and measured compatibility coverage |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 
@@ -327,8 +339,14 @@ Compatibility has three layers:
 
 1. **Declared surface:** `docs/COMPATIBILITY.md` states what is intended.
 2. **Executable fixtures:** tests define observable local behavior.
-3. **Differential oracle:** later milestones execute fixtures against Salesforce
-   and record mismatches.
+3. **Differential oracle:** versioned fixtures execute locally and against
+   Salesforce, normalize observations, and record mismatches.
+
+M13 implements the third layer with durable local and Salesforce snapshots.
+Each report measures matched fixture dimensions overall and by category.
+Recorded matches can support a narrowly documented **Exact** claim only for the
+fixture cases and environment actually observed; no unmeasured surface is
+promoted implicitly.
 
 API-version, sharing, limits, and security behavior should eventually be
 explicit runtime profiles. They must not appear as scattered conditionals.
