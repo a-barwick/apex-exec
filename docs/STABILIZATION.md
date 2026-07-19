@@ -67,7 +67,7 @@ package.
 | S0-01 | Frontend process safety and correctness | Complete (`c7d4ac7`, `2a8635d`; review approved; merged as `1b16312`, `ae3bf27`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Complete (`8f3ce51`; review approved at `b8b190e`; merged as `c7f78e1`) | S0-02 merged | S0-01, S0-05 |
-| S0-04 | Execution context and lazy class initialization | Review (`ed830f2`; `codex/stab-execution-context`; `s0_04_execution_context`) | S0-02 and S0-03 merged | S0-01, S0-05 |
+| S0-04 | Execution context and lazy class initialization | Active (`codex/stab-execution-context`; `s0_04_execution_context`; review remediation from `111de58`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
