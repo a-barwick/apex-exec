@@ -351,10 +351,18 @@ fn context_test_project() -> PathBuf {
         @IsTest
         private class ContextModeTest {
             private static Boolean initializedInTest = Test.isRunningTest();
+            private static Boolean setupObservedTestMode = false;
+
+            @TestSetup
+            static void observesTestModeDuringSetup() {
+                System.assert(Test.isRunningTest());
+                setupObservedTestMode = true;
+            }
 
             @IsTest
             static void inheritsAndRestoresTestMode() {
                 System.assert(initializedInTest);
+                System.assert(setupObservedTestMode);
                 System.assert(Test.isRunningTest());
                 AsyncContextProbe.observe();
                 Test.stopTest();
