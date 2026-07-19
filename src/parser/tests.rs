@@ -603,7 +603,7 @@ fn distinguishes_casts_from_grouped_expressions() {
 }
 
 #[test]
-fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
+fn grouped_member_index_and_postfix_continuations_do_not_become_casts() {
     let program = parse(
         "public class Box { public Integer value; } \
          Box box = new Box(); \
@@ -611,12 +611,7 @@ fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
          Integer[] values = new Integer[] { 1 }; \
          Integer member = (box.value) + other; \
          Integer indexed = (values)[0]; \
-         (box.value)++; \
-         Integer plus = (other) + -other; \
-         Integer minus = (other) - +other; \
-         Object boxed = box; \
-         Box customCast = (Box) boxed; \
-         Integer signedCast = (Integer) -other;",
+         (box.value)++;",
     );
 
     let Statement::VariableDeclaration { initializer, .. } = &program.statements[3] else {
@@ -644,10 +639,23 @@ fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
         Expression::Postfix { operand, .. }
             if matches!(operand.as_ref(), Expression::MemberAccess { .. })
     ));
+}
 
+#[test]
+fn signed_grouped_operators_and_genuine_casts_remain_distinct() {
+    let program = parse(
+        "public class Box {} \
+         Box box = new Box(); \
+         Integer other = 2; \
+         Integer plus = (other) + -other; \
+         Integer minus = (other) - +other; \
+         Object boxed = box; \
+         Box customCast = (Box) boxed; \
+         Integer signedCast = (Integer) -other;",
+    );
     for (index, operator, unary) in [
-        (6, BinaryOperator::Add, UnaryOperator::Negate),
-        (7, BinaryOperator::Subtract, UnaryOperator::Positive),
+        (2, BinaryOperator::Add, UnaryOperator::Negate),
+        (3, BinaryOperator::Subtract, UnaryOperator::Positive),
     ] {
         let Statement::VariableDeclaration { initializer, .. } = &program.statements[index] else {
             panic!("expected signed grouped expression");
@@ -671,7 +679,7 @@ fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
         ));
     }
 
-    let Statement::VariableDeclaration { initializer, .. } = &program.statements[9] else {
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[5] else {
         panic!("expected genuine custom cast");
     };
     assert!(matches!(
@@ -682,7 +690,7 @@ fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
         } if name.canonical == "box"
     ));
 
-    let Statement::VariableDeclaration { initializer, .. } = &program.statements[10] else {
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[6] else {
         panic!("expected genuine signed core cast");
     };
     assert!(matches!(

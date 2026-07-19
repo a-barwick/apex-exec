@@ -64,7 +64,7 @@ package.
 | ID | Work package | Status | Depends on | May run with |
 |---|---|---|---|---|
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
-| S0-01 | Frontend process safety and correctness | Review (`c7d4ac7`; review approved; `codex/stab-frontend-safety`) | S0-00 merged | S0-02, S0-05 |
+| S0-01 | Frontend process safety and correctness | Review (`2a8635d`; review approved at `7029448`; `codex/stab-frontend-safety`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; review blocker under remediation) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |

@@ -960,63 +960,70 @@ impl Checker {
             .and_then(|interface| interface.type_arguments.first())
             .map(|argument| argument.ty.clone());
         if let Some(scope_type) = batch_scope_type {
-            let start_candidates = self
-                .async_methods_named(class_id, "start")
-                .collect::<Vec<_>>();
-            let [(start, start_method)] = start_candidates.as_slice() else {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    "Batchable requires exactly one public or global `start(Database.BatchableContext)` method",
-                ));
-            };
-            if start_method.parameters.len() != 1
-                || start_method.parameters[0].ty != TypeName::BatchableContext
-            {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    "Batchable `start` must accept Database.BatchableContext",
-                ));
-            }
-            let expected_start_return =
-                ReturnType::Value(TypeName::List(Box::new(scope_type.clone())));
-            if start_method.return_type != expected_start_return {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    format!(
-                        "Batchable `start` must return {} to match the declared Database.Batchable type argument",
-                        expected_start_return.apex_name()
-                    ),
-                ));
-            }
-            let execute = self.require_async_method(
-                class_id,
-                "execute",
-                &[
-                    TypeName::BatchableContext,
-                    TypeName::List(Box::new(scope_type.clone())),
-                ],
-                &ReturnType::Void,
-                "Batchable",
-            )?;
-            let finish = self.require_async_method(
-                class_id,
-                "finish",
-                &[TypeName::BatchableContext],
-                &ReturnType::Void,
-                "Batchable",
-            )?;
-            contract.batch = Some(hir::BatchContract {
-                start: *start,
-                execute,
-                finish,
-                scope_type,
-            });
+            contract.batch = Some(self.validate_batch_contract(class_id, scope_type)?);
         }
 
         if contract != hir::AsyncClassContract::default() {
             self.async_contracts.insert(class_id, contract);
         }
         Ok(())
+    }
+
+    fn validate_batch_contract(
+        &self,
+        class_id: usize,
+        scope_type: TypeName,
+    ) -> Result<hir::BatchContract, Diagnostic> {
+        let start_candidates = self
+            .async_methods_named(class_id, "start")
+            .collect::<Vec<_>>();
+        let [(start, start_method)] = start_candidates.as_slice() else {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                "Batchable requires exactly one public or global `start(Database.BatchableContext)` method",
+            ));
+        };
+        if start_method.parameters.len() != 1
+            || start_method.parameters[0].ty != TypeName::BatchableContext
+        {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                "Batchable `start` must accept Database.BatchableContext",
+            ));
+        }
+        let expected_start_return = ReturnType::Value(TypeName::List(Box::new(scope_type.clone())));
+        if start_method.return_type != expected_start_return {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                format!(
+                    "Batchable `start` must return {} to match the declared Database.Batchable type argument",
+                    expected_start_return.apex_name()
+                ),
+            ));
+        }
+        let execute = self.require_async_method(
+            class_id,
+            "execute",
+            &[
+                TypeName::BatchableContext,
+                TypeName::List(Box::new(scope_type.clone())),
+            ],
+            &ReturnType::Void,
+            "Batchable",
+        )?;
+        let finish = self.require_async_method(
+            class_id,
+            "finish",
+            &[TypeName::BatchableContext],
+            &ReturnType::Void,
+            "Batchable",
+        )?;
+        Ok(hir::BatchContract {
+            start: *start,
+            execute,
+            finish,
+            scope_type,
+        })
     }
 
     fn async_methods_named<'a>(
@@ -1845,11 +1852,7 @@ impl Checker {
                 self.require_assignable(&expected, &actual, value.span())?;
                 Ok(ExpressionType::Value(expected))
             }
-            Expression::NewCollection {
-                ty,
-                initializer,
-                span,
-            } => self.new_collection_type(ty, initializer, *span),
+            Expression::NewCollection { .. } => self.new_collection_expression_type(expression),
             Expression::NewException {
                 exception_type,
                 arguments,
@@ -1916,6 +1919,21 @@ impl Checker {
                 ..
             } => self.binary_type(left, *operator, right, *operator_span),
         }
+    }
+
+    fn new_collection_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Expression::NewCollection {
+            ty,
+            initializer,
+            span,
+        } = expression
+        else {
+            unreachable!("collection expression helper requires a NewCollection node");
+        };
+        self.new_collection_type(ty, initializer, *span)
     }
 
     fn variable_type(&mut self, identifier: &Identifier) -> Result<ExpressionType, Diagnostic> {
