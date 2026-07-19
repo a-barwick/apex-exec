@@ -96,6 +96,22 @@ queued event. `Test.stopTest` explicitly drains jobs in deterministic order;
 each job runs inside a nested platform transaction checkpoint and emits
 started/completed/failed events. No worker thread or wall-clock scheduler exists.
 
+S0-04 adds an explicit private execution context beside, not inside, runtime
+instrumentation. Ordinary and debugger entry points select non-test mode; the
+test runner selects test mode. Queued work captures the submitting context,
+installs it around its transaction, and restores the caller's context on every
+result. The existing deterministic async profile still shares its
+`ExecutionStore`; the context seam does not claim Salesforce cross-transaction
+static isolation.
+
+Static storage is now lazy per class. First active use initializes base classes
+first, allocates every static field and auto-property slot for one class to
+typed null, and evaluates that class's field initializers in source order.
+Explicit `Uninitialized`, `Initializing`, `Initialized`, and
+`Failed(Diagnostic)` states cache both success and failure. An active class
+stack permits legal same-class helper/default-order access, detects cross-class
+reentry, and enforces a 64-class dependency-depth budget.
+
 M12 adds deterministic statement-boundary debug snapshots above the runtime.
 An explicit runtime instrumentation policy keeps ordinary execution at
 `None`, test execution at `Coverage`, and debugger launches at `Debugger`.
@@ -179,7 +195,7 @@ user-defined calls carry a selected declaration target. Runtime dispatch
 therefore never repeats case-insensitive built-in lookup. An interpreter
 borrows immutable checked code through a `RuntimeImage`; its execution scopes
 and traces remain isolated, while an `ExecutionStore` owns its collection
-arena, object arena, and static slots. `System.debug` crosses a structured
+arena, object arena, lazy class states, and static slots. `System.debug` crosses a structured
 `PlatformHost` boundary whose default owned host records output for the
 existing convenience APIs. A custom host may intentionally share external
 state between interpreters.
@@ -198,6 +214,8 @@ state between interpreters.
 | `parser::declarations` | Class, interface, member, annotation, and trigger declaration grammar |
 | `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
+| `runtime::context` | Ordinary, test, and debugger execution mode plus deterministic async inheritance |
+| `runtime::class_initialization` | Lazy per-class state model and bounded dependency depth |
 | `runtime::instrumentation` | Explicit none/coverage/debugger policy, coverage facts, and bounded debugger snapshot retention |
 | `runtime::value_graph` | Cycle-aware, budgeted value rendering and JSON traversal plus iterative collection equality |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |

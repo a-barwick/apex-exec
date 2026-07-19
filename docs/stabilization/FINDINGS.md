@@ -160,6 +160,14 @@ M20 static blocks and M27 execution/security context will compound these
 problems if an explicit execution context and lazy class state are not
 introduced first.
 
+S0-04 task-branch follow-up reproduced one additional failure inside this same
+boundary: a 300-class acyclic static dependency chain overflowed the host stack
+before an initial 256-class guard could run. The corrected implementation uses
+a 64-class initialization-depth budget and returns a catchable, source-spanned
+`TypeException`. This is part of F-P0-06 rather than a separate work package:
+bounded dependency traversal is required by S0-04's declared initialization
+scope.
+
 ## Structural P1 findings
 
 ### F-P1-01 — The current HIR is not a stable lowered representation
