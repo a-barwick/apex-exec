@@ -15,6 +15,9 @@ use std::{
 
 const ENTERPRISE_REPORT_SCHEMA_VERSION: u32 = 1;
 const REQUIRED_RERUNS: usize = 3;
+type SourceInventory = BTreeMap<PathBuf, SourceFile>;
+type OwnerIndex = BTreeMap<String, PathBuf>;
+type DependencyIndex = BTreeMap<PathBuf, BTreeSet<PathBuf>>;
 
 #[derive(Clone, Debug)]
 pub struct EnterpriseRunOptions {
@@ -219,9 +222,9 @@ pub fn run(
 }
 
 struct Inventory {
-    sources: BTreeMap<PathBuf, SourceFile>,
+    sources: SourceInventory,
     test_classes: BTreeMap<String, PathBuf>,
-    dependencies: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    dependencies: DependencyIndex,
     parse_failures: BTreeMap<PathBuf, EnterpriseBlocker>,
     implicit_sources: Vec<PathBuf>,
 }
@@ -259,9 +262,7 @@ impl Inventory {
     }
 }
 
-fn load_sources(
-    manifest: &EnterpriseManifest,
-) -> Result<(BTreeMap<PathBuf, SourceFile>, BTreeMap<String, PathBuf>), String> {
+fn load_sources(manifest: &EnterpriseManifest) -> Result<(SourceInventory, OwnerIndex), String> {
     let mut sources = BTreeMap::new();
     let mut owners = BTreeMap::new();
     for input in &manifest.inputs {
@@ -306,12 +307,9 @@ fn load_sources(
 }
 
 fn analyze_sources(
-    sources: &BTreeMap<PathBuf, SourceFile>,
-    owners: &BTreeMap<String, PathBuf>,
-) -> (
-    BTreeMap<PathBuf, EnterpriseBlocker>,
-    BTreeMap<PathBuf, BTreeSet<PathBuf>>,
-) {
+    sources: &SourceInventory,
+    owners: &OwnerIndex,
+) -> (BTreeMap<PathBuf, EnterpriseBlocker>, DependencyIndex) {
     let mut parse_failures = BTreeMap::new();
     let mut dependencies = BTreeMap::new();
     for (path, file) in sources {
@@ -363,7 +361,7 @@ fn record_source_failure(
 
 fn index_test_and_implicit_sources(
     manifest: &EnterpriseManifest,
-    sources: &BTreeMap<PathBuf, SourceFile>,
+    sources: &SourceInventory,
 ) -> (BTreeMap<String, PathBuf>, Vec<PathBuf>) {
     let mut test_classes = BTreeMap::new();
     let mut implicit_sources = Vec::new();

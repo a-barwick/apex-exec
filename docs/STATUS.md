@@ -408,7 +408,12 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   tests and report 0/1,159 at parse, check, terminal execution, outcome
   agreement, and strict compatibility. The 43-location blocker census keeps
   every unsupported result in the raw denominator and ranks two production
-  parse blockers at 1,159 affected tests each.
+  parse blockers at 1,159 affected tests each. M22 verification passes 412
+  ordinary tests with no failures or ignored tests, formatting, Clippy with
+  warnings denied, documentation/link validation, and the pinned Lizard
+  complexity ratchet. LLVM source-line coverage measures **85.26%** overall
+  (26,206/30,738) and **78.81%** across the seven M22-changed production
+  modules (2,429/3,082).
 
 ## Immediate target
 
