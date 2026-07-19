@@ -1,7 +1,8 @@
 use super::{
-    DataValue, FieldSchema, FieldType, Record, RecordId, SchemaCatalog, SchemaError, Storage,
-    StorageTransaction,
+    DataValue, FieldSchema, FieldType, ObjectSchema, Record, RecordId, SchemaCatalog, SchemaError,
+    Storage, StorageTransaction,
 };
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use rusqlite::{
     Connection, OptionalExtension, Transaction, params, params_from_iter,
     types::{Value as SqlValue, ValueRef},
@@ -376,6 +377,15 @@ fn configure(connection: &Connection) -> Result<(), SqliteError> {
 
 fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), SqliteError> {
     let transaction = connection.transaction().map_err(SqliteError::database)?;
+    create_schema_registry(&transaction)?;
+    ensure_relationship_registry_column(&transaction)?;
+    for object in schema.objects() {
+        migrate_object(&transaction, object)?;
+    }
+    transaction.commit().map_err(SqliteError::database)
+}
+
+fn create_schema_registry(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
     transaction
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS _apex_objects (
@@ -388,100 +398,149 @@ fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), Sq
                 field_type TEXT NOT NULL,
                 nullable INTEGER NOT NULL,
                 target_object TEXT,
+                relationship_name TEXT,
                 PRIMARY KEY (object_name, api_name)
              );",
         )
-        .map_err(SqliteError::database)?;
+        .map_err(SqliteError::database)
+}
 
-    for object in schema.objects() {
-        let existing_prefix = transaction
-            .query_row(
-                "SELECT key_prefix FROM _apex_objects WHERE api_name = ?1",
-                [object.api_name()],
-                |row| row.get::<_, String>(0),
+fn ensure_relationship_registry_column(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
+    let mut statement = transaction
+        .prepare("PRAGMA table_info('_apex_fields')")
+        .map_err(SqliteError::database)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(SqliteError::database)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(SqliteError::database)?;
+    if !columns
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("relationship_name"))
+    {
+        transaction
+            .execute(
+                "ALTER TABLE _apex_fields ADD COLUMN relationship_name TEXT",
+                [],
             )
-            .optional()
             .map_err(SqliteError::database)?;
-        if let Some(existing) = existing_prefix {
-            if existing != object.key_prefix() {
-                return Err(SqliteError::IncompatibleMigration {
-                    object: object.api_name().to_owned(),
-                    field: "Id".to_owned(),
-                    existing,
-                    requested: object.key_prefix().to_owned(),
-                });
-            }
-        } else {
-            transaction
-                .execute(
-                    "INSERT INTO _apex_objects (api_name, key_prefix) VALUES (?1, ?2)",
-                    params![object.api_name(), object.key_prefix()],
-                )
-                .map_err(SqliteError::database)?;
+    }
+    Ok(())
+}
+
+fn migrate_object(transaction: &Transaction<'_>, object: &ObjectSchema) -> Result<(), SqliteError> {
+    validate_or_insert_object_registry(transaction, object)?;
+    transaction
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {} ({} TEXT PRIMARY KEY NOT NULL)",
+                quote(object.api_name()),
+                quote("Id")
+            ),
+            [],
+        )
+        .map_err(SqliteError::database)?;
+    for field in object.fields() {
+        migrate_field(transaction, object, field)?;
+    }
+    Ok(())
+}
+
+fn validate_or_insert_object_registry(
+    transaction: &Transaction<'_>,
+    object: &ObjectSchema,
+) -> Result<(), SqliteError> {
+    let existing = transaction
+        .query_row(
+            "SELECT key_prefix FROM _apex_objects WHERE api_name = ?1",
+            [object.api_name()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(SqliteError::database)?;
+    if let Some(existing) = existing {
+        if existing != object.key_prefix() {
+            return Err(SqliteError::IncompatibleMigration {
+                object: object.api_name().to_owned(),
+                field: "Id".to_owned(),
+                existing,
+                requested: object.key_prefix().to_owned(),
+            });
         }
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "INSERT INTO _apex_objects (api_name, key_prefix) VALUES (?1, ?2)",
+            params![object.api_name(), object.key_prefix()],
+        )
+        .map_err(SqliteError::database)?;
+    Ok(())
+}
+
+fn migrate_field(
+    transaction: &Transaction<'_>,
+    object: &ObjectSchema,
+    field: &FieldSchema,
+) -> Result<(), SqliteError> {
+    let spec = field_spec(field);
+    let existing = transaction
+        .query_row(
+            "SELECT field_type, nullable, COALESCE(target_object, ''),
+                    COALESCE(relationship_name, '')
+             FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
+            params![object.api_name(), field.api_name()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(SqliteError::database)?;
+    if let Some(existing) = existing {
+        if existing != spec {
+            return Err(SqliteError::IncompatibleMigration {
+                object: object.api_name().to_owned(),
+                field: field.api_name().to_owned(),
+                existing: format_field_spec(&existing),
+                requested: format_field_spec(&spec),
+            });
+        }
+        return Ok(());
+    }
+    if !is_id(field) {
         transaction
             .execute(
                 &format!(
-                    "CREATE TABLE IF NOT EXISTS {} ({} TEXT PRIMARY KEY NOT NULL)",
+                    "ALTER TABLE {} ADD COLUMN {} {}",
                     quote(object.api_name()),
-                    quote("Id")
+                    quote(field.api_name()),
+                    sqlite_type(field.data_type())
                 ),
                 [],
             )
             .map_err(SqliteError::database)?;
-
-        for field in object.fields() {
-            let spec = field_spec(field);
-            let existing = transaction
-                .query_row(
-                    "SELECT field_type, nullable, COALESCE(target_object, '')
-                     FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
-                    params![object.api_name(), field.api_name()],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, bool>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(SqliteError::database)?;
-            if let Some(existing) = existing {
-                if existing != spec {
-                    return Err(SqliteError::IncompatibleMigration {
-                        object: object.api_name().to_owned(),
-                        field: field.api_name().to_owned(),
-                        existing: format_field_spec(&existing),
-                        requested: format_field_spec(&spec),
-                    });
-                }
-                continue;
-            }
-            if !is_id(field) {
-                transaction
-                    .execute(
-                        &format!(
-                            "ALTER TABLE {} ADD COLUMN {} {}",
-                            quote(object.api_name()),
-                            quote(field.api_name()),
-                            sqlite_type(field.data_type())
-                        ),
-                        [],
-                    )
-                    .map_err(SqliteError::database)?;
-            }
-            transaction
-                .execute(
-                    "INSERT INTO _apex_fields
-                     (object_name, api_name, field_type, nullable, target_object)
-                     VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''))",
-                    params![object.api_name(), field.api_name(), spec.0, spec.1, spec.2],
-                )
-                .map_err(SqliteError::database)?;
-        }
     }
-    transaction.commit().map_err(SqliteError::database)
+    transaction
+        .execute(
+            "INSERT INTO _apex_fields
+             (object_name, api_name, field_type, nullable, target_object, relationship_name)
+             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''))",
+            params![
+                object.api_name(),
+                field.api_name(),
+                spec.0,
+                spec.1,
+                spec.2,
+                spec.3
+            ],
+        )
+        .map_err(SqliteError::database)?;
+    Ok(())
 }
 
 fn validate_data_value(
@@ -489,18 +548,21 @@ fn validate_data_value(
     field: &FieldSchema,
     value: &DataValue,
 ) -> Result<(), SqliteError> {
-    let compatible = matches!(
-        (field.data_type(), value),
+    let compatible = match (field.data_type(), value) {
         (_, DataValue::Null)
-            | (FieldType::Boolean, DataValue::Boolean(_))
-            | (FieldType::Integer, DataValue::Integer(_))
-            | (FieldType::String, DataValue::String(_))
-            | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
-            | (
-                FieldType::Reference { .. },
-                DataValue::Id(_) | DataValue::String(_)
-            )
-    );
+        | (FieldType::Boolean, DataValue::Boolean(_))
+        | (FieldType::Integer, DataValue::Integer(_))
+        | (FieldType::String, DataValue::String(_))
+        | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
+        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_)) => true,
+        (FieldType::Date, DataValue::Date(value)) => NaiveDate::from_ymd_opt(1970, 1, 1)
+            .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(*value))))
+            .is_some(),
+        (FieldType::Datetime, DataValue::Datetime(value)) => {
+            Utc.timestamp_millis_opt(*value).single().is_some()
+        }
+        _ => false,
+    };
     if compatible {
         Ok(())
     } else {
@@ -519,6 +581,8 @@ fn encode_value(value: &DataValue) -> SqlValue {
         DataValue::Boolean(value) => SqlValue::Integer(i64::from(*value)),
         DataValue::Integer(value) => SqlValue::Integer(*value),
         DataValue::String(value) => SqlValue::Text(value.clone()),
+        DataValue::Date(value) => SqlValue::Integer(i64::from(*value)),
+        DataValue::Datetime(value) => SqlValue::Integer(*value),
         DataValue::Id(value) => SqlValue::Text(value.to_string()),
     }
 }
@@ -531,6 +595,10 @@ fn decode_value(field: &FieldSchema, value: ValueRef<'_>) -> rusqlite::Result<Da
         (FieldType::String, ValueRef::Text(value)) => Ok(DataValue::String(
             String::from_utf8_lossy(value).into_owned(),
         )),
+        (FieldType::Date, ValueRef::Integer(value)) => i32::try_from(value)
+            .map(DataValue::Date)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value)),
+        (FieldType::Datetime, ValueRef::Integer(value)) => Ok(DataValue::Datetime(value)),
         (FieldType::Id | FieldType::Reference { .. }, ValueRef::Text(value)) => Ok(DataValue::Id(
             RecordId::new(String::from_utf8_lossy(value).into_owned()),
         )),
@@ -542,31 +610,40 @@ fn decode_value(field: &FieldSchema, value: ValueRef<'_>) -> rusqlite::Result<Da
     }
 }
 
-fn field_spec(field: &FieldSchema) -> (String, bool, String) {
-    match field.data_type() {
+fn field_spec(field: &FieldSchema) -> (String, bool, String, String) {
+    let relationship_name = field.relationship_name().unwrap_or_default().to_owned();
+    let (field_type, nullable, target_object) = match field.data_type() {
         FieldType::Boolean => ("Boolean".to_owned(), field.is_nullable(), String::new()),
         FieldType::Integer => ("Integer".to_owned(), field.is_nullable(), String::new()),
         FieldType::String => ("String".to_owned(), field.is_nullable(), String::new()),
+        FieldType::Date => ("Date".to_owned(), field.is_nullable(), String::new()),
+        FieldType::Datetime => ("Datetime".to_owned(), field.is_nullable(), String::new()),
         FieldType::Id => ("Id".to_owned(), field.is_nullable(), String::new()),
         FieldType::Reference { target_object } => (
             "Reference".to_owned(),
             field.is_nullable(),
             target_object.clone(),
         ),
-    }
+    };
+    (field_type, nullable, target_object, relationship_name)
 }
 
-fn format_field_spec(spec: &(String, bool, String)) -> String {
-    if spec.2.is_empty() {
+fn format_field_spec(spec: &(String, bool, String, String)) -> String {
+    if spec.2.is_empty() && spec.3.is_empty() {
         format!("{} nullable={}", spec.0, spec.1)
     } else {
-        format!("{}({}) nullable={}", spec.0, spec.2, spec.1)
+        format!(
+            "{}({}) relationship={} nullable={}",
+            spec.0, spec.2, spec.3, spec.1
+        )
     }
 }
 
 fn sqlite_type(field_type: &FieldType) -> &'static str {
     match field_type {
-        FieldType::Boolean | FieldType::Integer => "INTEGER",
+        FieldType::Boolean | FieldType::Integer | FieldType::Date | FieldType::Datetime => {
+            "INTEGER"
+        }
         FieldType::String | FieldType::Id | FieldType::Reference { .. } => "TEXT",
     }
 }
@@ -581,6 +658,8 @@ fn value_name(value: &DataValue) -> &'static str {
         DataValue::Boolean(_) => "Boolean",
         DataValue::Integer(_) => "Integer",
         DataValue::String(_) => "String",
+        DataValue::Date(_) => "Date",
+        DataValue::Datetime(_) => "Datetime",
         DataValue::Id(_) => "Id",
     }
 }

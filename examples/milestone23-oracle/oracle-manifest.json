@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "enterprise-query-fidelity-tests",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "M23QueryFidelityTest.querySliceMatchesSalesforce"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

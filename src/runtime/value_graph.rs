@@ -383,6 +383,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 traversal.write(output, job_id)?;
                 traversal.write(output, "]")
             }
+            PlatformValue::QueryLocator(_) => traversal.write(output, "Database.QueryLocator"),
         }
         .or_else(|error| handle_output_error(error, traversal, output, cycle_behavior))
     }

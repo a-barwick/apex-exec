@@ -14,10 +14,9 @@ contract, not a claim of complete Salesforce compatibility.
 | Unsupported | Rejected explicitly during lexing, parsing, or checking |
 | Planned | Not implemented yet |
 
-No behavior is currently labeled **Exact** because no recorded fixture in this
-repository has yet been executed against Salesforce. M13 provides the
-differential harness; promotion still requires reviewed scratch-org evidence
-for the documented case.
+**Exact** applies only to the specific recorded cases whose reviewed
+differential evidence is checked in. It never promotes an entire language or
+platform area. Broader surfaces retain their stated fidelity level.
 
 ## Language surface
 
@@ -286,7 +285,7 @@ delete, commit, rollback, named savepoints, fixture replacement, and fast
 record reset. M8 implements DML validation and query semantics above this
 boundary; M9 adds trigger, recycle-bin, and transaction-checkpoint semantics.
 
-## M8 SOQL, SOSL, and DML
+## M8/M23 SOQL, SOSL, and DML
 
 SOQL and SOSL are dedicated grammar nodes rather than ordinary Apex expressions
 or runtime query strings. Static queries validate object names, selected and
@@ -294,14 +293,29 @@ filtered fields, aggregate arguments, grouping, ordering, parent relationship
 paths, and bind types against imported metadata. Checked HIR stores
 schema-indexed plans; bind values are evaluated once at runtime.
 
-SOQL supports direct fields and one custom parent relationship level through
-`__r`, comparison operators, `LIKE`, literal or collection-bound `IN`/`NOT IN`,
-`AND`/`OR`/`NOT`, `ORDER BY` with direction and null placement, `LIMIT`,
-`OFFSET`, list results, contextual single-record results, and scalar
-`COUNT()`. Aggregate results support grouped direct fields plus `COUNT`,
-`SUM`, `MIN`, and `MAX`; aliases are read through `AggregateResult.get`.
-Child subqueries, `HAVING`, `TYPEOF`, date literals, polymorphic relationships,
-and the broader SOQL surface remain unsupported.
+SOQL supports direct fields and custom parent relationship paths through five
+`__r` levels, correlated custom child subqueries, comparison operators, `LIKE`,
+literal or collection-bound `IN`/`NOT IN`, `AND`/`OR`/`NOT`, `ORDER BY` with
+direction and null placement, `LIMIT`, `OFFSET`, list results, contextual
+single-record results, and scalar `COUNT()`. Aggregate results support grouped
+direct fields plus `COUNT`, `SUM`, `MIN`, and `MAX`; aliases are read through
+`AggregateResult.get`, and `HAVING` accepts selected aggregate expressions and
+grouped fields. Supported relative date literals are evaluated in UTC against
+the host clock.
+
+`Database.query`, `Database.countQuery`, and
+`Database.getQueryLocator` evaluate their input once and recheck dynamic text
+through the same parser, semantic rules, checked plan, SQLite execution, and
+query trace used by static SOQL. Dynamic binds are limited to simple variable
+names. A QueryLocator is an eager checked record snapshot for deterministic
+batch execution, not a server cursor or a claim of Salesforce large-volume
+governor behavior.
+
+Nested child subqueries, `TYPEOF`, polymorphic relationships, absolute
+date/datetime literal forms, `queryWithBinds`, access-level variants,
+aggregate-returning `Database.query`, and the broader SOQL surface remain
+explicitly unsupported. A `HAVING` aggregate expression must also appear in
+`SELECT`.
 
 SOSL supports a String literal or bind after `FIND`, `IN ALL FIELDS` and
 `IN NAME FIELDS`, and one or more checked `RETURNING` clauses with fields,
@@ -631,7 +645,7 @@ are not a runtime or general Salesforce compatibility percentage.
 | DML | Implemented (simplified atomic scalar/bulk operations) | M8 |
 | Partial DML results | Planned (`allOrNone=false` and result/error objects) | M24 |
 | SOQL | Implemented (simplified checked static queries) | M8 |
-| Broader SOQL | Planned (enterprise-prioritized relationships, aggregation, literals, and polymorphism) | M23 |
+| Broader SOQL | Implemented (bounded child/parent relationships, `HAVING`, relative date literals, dynamic query/count/locator; explicit polymorphic rejection) | M23 |
 | SOSL | Implemented (simplified deterministic local search) | M8 |
 | Structured query/DML/trigger timelines | Implemented | M9 |
 | Triggers | Implemented (simplified) | M9 |

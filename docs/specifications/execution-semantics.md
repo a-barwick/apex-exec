@@ -248,6 +248,20 @@ requests cross storage-neutral platform contracts into SQLite. Async work is
 queued explicitly and drains deterministically at `Test.stopTest`; no
 background scheduler or live callout transport exists.
 
+M23 dynamic SOQL calls evaluate their String argument once, parse it through
+the dedicated SOQL grammar, and semantically recheck it against the immutable
+program schema plus visible simple-name bind types. Successful calls use the
+same checked plan, platform request, SQLite executor, and structured query
+trace as static SOQL. Dynamic parse, check, result-shape, and database failures
+surface as catchable `QueryException` values at the call site.
+
+Date literals are evaluated in UTC against the host clock. Inserted records
+receive `CreatedDate`; inserts and mutations receive `LastModifiedDate`.
+Child-query correlation is batched by reference Id after the parent window is
+selected. Parent traversal is bounded to five levels, nested child subqueries
+are rejected, and `Database.QueryLocator` is an opaque checked record snapshot
+consumed by the deterministic batch pipeline.
+
 The current profile is `m10-common`. API-version differences and
 sharing/security behavior are not scattered through expression evaluation;
 M25 and M27 introduce explicit profiles at the compiler/host boundary.

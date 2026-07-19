@@ -105,6 +105,8 @@ pub enum DataValue {
     Boolean(bool),
     Integer(i64),
     String(String),
+    Date(i32),
+    Datetime(i64),
     Id(RecordId),
 }
 

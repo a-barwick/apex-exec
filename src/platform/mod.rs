@@ -18,9 +18,10 @@ pub mod storage;
 
 pub use database::{
     AggregateFunction, DatabaseError, DatabaseSnapshot, DmlOperation, LocalDatabase, NullOrder,
-    PreparedDmlRecord, QueryComparison, QueryCondition, QueryField, QueryInValues, QueryLogical,
-    QueryOrder, QueryOutcome, QueryRecord, QueryRelationship, QuerySelect, SoqlRequest, SortOrder,
-    SoslRequest, SoslReturningRequest,
+    PreparedDmlRecord, QueryComparison, QueryCondition, QueryDateLiteral, QueryDateLiteralKind,
+    QueryField, QueryInValues, QueryLogical, QueryOrder, QueryOutcome, QueryRecord,
+    QueryRelationship, QuerySelect, QueryValue, SoqlRequest, SortOrder, SoslRequest,
+    SoslReturningRequest,
 };
 pub use metadata::{MetadataError, import_metadata};
 pub use schema::{

@@ -2,6 +2,7 @@ use super::{
     DataValue, FieldType, Record, RecordId, SObject, SchemaCatalog, SqliteStorage, Storage,
     StorageTransaction,
 };
+use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use std::{cmp::Ordering, collections::BTreeMap, error::Error, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +37,7 @@ pub struct QueryRelationship {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueryField {
-    pub relationship: Option<QueryRelationship>,
+    pub relationships: Vec<QueryRelationship>,
     pub field: String,
 }
 
@@ -51,6 +52,11 @@ pub enum AggregateFunction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuerySelect {
     Field(QueryField),
+    Subquery {
+        relationship: String,
+        reference_field: String,
+        query: Box<SoqlRequest>,
+    },
     Aggregate {
         function: AggregateFunction,
         field: Option<QueryField>,
@@ -77,7 +83,7 @@ pub enum QueryLogical {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryInValues {
-    Values(Vec<DataValue>),
+    Values(Vec<QueryValue>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,7 +91,7 @@ pub enum QueryCondition {
     Comparison {
         left: QueryField,
         operator: QueryComparison,
-        right: DataValue,
+        right: QueryValue,
     },
     In {
         field: QueryField,
@@ -98,6 +104,36 @@ pub enum QueryCondition {
         operator: QueryLogical,
         right: Box<QueryCondition>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryDateLiteralKind {
+    Yesterday,
+    Today,
+    Tomorrow,
+    LastNDays,
+    NextNDays,
+    ThisWeek,
+    LastWeek,
+    NextWeek,
+    ThisMonth,
+    LastMonth,
+    NextMonth,
+    ThisYear,
+    LastYear,
+    NextYear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueryDateLiteral {
+    pub kind: QueryDateLiteralKind,
+    pub amount: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QueryValue {
+    Data(DataValue),
+    DateLiteral(QueryDateLiteral),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,10 +161,12 @@ pub struct SoqlRequest {
     pub select: Vec<QuerySelect>,
     pub condition: Option<QueryCondition>,
     pub group_by: Vec<QueryField>,
+    pub having: Option<QueryCondition>,
     pub order_by: Vec<QueryOrder>,
     pub limit: Option<usize>,
     pub offset: usize,
     pub count_scalar: bool,
+    pub now_millis: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,7 +188,8 @@ pub struct SoslRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueryRecord {
     pub record: Record,
-    pub relationships: BTreeMap<String, Record>,
+    pub relationships: BTreeMap<String, QueryRecord>,
+    pub children: BTreeMap<String, Vec<QueryRecord>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +204,7 @@ pub struct LocalDatabase {
     storage: SqliteStorage,
     sequences: BTreeMap<String, u64>,
     recycle_bin: BTreeMap<(String, RecordId), Record>,
+    last_query_object_scans: usize,
 }
 
 impl LocalDatabase {
@@ -173,11 +213,16 @@ impl LocalDatabase {
             storage: SqliteStorage::in_memory(schema).map_err(DatabaseError::storage)?,
             sequences: BTreeMap::new(),
             recycle_bin: BTreeMap::new(),
+            last_query_object_scans: 0,
         })
     }
 
     pub fn schema(&self) -> &SchemaCatalog {
         self.storage.schema()
+    }
+
+    pub fn last_query_object_scans(&self) -> usize {
+        self.last_query_object_scans
     }
 
     pub fn migrate(&mut self, schema: SchemaCatalog) -> Result<(), DatabaseError> {
@@ -343,6 +388,7 @@ impl LocalDatabase {
     }
 
     pub fn execute_soql(&mut self, request: &SoqlRequest) -> Result<QueryOutcome, DatabaseError> {
+        self.last_query_object_scans = 0;
         let schema = self.storage.schema().clone();
         let mut transaction = self
             .storage
@@ -351,33 +397,41 @@ impl LocalDatabase {
         let records = transaction
             .scan(&request.object)
             .map_err(DatabaseError::storage)?;
-        let mut rows = hydrate_rows(&schema, &mut transaction, records)?;
+        self.last_query_object_scans = 1;
+        let mut rows = hydrate_rows(
+            &schema,
+            &mut transaction,
+            records,
+            requested_parent_depth(request),
+        )?;
         if let Some(condition) = &request.condition {
-            rows.retain(|row| evaluate_condition(row, condition));
-        }
-        sort_rows(&mut rows, &request.order_by);
-        let start = request.offset.min(rows.len());
-        rows = rows.split_off(start);
-        if let Some(limit) = request.limit {
-            rows.truncate(limit);
+            rows.retain(|row| evaluate_condition(row, condition, request.now_millis));
         }
         let outcome = if request.count_scalar {
+            apply_row_window(&mut rows, request);
             QueryOutcome::Count(i64::try_from(rows.len()).unwrap_or(i64::MAX))
         } else if request
             .select
             .iter()
             .any(|item| matches!(item, QuerySelect::Aggregate { .. }))
         {
-            QueryOutcome::Aggregates(aggregate_rows(&rows, request))
+            let mut aggregates = aggregate_rows(&rows, request);
+            if let Some(condition) = &request.having {
+                aggregates
+                    .retain(|row| evaluate_aggregate_condition(row, condition, request.now_millis));
+            }
+            sort_aggregate_rows(&mut aggregates, &request.order_by);
+            let start = request.offset.min(aggregates.len());
+            aggregates = aggregates.split_off(start);
+            if let Some(limit) = request.limit {
+                aggregates.truncate(limit);
+            }
+            QueryOutcome::Aggregates(aggregates)
         } else {
-            QueryOutcome::Records(
-                rows.into_iter()
-                    .map(|row| QueryRecord {
-                        record: row.record,
-                        relationships: row.relationships,
-                    })
-                    .collect(),
-            )
+            apply_row_window(&mut rows, request);
+            self.last_query_object_scans +=
+                hydrate_child_subqueries(&schema, &mut transaction, &mut rows, request)?;
+            QueryOutcome::Records(rows.into_iter().map(eval_row_into_query_record).collect())
         };
         transaction.commit().map_err(DatabaseError::storage)?;
         Ok(outcome)
@@ -407,7 +461,17 @@ impl LocalDatabase {
                 })
                 .map(|field| field.api_name().to_owned())
                 .collect::<Vec<_>>();
-            let mut rows = hydrate_rows(&schema, &mut transaction, records)?;
+            let mut rows = hydrate_rows(
+                &schema,
+                &mut transaction,
+                records,
+                returning
+                    .fields
+                    .iter()
+                    .map(|field| field.relationships.len())
+                    .max()
+                    .unwrap_or(0),
+            )?;
             rows.retain(|row| {
                 searchable.iter().any(|field| {
                     matches!(
@@ -418,20 +482,13 @@ impl LocalDatabase {
                 }) && returning
                     .condition
                     .as_ref()
-                    .is_none_or(|condition| evaluate_condition(row, condition))
+                    .is_none_or(|condition| evaluate_condition(row, condition, 0))
             });
             sort_rows(&mut rows, &returning.order_by);
             if let Some(limit) = returning.limit {
                 rows.truncate(limit);
             }
-            groups.push(
-                rows.into_iter()
-                    .map(|row| QueryRecord {
-                        record: row.record,
-                        relationships: row.relationships,
-                    })
-                    .collect(),
-            );
+            groups.push(rows.into_iter().map(eval_row_into_query_record).collect());
         }
         transaction.commit().map_err(DatabaseError::storage)?;
         Ok(QueryOutcome::Search(groups))
@@ -584,94 +641,138 @@ fn merge_sobject(
     Ok(merged)
 }
 
+#[derive(Clone)]
 struct EvalRow {
     record: Record,
-    relationships: BTreeMap<String, Record>,
+    relationships: BTreeMap<String, Box<EvalRow>>,
+    children: BTreeMap<String, Vec<EvalRow>>,
 }
 
 fn hydrate_rows<T: StorageTransaction>(
     schema: &SchemaCatalog,
     transaction: &mut T,
     records: Vec<Record>,
+    parent_depth: usize,
 ) -> Result<Vec<EvalRow>, DatabaseError> {
     let mut rows = Vec::with_capacity(records.len());
-    for mut record in records {
-        record.set_field("Id", DataValue::Id(record.id().clone()));
-        let object = schema
-            .object(record.object_api_name())
-            .map_err(DatabaseError::schema)?;
-        let mut relationships = BTreeMap::new();
-        for field in object.fields() {
-            let FieldType::Reference { target_object } = field.data_type() else {
-                continue;
-            };
-            let Some(value) = record.field(field.api_name()) else {
-                continue;
-            };
-            let id = match value {
-                DataValue::Id(id) => Some(id.clone()),
-                DataValue::String(id) => RecordId::parse(id.clone()).ok(),
-                _ => None,
-            };
-            if let Some(id) = id
-                && let Some(mut related) = transaction
-                    .read(target_object, &id)
-                    .map_err(DatabaseError::storage)?
-            {
-                related.set_field("Id", DataValue::Id(related.id().clone()));
-                relationships.insert(field.api_name().to_ascii_lowercase(), related);
-            }
-        }
-        rows.push(EvalRow {
-            record,
-            relationships,
-        });
+    for record in records {
+        rows.push(hydrate_row(schema, transaction, record, parent_depth)?);
     }
     Ok(rows)
 }
 
-fn field_value<'row>(row: &'row EvalRow, field: &QueryField) -> &'row DataValue {
-    static NULL: DataValue = DataValue::Null;
-    if let Some(relationship) = &field.relationship {
-        row.relationships
-            .get(&relationship.reference_field.to_ascii_lowercase())
-            .and_then(|record| record.field(&field.field))
-            .unwrap_or(&NULL)
-    } else {
-        row.record.field(&field.field).unwrap_or(&NULL)
+fn hydrate_row<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    mut record: Record,
+    parent_depth: usize,
+) -> Result<EvalRow, DatabaseError> {
+    record.set_field("Id", DataValue::Id(record.id().clone()));
+    let object = schema
+        .object(record.object_api_name())
+        .map_err(DatabaseError::schema)?;
+    let mut relationships = BTreeMap::new();
+    if parent_depth > 0 {
+        for field in object.fields() {
+            let FieldType::Reference { target_object } = field.data_type() else {
+                continue;
+            };
+            let Some(id) = record.field(field.api_name()).and_then(data_record_id) else {
+                continue;
+            };
+            if let Some(related) = transaction
+                .read(target_object, &id)
+                .map_err(DatabaseError::storage)?
+            {
+                relationships.insert(
+                    field.api_name().to_ascii_lowercase(),
+                    Box::new(hydrate_row(schema, transaction, related, parent_depth - 1)?),
+                );
+            }
+        }
+    }
+    Ok(EvalRow {
+        record,
+        relationships,
+        children: BTreeMap::new(),
+    })
+}
+
+fn data_record_id(value: &DataValue) -> Option<RecordId> {
+    match value {
+        DataValue::Id(id) => Some(id.clone()),
+        DataValue::String(id) => RecordId::parse(id.clone()).ok(),
+        _ => None,
     }
 }
 
-fn evaluate_condition(row: &EvalRow, condition: &QueryCondition) -> bool {
+fn field_value<'row>(row: &'row EvalRow, field: &QueryField) -> &'row DataValue {
+    static NULL: DataValue = DataValue::Null;
+    let mut current = row;
+    for relationship in &field.relationships {
+        let Some(related) = current
+            .relationships
+            .get(&relationship.reference_field.to_ascii_lowercase())
+        else {
+            return &NULL;
+        };
+        current = related;
+    }
+    current.record.field(&field.field).unwrap_or(&NULL)
+}
+
+fn evaluate_condition(row: &EvalRow, condition: &QueryCondition, now_millis: i64) -> bool {
     match condition {
         QueryCondition::Comparison {
             left,
             operator,
             right,
-        } => compare(field_value(row, left), right, *operator),
+        } => compare(field_value(row, left), right, *operator, now_millis),
         QueryCondition::In {
             field,
             negated,
             values: QueryInValues::Values(values),
         } => {
-            let found = values
-                .iter()
-                .any(|value| values_equal(field_value(row, field), value));
+            let found = values.iter().any(|value| {
+                compare(
+                    field_value(row, field),
+                    value,
+                    QueryComparison::Equal,
+                    now_millis,
+                )
+            });
             found != *negated
         }
-        QueryCondition::Not(condition) => !evaluate_condition(row, condition),
+        QueryCondition::Not(condition) => !evaluate_condition(row, condition, now_millis),
         QueryCondition::Logical {
             left,
             operator,
             right,
         } => match operator {
-            QueryLogical::And => evaluate_condition(row, left) && evaluate_condition(row, right),
-            QueryLogical::Or => evaluate_condition(row, left) || evaluate_condition(row, right),
+            QueryLogical::And => {
+                evaluate_condition(row, left, now_millis)
+                    && evaluate_condition(row, right, now_millis)
+            }
+            QueryLogical::Or => {
+                evaluate_condition(row, left, now_millis)
+                    || evaluate_condition(row, right, now_millis)
+            }
         },
     }
 }
 
-fn compare(left: &DataValue, right: &DataValue, operator: QueryComparison) -> bool {
+fn compare(
+    left: &DataValue,
+    right: &QueryValue,
+    operator: QueryComparison,
+    now_millis: i64,
+) -> bool {
+    if let QueryValue::DateLiteral(literal) = right {
+        return compare_date_literal(left, *literal, operator, now_millis);
+    }
+    let QueryValue::Data(right) = right else {
+        unreachable!("date literal handled above")
+    };
     match operator {
         QueryComparison::Equal => values_equal(left, right),
         QueryComparison::NotEqual => !values_equal(left, right),
@@ -714,6 +815,8 @@ fn compare_values(left: &DataValue, right: &DataValue) -> Ordering {
         (_, DataValue::Null) => Ordering::Greater,
         (DataValue::Boolean(left), DataValue::Boolean(right)) => left.cmp(right),
         (DataValue::Integer(left), DataValue::Integer(right)) => left.cmp(right),
+        (DataValue::Date(left), DataValue::Date(right)) => left.cmp(right),
+        (DataValue::Datetime(left), DataValue::Datetime(right)) => left.cmp(right),
         (DataValue::String(left), DataValue::String(right)) => {
             left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
         }
@@ -729,9 +832,130 @@ fn data_rank(value: &DataValue) -> u8 {
         DataValue::Null => 0,
         DataValue::Boolean(_) => 1,
         DataValue::Integer(_) => 2,
-        DataValue::String(_) => 3,
-        DataValue::Id(_) => 4,
+        DataValue::Date(_) => 3,
+        DataValue::Datetime(_) => 4,
+        DataValue::String(_) => 5,
+        DataValue::Id(_) => 6,
     }
+}
+
+fn compare_date_literal(
+    left: &DataValue,
+    literal: QueryDateLiteral,
+    operator: QueryComparison,
+    now_millis: i64,
+) -> bool {
+    let Some(value) = data_datetime_millis(left) else {
+        return false;
+    };
+    let Some((start, end)) = date_literal_range(literal, now_millis) else {
+        return false;
+    };
+    match operator {
+        QueryComparison::Equal => value >= start && value < end,
+        QueryComparison::NotEqual => value < start || value >= end,
+        QueryComparison::Less => value < start,
+        QueryComparison::LessEqual => value < end,
+        QueryComparison::Greater => value >= end,
+        QueryComparison::GreaterEqual => value >= start,
+        QueryComparison::Like => false,
+    }
+}
+
+fn data_datetime_millis(value: &DataValue) -> Option<i64> {
+    match value {
+        DataValue::Datetime(value) => Some(*value),
+        DataValue::Date(days) => Some(i64::from(*days) * 86_400_000),
+        _ => None,
+    }
+}
+
+fn date_literal_range(literal: QueryDateLiteral, now_millis: i64) -> Option<(i64, i64)> {
+    let today = Utc.timestamp_millis_opt(now_millis).single()?.date_naive();
+    let one_day = Duration::days(1);
+    let (start, end) = match literal.kind {
+        QueryDateLiteralKind::Yesterday => (today - one_day, today),
+        QueryDateLiteralKind::Today => (today, today + one_day),
+        QueryDateLiteralKind::Tomorrow => (today + one_day, today + one_day * 2),
+        QueryDateLiteralKind::LastNDays => {
+            let amount = literal.amount?;
+            (today - Duration::days(amount), today + one_day)
+        }
+        QueryDateLiteralKind::NextNDays => {
+            let amount = literal.amount?;
+            (today + one_day, today + Duration::days(amount + 1))
+        }
+        QueryDateLiteralKind::ThisWeek
+        | QueryDateLiteralKind::LastWeek
+        | QueryDateLiteralKind::NextWeek => week_literal_range(literal.kind, today),
+        QueryDateLiteralKind::ThisMonth
+        | QueryDateLiteralKind::LastMonth
+        | QueryDateLiteralKind::NextMonth => month_literal_range(literal.kind, today)?,
+        QueryDateLiteralKind::ThisYear
+        | QueryDateLiteralKind::LastYear
+        | QueryDateLiteralKind::NextYear => year_literal_range(literal.kind, today)?,
+    };
+    Some((date_millis(start)?, date_millis(end)?))
+}
+
+fn week_literal_range(kind: QueryDateLiteralKind, today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let since_sunday = match today.weekday() {
+        Weekday::Sun => 0,
+        weekday => i64::from(weekday.num_days_from_sunday()),
+    };
+    let this_week = today - Duration::days(since_sunday);
+    match kind {
+        QueryDateLiteralKind::ThisWeek => (this_week, this_week + Duration::days(7)),
+        QueryDateLiteralKind::LastWeek => (this_week - Duration::days(7), this_week),
+        QueryDateLiteralKind::NextWeek => (
+            this_week + Duration::days(7),
+            this_week + Duration::days(14),
+        ),
+        _ => unreachable!("week helper receives a week literal"),
+    }
+}
+
+fn month_literal_range(
+    kind: QueryDateLiteralKind,
+    today: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let this_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
+    match kind {
+        QueryDateLiteralKind::ThisMonth => Some((this_month, shift_month(this_month, 1)?)),
+        QueryDateLiteralKind::LastMonth => Some((shift_month(this_month, -1)?, this_month)),
+        QueryDateLiteralKind::NextMonth => {
+            Some((shift_month(this_month, 1)?, shift_month(this_month, 2)?))
+        }
+        _ => unreachable!("month helper receives a month literal"),
+    }
+}
+
+fn year_literal_range(
+    kind: QueryDateLiteralKind,
+    today: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let this_year = NaiveDate::from_ymd_opt(today.year(), 1, 1)?;
+    let year_start = |delta: i32| NaiveDate::from_ymd_opt(today.year().checked_add(delta)?, 1, 1);
+    match kind {
+        QueryDateLiteralKind::ThisYear => Some((this_year, year_start(1)?)),
+        QueryDateLiteralKind::LastYear => Some((year_start(-1)?, this_year)),
+        QueryDateLiteralKind::NextYear => Some((year_start(1)?, year_start(2)?)),
+        _ => unreachable!("year helper receives a year literal"),
+    }
+}
+
+fn shift_month(date: NaiveDate, delta: i32) -> Option<NaiveDate> {
+    let month_index = date.year().checked_mul(12)? + i32::try_from(date.month0()).ok()? + delta;
+    let year = month_index.div_euclid(12);
+    let month = u32::try_from(month_index.rem_euclid(12)).ok()? + 1;
+    NaiveDate::from_ymd_opt(year, month, 1)
+}
+
+fn date_millis(date: NaiveDate) -> Option<i64> {
+    Some(
+        Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?)
+            .timestamp_millis(),
+    )
 }
 
 fn like(value: &str, pattern: &str) -> bool {
@@ -797,6 +1021,201 @@ fn sort_rows(rows: &mut [EvalRow], ordering: &[QueryOrder]) {
     });
 }
 
+fn apply_row_window(rows: &mut Vec<EvalRow>, request: &SoqlRequest) {
+    sort_rows(rows, &request.order_by);
+    let start = request.offset.min(rows.len());
+    *rows = rows.split_off(start);
+    if let Some(limit) = request.limit {
+        rows.truncate(limit);
+    }
+}
+
+fn requested_parent_depth(request: &SoqlRequest) -> usize {
+    let mut depth = request
+        .select
+        .iter()
+        .filter_map(|item| match item {
+            QuerySelect::Field(field) => Some(field.relationships.len()),
+            QuerySelect::Aggregate {
+                field: Some(field), ..
+            } => Some(field.relationships.len()),
+            QuerySelect::Subquery { .. } | QuerySelect::Aggregate { field: None, .. } => None,
+        })
+        .chain(
+            request
+                .group_by
+                .iter()
+                .chain(request.order_by.iter().map(|order| &order.field))
+                .map(|field| field.relationships.len()),
+        )
+        .max()
+        .unwrap_or(0);
+    if let Some(condition) = &request.condition {
+        depth = depth.max(condition_parent_depth(condition));
+    }
+    if let Some(condition) = &request.having {
+        depth = depth.max(condition_parent_depth(condition));
+    }
+    depth
+}
+
+fn condition_parent_depth(condition: &QueryCondition) -> usize {
+    match condition {
+        QueryCondition::Comparison { left, .. } => left.relationships.len(),
+        QueryCondition::In { field, .. } => field.relationships.len(),
+        QueryCondition::Not(condition) => condition_parent_depth(condition),
+        QueryCondition::Logical { left, right, .. } => {
+            condition_parent_depth(left).max(condition_parent_depth(right))
+        }
+    }
+}
+
+fn hydrate_child_subqueries<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    parents: &mut [EvalRow],
+    request: &SoqlRequest,
+) -> Result<usize, DatabaseError> {
+    let mut scans = 0;
+    for item in &request.select {
+        let QuerySelect::Subquery {
+            relationship,
+            reference_field,
+            query,
+        } = item
+        else {
+            continue;
+        };
+        let records = transaction
+            .scan(&query.object)
+            .map_err(DatabaseError::storage)?;
+        scans += 1;
+        let mut children =
+            hydrate_rows(schema, transaction, records, requested_parent_depth(query))?;
+        if let Some(condition) = &query.condition {
+            children.retain(|row| evaluate_condition(row, condition, request.now_millis));
+        }
+        let mut grouped = BTreeMap::<String, Vec<EvalRow>>::new();
+        for child in children {
+            let Some(parent_id) = child.record.field(reference_field).and_then(data_record_id)
+            else {
+                continue;
+            };
+            grouped
+                .entry(parent_id.to_string())
+                .or_default()
+                .push(child);
+        }
+        for group in grouped.values_mut() {
+            apply_row_window(group, query);
+        }
+        for parent in parents.iter_mut() {
+            parent.children.insert(
+                relationship.to_ascii_lowercase(),
+                grouped
+                    .remove(parent.record.id().as_str())
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    Ok(scans)
+}
+
+fn eval_row_into_query_record(row: EvalRow) -> QueryRecord {
+    QueryRecord {
+        record: row.record,
+        relationships: row
+            .relationships
+            .into_iter()
+            .map(|(name, related)| (name, eval_row_into_query_record(*related)))
+            .collect(),
+        children: row
+            .children
+            .into_iter()
+            .map(|(name, children)| {
+                (
+                    name,
+                    children
+                        .into_iter()
+                        .map(eval_row_into_query_record)
+                        .collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn evaluate_aggregate_condition(
+    row: &BTreeMap<String, DataValue>,
+    condition: &QueryCondition,
+    now_millis: i64,
+) -> bool {
+    match condition {
+        QueryCondition::Comparison {
+            left,
+            operator,
+            right,
+        } => compare(
+            row.get(&left.field.to_ascii_lowercase())
+                .unwrap_or(&DataValue::Null),
+            right,
+            *operator,
+            now_millis,
+        ),
+        QueryCondition::In {
+            field,
+            negated,
+            values: QueryInValues::Values(values),
+        } => {
+            let actual = row
+                .get(&field.field.to_ascii_lowercase())
+                .unwrap_or(&DataValue::Null);
+            values
+                .iter()
+                .any(|value| compare(actual, value, QueryComparison::Equal, now_millis))
+                != *negated
+        }
+        QueryCondition::Not(condition) => !evaluate_aggregate_condition(row, condition, now_millis),
+        QueryCondition::Logical {
+            left,
+            operator,
+            right,
+        } => match operator {
+            QueryLogical::And => {
+                evaluate_aggregate_condition(row, left, now_millis)
+                    && evaluate_aggregate_condition(row, right, now_millis)
+            }
+            QueryLogical::Or => {
+                evaluate_aggregate_condition(row, left, now_millis)
+                    || evaluate_aggregate_condition(row, right, now_millis)
+            }
+        },
+    }
+}
+
+fn sort_aggregate_rows(rows: &mut [BTreeMap<String, DataValue>], ordering: &[QueryOrder]) {
+    rows.sort_by(|left, right| {
+        for order in ordering {
+            let left = left
+                .get(&order.field.field.to_ascii_lowercase())
+                .unwrap_or(&DataValue::Null);
+            let right = right
+                .get(&order.field.field.to_ascii_lowercase())
+                .unwrap_or(&DataValue::Null);
+            let compared = compare_values(left, right);
+            let compared = if order.direction == SortOrder::Descending {
+                compared.reverse()
+            } else {
+                compared
+            };
+            if compared != Ordering::Equal {
+                return compared;
+            }
+        }
+        Ordering::Equal
+    });
+}
+
 fn aggregate_rows(rows: &[EvalRow], request: &SoqlRequest) -> Vec<BTreeMap<String, DataValue>> {
     let mut groups = BTreeMap::<Vec<String>, Vec<&EvalRow>>::new();
     if request.group_by.is_empty() {
@@ -834,6 +1253,9 @@ fn aggregate_rows(rows: &[EvalRow], request: &SoqlRequest) -> Vec<BTreeMap<Strin
                             alias.to_ascii_lowercase(),
                             aggregate_value(&group, *function, field.as_ref()),
                         );
+                    }
+                    QuerySelect::Subquery { .. } => {
+                        unreachable!("checker rejects child subqueries in aggregate queries")
                     }
                 }
             }

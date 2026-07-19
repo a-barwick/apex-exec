@@ -11,6 +11,8 @@ pub enum FieldType {
     Boolean,
     Integer,
     String,
+    Date,
+    Datetime,
     Id,
     Reference { target_object: String },
 }
@@ -21,6 +23,7 @@ pub struct FieldSchema {
     api_name: String,
     data_type: FieldType,
     nullable: bool,
+    relationship_name: Option<String>,
 }
 
 impl FieldSchema {
@@ -29,7 +32,13 @@ impl FieldSchema {
             api_name: api_name.into(),
             data_type,
             nullable,
+            relationship_name: None,
         }
+    }
+
+    pub fn with_relationship_name(mut self, relationship_name: impl Into<String>) -> Self {
+        self.relationship_name = Some(relationship_name.into());
+        self
     }
 
     pub fn api_name(&self) -> &str {
@@ -42,6 +51,10 @@ impl FieldSchema {
 
     pub fn is_nullable(&self) -> bool {
         self.nullable
+    }
+
+    pub fn relationship_name(&self) -> Option<&str> {
+        self.relationship_name.as_deref()
     }
 }
 
@@ -191,6 +204,37 @@ impl SchemaCatalog {
 
     pub fn object_at(&self, index: usize) -> Option<&ObjectSchema> {
         self.objects.values().nth(index)
+    }
+
+    pub fn child_relationship(
+        &self,
+        parent_object_id: usize,
+        relationship_name: &str,
+    ) -> Option<(usize, usize)> {
+        let parent = self.object_at(parent_object_id)?;
+        let mut matched = None;
+        for (child_object_id, child) in self.objects.values().enumerate() {
+            for (reference_field_id, field) in child.fields().enumerate() {
+                let FieldType::Reference { target_object } = field.data_type() else {
+                    continue;
+                };
+                if target_object.eq_ignore_ascii_case(parent.api_name())
+                    && field.relationship_name().is_some_and(|name| {
+                        name.eq_ignore_ascii_case(relationship_name)
+                            || relationship_name
+                                .strip_suffix("__r")
+                                .or_else(|| relationship_name.strip_suffix("__R"))
+                                .is_some_and(|base| name.eq_ignore_ascii_case(base))
+                    })
+                {
+                    if matched.is_some() {
+                        return None;
+                    }
+                    matched = Some((child_object_id, reference_field_id));
+                }
+            }
+        }
+        matched
     }
 }
 

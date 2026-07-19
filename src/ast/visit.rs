@@ -9,8 +9,9 @@ use super::{
     Annotation, AnnotationArgument, AssignmentTarget, CatchClause, ClassDeclaration, ClassMember,
     CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration, Identifier,
     MapEntry, MethodDeclaration, NamedType, Parameter, Program, PropertyAccessor,
-    PropertyDeclaration, ReturnType, SoqlCondition, SoqlInValues, SoqlQuery, SoqlValue, SoslQuery,
-    Statement, SwitchArm, SwitchLabels, TriggerDeclaration, TypeName, VariableDeclarator,
+    PropertyDeclaration, ReturnType, SoqlCondition, SoqlInValues, SoqlQuery, SoqlSelectItem,
+    SoqlValue, SoslQuery, Statement, SwitchArm, SwitchLabels, TriggerDeclaration, TypeName,
+    VariableDeclarator,
 };
 
 pub trait Visitor<'ast> {
@@ -556,7 +557,15 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
 }
 
 fn walk_soql_query<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, query: &'ast SoqlQuery) {
+    for item in &query.select {
+        if let SoqlSelectItem::Subquery { query, .. } = item {
+            walk_soql_query(visitor, query);
+        }
+    }
     if let Some(condition) = &query.where_clause {
+        walk_soql_condition(visitor, condition);
+    }
+    if let Some(condition) = &query.having {
         walk_soql_condition(visitor, condition);
     }
     if let Some(limit) = &query.limit {
@@ -584,7 +593,8 @@ fn walk_soql_condition<'ast, V: Visitor<'ast> + ?Sized>(
     condition: &'ast SoqlCondition,
 ) {
     match condition {
-        SoqlCondition::Comparison { right, .. } => walk_soql_value(visitor, right),
+        SoqlCondition::AggregateComparison { right, .. }
+        | SoqlCondition::Comparison { right, .. } => walk_soql_value(visitor, right),
         SoqlCondition::In { values, .. } => match values {
             SoqlInValues::Values(values) => {
                 for value in values {
@@ -681,6 +691,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::HttpResponse
         | TypeName::QueueableContext
         | TypeName::BatchableContext
+        | TypeName::QueryLocator
         | TypeName::SchedulableContext
         | TypeName::SObjectType
         | TypeName::DescribeSObjectResult

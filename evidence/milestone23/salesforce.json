@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "enterprise-query-fidelity-tests",
+      "compile": {
+        "success": true
+      },
+      "tests": [
+        {
+          "name": "M23QueryFidelityTest.querySliceMatchesSalesforce",
+          "outcome": "pass"
+        }
+      ]
+    }
+  ]
+}
