@@ -431,20 +431,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => unreachable!(),
                 })
             }
-            P::TestStartTest => {
-                expect_no_arguments(arguments, span)?;
-                self.host.begin_test_window();
-                Ok(Value::Void)
-            }
-            P::TestStopTest => {
-                expect_no_arguments(arguments, span)?;
-                self.host.end_test_window();
-                self.drain_async_jobs(span)?;
-                Ok(Value::Void)
-            }
-            P::TestIsRunningTest => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Boolean(true))
+            P::TestStartTest | P::TestStopTest | P::TestIsRunningTest => {
+                self.call_test_context(intrinsic, arguments, span)
             }
             P::SystemEnqueueJob => {
                 let [job] = arguments else {
@@ -608,6 +596,29 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .store
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
+        }
+    }
+
+    fn call_test_context(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        expect_no_arguments(arguments, span)?;
+        match intrinsic {
+            P::TestStartTest => {
+                self.host.begin_test_window();
+                Ok(Value::Void)
+            }
+            P::TestStopTest => {
+                self.host.end_test_window();
+                self.drain_async_jobs(span)?;
+                Ok(Value::Void)
+            }
+            P::TestIsRunningTest => Ok(Value::Boolean(self.execution_context.is_test())),
+            _ => unreachable!("only Test lifecycle intrinsics use this helper"),
         }
     }
 

@@ -81,6 +81,28 @@ fn ordinary_static_invocation_does_not_capture_instrumentation() {
 }
 
 #[test]
+fn lazy_initialization_cost_is_independent_of_unused_classes() {
+    let mut source = String::new();
+    for index in 0..128 {
+        source.push_str(&format!(
+            "public class Unused{index} {{ public static Integer broken = 1 / 0; }} "
+        ));
+    }
+    source.push_str(
+        "public class Used { public static Integer value = 7; } \
+         System.debug(Used.value); System.debug(Used.value);",
+    );
+    let program = crate::check(&source).unwrap();
+    let mut interpreter = Interpreter::new();
+
+    interpreter.execute_anonymous_entry(&program).unwrap();
+
+    assert_eq!(interpreter.host.take_debug_output(), ["7", "7"]);
+    assert_eq!(interpreter.store.initialized_class_count(), 1);
+    assert_eq!(interpreter.store.static_slot_count(), 1);
+}
+
+#[test]
 fn coverage_policy_records_only_coverage_facts() {
     let program = crate::check(
         "Integer total = 0; \

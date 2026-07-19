@@ -19,6 +19,8 @@ use std::{
 };
 
 mod asynchronous;
+mod class_initialization;
+mod context;
 mod database;
 mod host;
 mod image;
@@ -28,6 +30,8 @@ mod platform_intrinsics;
 mod store;
 mod value_graph;
 
+use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DEPTH};
+use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
     LimitUsage, M10_COMPATIBILITY_PROFILE, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind,
@@ -189,6 +193,7 @@ struct PendingAsyncJob {
     kind: AsyncJobKind,
     work: AsyncWork,
     span: Span,
+    execution_context: ExecutionContext,
 }
 
 #[derive(Clone, Debug)]
@@ -260,6 +265,8 @@ pub struct Interpreter<'program, H = RecordingHost> {
     read_only_sobjects: BTreeSet<SObjectId>,
     read_only_collections: BTreeSet<CollectionId>,
     instrumentation: InstrumentationState,
+    execution_context: ExecutionContext,
+    initialization_stack: Vec<usize>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
     next_async_sequence: u64,
@@ -277,6 +284,8 @@ impl<'program> Interpreter<'program, RecordingHost> {
     /// can navigate the immutable snapshots without pausing the language
     /// runtime on an editor or transport thread.
     pub fn debug_execute(mut self, program: &'program Program) -> DebugExecution {
+        self.execution_context = ExecutionContext::debugger();
+        debug_assert!(self.execution_context.is_debug());
         self.instrumentation
             .configure(InstrumentationPolicy::Debugger);
         let result = self.execute_anonymous_entry(program);
@@ -298,6 +307,8 @@ impl<'program> Interpreter<'program, RecordingHost> {
         class_name: &str,
         method_name: &str,
     ) -> DebugExecution {
+        self.execution_context = ExecutionContext::debugger();
+        debug_assert!(self.execution_context.is_debug());
         self.instrumentation
             .configure(InstrumentationPolicy::Debugger);
         let result = self.invoke_static_entry(program, class_name, method_name);
@@ -345,6 +356,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             read_only_sobjects: BTreeSet::new(),
             read_only_collections: BTreeSet::new(),
             instrumentation: InstrumentationState::new(InstrumentationPolicy::None),
+            execution_context: ExecutionContext::ordinary(),
+            initialization_stack: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
             next_async_sequence: 1,
@@ -357,6 +370,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     /// [`PlatformHost::take_debug_output`]. A streaming host that keeps the
     /// default implementation returns an empty vector.
     pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
+        self.execution_context = ExecutionContext::ordinary();
         self.instrumentation.configure(InstrumentationPolicy::None);
         self.execute_anonymous_entry(program)?;
         Ok(self.host.take_debug_output())
@@ -373,6 +387,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         class_name: &str,
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
+        self.execution_context = ExecutionContext::ordinary();
         self.instrumentation.configure(InstrumentationPolicy::None);
         let value = self.invoke_static_entry(program, class_name, method_name)?;
         let mut output = self.host.take_debug_output();
@@ -436,12 +451,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         setup_methods: &[ClassMemberId],
         test_method: ClassMemberId,
     ) -> TestExecution {
+        self.execution_context = ExecutionContext::test();
         self.instrumentation
             .configure(InstrumentationPolicy::Coverage);
         let result = self.prepare(program).and_then(|_| {
             self.begin_transaction(Span::new(0, 0))?;
             let result = (|| {
-                self.initialize_static_fields()?;
                 for setup_method in setup_methods {
                     let span = self.class_method_span(*setup_method)?;
                     self.evaluate_class_method(*setup_method, None, &[], span, false)?;
@@ -463,7 +478,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.prepare(program)?;
         self.begin_transaction(Span::new(0, 0))?;
         let result = (|| {
-            self.initialize_static_fields()?;
             for statement in &program.statements {
                 match self.execute_statement(statement)? {
                     Flow::Normal => {}
@@ -501,9 +515,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         self.prepare(program)?;
         self.begin_transaction(Span::new(0, 0))?;
-        let result = self
-            .initialize_static_fields()
-            .and_then(|_| self.invoke_static_inner(class_name, method_name));
+        let result = self.invoke_static_inner(class_name, method_name);
         self.finish_transaction(result, Span::new(0, 0))
     }
 
@@ -575,64 +587,125 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.image().classes()
     }
 
-    fn initialize_static_fields(&mut self) -> Result<(), Diagnostic> {
-        for (class_id, class) in self.classes().iter().enumerate() {
-            for (member_id, member) in class.members.iter().enumerate() {
-                let target = ClassMemberId {
-                    class_id,
-                    member_id,
-                };
-                match member {
-                    ClassMember::Field(field) if field.modifiers.contains(&Modifier::Static) => {
-                        self.store.insert_static_slot(
-                            target,
-                            Slot {
-                                ty: field.ty.clone(),
-                                value: Value::Null(Some(field.ty.clone())),
-                            },
-                        );
-                    }
-                    ClassMember::Property(property)
-                        if property.modifiers.contains(&Modifier::Static) =>
-                    {
-                        self.store.insert_static_slot(
-                            target,
-                            Slot {
-                                ty: property.ty.clone(),
-                                value: Value::Null(Some(property.ty.clone())),
-                            },
-                        );
-                    }
-                    _ => {}
+    fn ensure_class_initialized(
+        &mut self,
+        class_id: usize,
+        use_span: Span,
+    ) -> Result<(), Diagnostic> {
+        for class_id in self.class_lineage_base_first(class_id) {
+            self.initialize_one_class(class_id, use_span)?;
+        }
+        Ok(())
+    }
+
+    fn initialize_one_class(&mut self, class_id: usize, use_span: Span) -> Result<(), Diagnostic> {
+        match self.store.class_initialization(class_id) {
+            ClassInitializationState::Initialized => return Ok(()),
+            ClassInitializationState::Failed(diagnostic) => return Err(diagnostic),
+            ClassInitializationState::Initializing => {
+                if self.initialization_stack.last() == Some(&class_id) {
+                    return Ok(());
                 }
+                return Err(self.class_initialization_cycle(class_id, use_span));
+            }
+            ClassInitializationState::Uninitialized => {}
+        }
+        if self.initialization_stack.len() >= MAX_CLASS_INITIALIZATION_DEPTH {
+            return Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "static initialization exceeds the depth limit of {MAX_CLASS_INITIALIZATION_DEPTH} classes"
+                ),
+                use_span,
+            ));
+        }
+
+        self.store
+            .set_class_initialization(class_id, ClassInitializationState::Initializing);
+        self.initialization_stack.push(class_id);
+        let saved_declaring = self.current_declaring_class.replace(class_id);
+        let saved_receiver = self.current_receiver.take();
+        let result = self.initialize_class_members(class_id);
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        let popped = self.initialization_stack.pop();
+        debug_assert_eq!(popped, Some(class_id));
+
+        self.store.set_class_initialization(
+            class_id,
+            match &result {
+                Ok(()) => ClassInitializationState::Initialized,
+                Err(diagnostic) => ClassInitializationState::Failed(diagnostic.clone()),
+            },
+        );
+        result
+    }
+
+    fn initialize_class_members(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        let members = self.classes()[class_id].members.clone();
+        for (member_id, member) in members.iter().enumerate() {
+            let (ty, is_static) = match member {
+                ClassMember::Field(field) => {
+                    (&field.ty, field.modifiers.contains(&Modifier::Static))
+                }
+                ClassMember::Property(property) => {
+                    (&property.ty, property.modifiers.contains(&Modifier::Static))
+                }
+                _ => continue,
+            };
+            if is_static {
+                self.store.insert_static_slot(
+                    ClassMemberId {
+                        class_id,
+                        member_id,
+                    },
+                    Slot {
+                        ty: ty.clone(),
+                        value: Value::Null(Some(ty.clone())),
+                    },
+                );
             }
         }
 
-        let classes = self.classes();
-        for (class_id, class) in classes.iter().enumerate() {
-            self.current_declaring_class = Some(class_id);
-            for (member_id, member) in class.members.iter().enumerate() {
-                let ClassMember::Field(field) = member else {
-                    continue;
-                };
-                if !field.modifiers.contains(&Modifier::Static) {
-                    continue;
-                }
-                if let Some(initializer) = &field.initializer {
-                    let target = ClassMemberId {
-                        class_id,
-                        member_id,
-                    };
-                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.store
-                        .static_slot_mut(&target)
-                        .expect("static field was allocated")
-                        .value = value;
-                }
+        for (member_id, member) in members.iter().enumerate() {
+            let ClassMember::Field(field) = member else {
+                continue;
+            };
+            if !field.modifiers.contains(&Modifier::Static) {
+                continue;
             }
+            let Some(initializer) = &field.initializer else {
+                continue;
+            };
+            let target = ClassMemberId {
+                class_id,
+                member_id,
+            };
+            let value = typed_value(self.evaluate(initializer)?, &field.ty);
+            self.store
+                .static_slot_mut(&target)
+                .expect("static field was allocated")
+                .value = value;
         }
-        self.current_declaring_class = None;
         Ok(())
+    }
+
+    fn class_initialization_cycle(&self, class_id: usize, span: Span) -> Diagnostic {
+        let cycle_start = self
+            .initialization_stack
+            .iter()
+            .position(|active| *active == class_id)
+            .unwrap_or(0);
+        let mut names = self.initialization_stack[cycle_start..]
+            .iter()
+            .map(|active| self.classes()[*active].name.spelling.as_str())
+            .collect::<Vec<_>>();
+        names.push(self.classes()[class_id].name.spelling.as_str());
+        runtime_exception(
+            "TypeException",
+            format!("circular static initialization: {}", names.join(" -> ")),
+            span,
+        )
     }
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
@@ -1578,6 +1651,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         receiver: Option<ObjectId>,
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
@@ -1637,6 +1711,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
@@ -1659,42 +1734,53 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(value)
             }
             ClassMember::Property(property) => {
-                let value = typed_value(value, &property.ty);
-                let accessor = property
-                    .accessors
-                    .iter()
-                    .find(|accessor| accessor.kind == AccessorKind::Set)
-                    .cloned()
-                    .ok_or_else(|| Diagnostic::new("property has no setter", span))?;
-                if let Some(body) = accessor.body {
-                    self.execute_property_setter(
-                        target,
-                        &property.name.spelling,
-                        &property.ty,
-                        receiver,
-                        &body,
-                        value.clone(),
-                        span,
-                    )?;
-                } else if property.modifiers.contains(&Modifier::Static) {
-                    self.store
-                        .static_slot_mut(&target)
-                        .expect("auto property storage exists")
-                        .value = value.clone();
-                } else {
-                    let receiver = receiver
-                        .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    self.store
-                        .object_mut(receiver)
-                        .fields
-                        .get_mut(&target)
-                        .expect("auto property storage exists")
-                        .value = value.clone();
-                }
-                Ok(value)
+                self.write_class_property(target, receiver, property, value, span)
             }
             _ => Err(Diagnostic::new("target is not a value member", span)),
         }
+    }
+
+    fn write_class_property(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        property: crate::ast::PropertyDeclaration,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let value = typed_value(value, &property.ty);
+        let accessor = property
+            .accessors
+            .iter()
+            .find(|accessor| accessor.kind == AccessorKind::Set)
+            .cloned()
+            .ok_or_else(|| Diagnostic::new("property has no setter", span))?;
+        if let Some(body) = accessor.body {
+            self.execute_property_setter(
+                target,
+                &property.name.spelling,
+                &property.ty,
+                receiver,
+                &body,
+                value.clone(),
+                span,
+            )?;
+        } else if property.modifiers.contains(&Modifier::Static) {
+            self.store
+                .static_slot_mut(&target)
+                .expect("auto property storage exists")
+                .value = value.clone();
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            self.store
+                .object_mut(receiver)
+                .fields
+                .get_mut(&target)
+                .expect("auto property storage exists")
+                .value = value.clone();
+        }
+        Ok(value)
     }
 
     fn evaluate_new_object(
@@ -1706,64 +1792,94 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .program()
             .call_target(span)
             .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?;
-        if let CallTarget::PlatformConstructor(constructor) = target {
+        match target {
+            CallTarget::PlatformConstructor(constructor) => {
+                self.construct_platform_value(constructor, arguments, span)
+            }
+            CallTarget::SObjectConstructor { object_id } => {
+                self.construct_sobject(object_id, arguments, span)
+            }
+            CallTarget::Constructor {
+                class_id,
+                member_id,
+            } => {
+                let arguments = self.evaluate_arguments(arguments)?;
+                self.ensure_class_initialized(class_id, span)?;
+                self.construct_user_object(class_id, member_id, arguments, span)
+            }
+            _ => Err(Diagnostic::new("invalid constructor target", span)),
+        }
+    }
+
+    fn construct_platform_value(
+        &mut self,
+        constructor: crate::hir::PlatformConstructor,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if !arguments.is_empty() {
+            return Err(Diagnostic::new(
+                "platform constructor received unexpected arguments",
+                span,
+            ));
+        }
+        let value = match constructor {
+            crate::hir::PlatformConstructor::Http => PlatformValue::Http,
+            crate::hir::PlatformConstructor::HttpRequest => {
+                PlatformValue::HttpRequest(HttpRequestData::default())
+            }
+            crate::hir::PlatformConstructor::HttpResponse => {
+                PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+        };
+        Ok(self.store.allocate_platform(value))
+    }
+
+    fn construct_sobject(
+        &mut self,
+        object_id: Option<usize>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let object_id = if let Some(object_id) = object_id {
             if !arguments.is_empty() {
                 return Err(Diagnostic::new(
-                    "platform constructor received unexpected arguments",
+                    "typed SObject constructor received unexpected arguments",
                     span,
                 ));
             }
-            let value = match constructor {
-                crate::hir::PlatformConstructor::Http => PlatformValue::Http,
-                crate::hir::PlatformConstructor::HttpRequest => {
-                    PlatformValue::HttpRequest(HttpRequestData::default())
-                }
-                crate::hir::PlatformConstructor::HttpResponse => {
-                    PlatformValue::HttpResponse(HttpResponseData::default())
-                }
+            object_id
+        } else {
+            let [object_name] = arguments else {
+                return Err(Diagnostic::new(
+                    "dynamic SObject constructor requires one API name",
+                    span,
+                ));
             };
-            return Ok(self.store.allocate_platform(value));
-        }
-        if let CallTarget::SObjectConstructor { object_id } = target {
-            let object_id = if let Some(object_id) = object_id {
-                if !arguments.is_empty() {
-                    return Err(Diagnostic::new(
-                        "typed SObject constructor received unexpected arguments",
-                        span,
-                    ));
-                }
-                object_id
-            } else {
-                let [object_name] = arguments else {
-                    return Err(Diagnostic::new(
-                        "dynamic SObject constructor requires one API name",
-                        span,
-                    ));
-                };
-                let Value::String(object_name) = self.evaluate(object_name)? else {
-                    return Err(invalid_runtime_operands(object_name.span()));
-                };
-                self.program()
-                    .schema()
-                    .object_index(&object_name)
-                    .ok_or_else(|| {
-                        runtime_exception(
-                            "IllegalArgumentException",
-                            format!("unknown SObject `{object_name}`"),
-                            span,
-                        )
-                    })?
+            let Value::String(object_name) = self.evaluate(object_name)? else {
+                return Err(invalid_runtime_operands(object_name.span()));
             };
-            return Ok(self.store.allocate_sobject(object_id));
-        }
-        let CallTarget::Constructor {
-            class_id,
-            member_id,
-        } = target
-        else {
-            return Err(Diagnostic::new("invalid constructor target", span));
+            self.program()
+                .schema()
+                .object_index(&object_name)
+                .ok_or_else(|| {
+                    runtime_exception(
+                        "IllegalArgumentException",
+                        format!("unknown SObject `{object_name}`"),
+                        span,
+                    )
+                })?
         };
-        let arguments = self.evaluate_arguments(arguments)?;
+        Ok(self.store.allocate_sobject(object_id))
+    }
+
+    fn construct_user_object(
+        &mut self,
+        class_id: usize,
+        member_id: Option<usize>,
+        arguments: Vec<EvaluatedArgument>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
         let object_id = self.store.allocate_object(class_id);
         self.allocate_instance_fields(object_id, class_id);
         let lineage = self.class_lineage_base_first(class_id);
@@ -1958,6 +2074,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         } else {
             target
         };
+        self.ensure_class_initialized(target.class_id, span)?;
         let method = match self.classes()[target.class_id].members[target.member_id].clone() {
             ClassMember::Method(method) => method,
             _ => return Err(Diagnostic::new("method target is invalid", span)),

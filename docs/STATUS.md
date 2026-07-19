@@ -13,8 +13,9 @@ the bounded S0 process-safety and correctness criteria pass.
 
 S0-01 frontend safety, S0-02 runtime instrumentation, S0-03 runtime graph
 safety, and S0-05 release gates are integrated and complete. S0-04 execution
-context/lazy class initialization is Ready now that both runtime dependencies
-are integrated and verified. Package status, dependencies, acceptance
+context/lazy class initialization is in Review at `ed830f2` after its runtime
+implementation and branch verification passed; independent review and
+integration remain before S0-GATE. Package status, dependencies, acceptance
 criteria, branch rules, and the coordinator prompt live under
 `docs/stabilization/`.
 
@@ -242,6 +243,15 @@ criteria, branch rules, and the coordinator prompt live under
 - Explicit runtime instrumentation policies keep ordinary execute/invoke paths
   free of coverage and debugger state, limit test execution to consumed
   coverage facts, and bound debugger traces with reported truncation
+- An explicit runtime execution context keeps ordinary and debugger launches
+  outside test mode, marks isolated Apex tests as test mode, and captures,
+  installs, and restores that mode across successful or failed deterministic
+  async jobs independently of instrumentation
+- Lazy per-class static initialization allocates typed-null field/property
+  slots before source-order field initializers, initializes base classes first,
+  caches successful and failed outcomes, rejects cross-class cycles with a
+  catchable typed failure, and bounds dependency depth without touching unused
+  classes
 - Shared runtime value-graph traversal renders cyclic List, Set, Map, and
   reachable SObject fields deterministically, bounds debug and debugger
   presentation without truncating observable semantic String conversions,
@@ -348,15 +358,15 @@ criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 342 ordinary tests pass with no failures (14 separate North Star goal tests
+- 353 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
 
 ## Immediate target
 
-Complete and independently review the bounded S0 work packages, integrate them
-on `codex/stabilization`, and satisfy the S0 exit criteria and owner approvals.
+Complete independent S0-04 review, integrate it on `codex/stabilization`, and
+satisfy the integrated S0-GATE verification and owner approvals.
 After S0-GATE is complete, resume M18 safe-navigation and null-coalescing
 expressions as complete lexer/parser/semantic/runtime slices. The package
 tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
@@ -498,12 +508,17 @@ lexer 5/7, parser 0/7, total 5/14.
 - Async execution is a deterministic local profile, not a wall-clock scheduler:
   only `Test.stopTest` drains queued work, jobs run FIFO with a 100-job drain
   bound, batch `start` returns `List<T>` rather than `QueryLocator`/`Iterable`,
-  and batch scope sizes are limited to 1–2000. Async jobs share one interpreter
-  execution store, so Salesforce's fully serialized cross-transaction static
-  isolation is not yet claimed. Cron expressions are shape-checked but not
-  calendar-evaluated; job monitoring, abort/reschedule APIs, flex queue
-  behavior, finalizers, future callout options, and platform-event replay or
-  retention are unsupported.
+  and batch scope sizes are limited to 1–2000. Async jobs inherit the explicit
+  test/debug execution mode captured at submission and restore their caller's
+  mode, but still share one interpreter execution store, so Salesforce's fully
+  serialized cross-transaction static isolation is not yet claimed. Cron
+  expressions are shape-checked but not calendar-evaluated; job monitoring,
+  abort/reschedule APIs, flex queue behavior, finalizers, future callout
+  options, and platform-event replay or retention are unsupported.
+- Static state initializes lazily per class and caches failures. Cross-class
+  cycles and dependency chains beyond 64 simultaneously initializing classes
+  raise catchable `TypeException` values; M20 initializer blocks and
+  Salesforce-exact class-initialization exception wording remain future work.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, ternary, `while`, `do`/`while`, and condition-bearing `for` branches.
   It is not a claim of Salesforce-exact coverage accounting.

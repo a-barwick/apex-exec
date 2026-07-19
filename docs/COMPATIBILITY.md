@@ -80,10 +80,10 @@ for the documented case.
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
-| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
+| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
-| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; `SeeAllData=true` is explicit |
+| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, method-only `@TestSetup`, and correct `Test.isRunningTest()` mode in tests and their queued work; `SeeAllData=true` is explicit |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
 | Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract whose declared `T` binds the List-returning `start` and `execute` scope types, plus deterministic chunking, context job ID, and `finish` |
@@ -179,10 +179,15 @@ implemented.
 Top-level class and interface names are case-insensitive and participate in
 cross-file resolution. Supported class members are constructors, fields,
 properties, and methods. Fields receive typed null before explicit
-initialization; static state belongs to the interpreter and instance state uses
-object identity. Auto properties use interpreter-owned backing storage, while
-custom accessors execute checked bodies. `this`, `super`, static access, and
-bare member access resolve at compile time.
+initialization; static state belongs to the interpreter and initializes lazily
+per class, while instance state uses object identity. Static fields and auto
+properties are all allocated to typed null before source-order field
+initializers run. Base classes initialize first; successful and failed outcomes
+are cached. Cross-class dependency cycles and chains deeper than 64 active
+classes raise catchable `TypeException` values. Auto properties use
+interpreter-owned backing storage, while custom accessors execute checked
+bodies. `this`, `super`, static access, and bare member access resolve at
+compile time.
 
 Classes may extend one virtual/abstract class and implement interfaces.
 Abstract, virtual, and override declarations are validated, interface
@@ -230,11 +235,13 @@ catchable `AssertException` on failure. The legacy `testMethod` modifier, newer
 Project tests are discovered and sorted case-insensitively by `Class.method`.
 Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
-interpreter. A bounded worker pool can therefore run tests in parallel without
-sharing static fields, object/collection/SObject identity, default
-recording-host output, runtime stacks, or database records. M8 makes setup DML
-visible inside that test interpreter. One-time setup snapshot optimization
-remains future work.
+interpreter. Its explicit execution context makes `Test.isRunningTest()` true
+for setup/test methods and deterministic async work they submit; ordinary and
+debugger entry points remain false. A bounded worker pool can therefore run
+tests in parallel without sharing static fields, object/collection/SObject
+identity, default recording-host output, runtime stacks, or database records.
+M8 makes setup DML visible inside that test interpreter. One-time setup
+snapshot optimization remains future work.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of
@@ -365,7 +372,8 @@ surface produce a compile diagnostic naming the API and profile.
 - Deterministic services: `System.now`/`today`/`currentTimeMillis`,
   `Datetime.now`, `Date.today`, `Math.random`, and common `UserInfo` methods.
 - Tests/limits: `Test.startTest`, `stopTest`, `isRunningTest`, and current/limit
-  query, DML statement, and callout counters.
+  query, DML statement, and callout counters. `isRunningTest` reads the
+  explicit execution context rather than a hardcoded value.
 - Callouts: common `HttpRequest`/`HttpResponse` state plus `Http.send`.
   `PlatformHost` supplies responses; `RecordingHost` queues mocks and captures
   requests. An unmocked callout throws `CalloutException` and no live network
@@ -404,7 +412,9 @@ Queued work never runs on a background thread. `Test.stopTest` is the explicit
 drain point and processes work in submission order, including work chained by a
 running job, up to a deterministic 100-job bound. Each job uses a nested
 database checkpoint and publishes structured queued, started, completed, or
-failed lifecycle events. A failure rolls back that job and fails the drain.
+failed lifecycle events. It captures the submitting test/debug mode, installs
+that context for the job, and restores its caller after success or failure. A
+failure rolls back that job and fails the drain.
 
 Batch `start` currently returns `List<T>`; `QueryLocator`, `Iterable`, stateful
 serialization between chunks, flex-queue policy, monitoring, abort, and
