@@ -623,7 +623,7 @@ shortcut in the interpreter.
 
 ### M24 — Partial DML results and bulk failure fidelity
 
-**Status:** Planned
+**Status:** Active on `codex/milestone-24-partial-dml-results`
 
 #### Scope
 

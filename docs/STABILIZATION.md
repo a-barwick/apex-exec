@@ -10,8 +10,9 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Next feature milestone:** M23 — broader SOQL fidelity
-- **Feature policy:** M18 through M22 are complete. M23 is the next language
+- **Active feature milestone:** M24 — partial DML results and bulk failure
+  fidelity on `codex/milestone-24-partial-dml-results`
+- **Feature policy:** M18 through M23 are complete. M24 is the active language
   milestone and is prioritized by the frozen M22 impact census.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
