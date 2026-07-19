@@ -95,6 +95,24 @@ It also runs:
 - Complexity non-regression checks once S0-05 supplies them.
 - Relevant performance assertions for runtime/compiler/data hot paths.
 
+### Verification drift guards
+
+Review and integration verification must not rely on a clean worktree alone:
+
+- Pin the expected branch and full candidate SHA before every verification
+  group, require an empty tracked/staged/untracked status, and recheck both
+  after the group.
+- Prove the declared integration baseline and documentation checkpoint remain
+  ancestors of the candidate.
+- Use a new candidate-SHA-specific `CARGO_TARGET_DIR` for authoritative Rust
+  review and gate runs. Do not reuse a task or reviewer target directory.
+- Reconcile test totals against the checked-in harness inventory. If a binary
+  exposes a test absent from the candidate source, stop, quarantine the shared
+  target, and rerun from a new isolated target before recording evidence.
+- Keep implementation branches immutable while read-only review is active.
+  Any blocking fix creates a new Review SHA and invalidates the earlier
+  verification result.
+
 ## Handoff report
 
 Every implementation thread returns this exact structure:

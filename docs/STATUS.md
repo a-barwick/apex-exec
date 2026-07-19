@@ -11,13 +11,15 @@ The pre-open-source audit and execution strategy are now captured in
 remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
-S0-01 frontend safety, S0-02 runtime instrumentation, S0-03 runtime graph
-safety, and S0-05 release gates are integrated and complete. S0-04 execution
-context/lazy class initialization is in Review at `ed830f2` after its runtime
-implementation and branch verification passed; independent review and
-integration remain before S0-GATE. Package status, dependencies, acceptance
-criteria, branch rules, and the coordinator prompt live under
-`docs/stabilization/`.
+S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
+S0-04 execution context/lazy class initialization merged as `c847fb2` after
+fresh runtime review, one setup-context regression remediation, re-review, and
+an independent adversarial audit. The complete post-integration Rust,
+reproduction, website, editor, documentation, maintainability, and dependency
+matrix is green. S0-GATE is in Review pending a fresh read-only audit of the
+complete integrated diff and the repository owner's merge decision. Package
+status, dependencies, acceptance criteria, branch rules, and the coordinator
+prompt live under `docs/stabilization/`.
 
 ## Completed
 
@@ -365,12 +367,12 @@ criteria, branch rules, and the coordinator prompt live under
 
 ## Immediate target
 
-Complete independent S0-04 review, integrate it on `codex/stabilization`, and
-satisfy the integrated S0-GATE verification and owner approvals.
-After S0-GATE is complete, resume M18 safe-navigation and null-coalescing
-expressions as complete lexer/parser/semantic/runtime slices. The package
-tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
-evidence baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+Complete the fresh integrated-diff review, freeze the immutable stabilization
+candidate, and request explicit owner approval before merging it to `main`.
+M18 safe-navigation and null-coalescing work remains gated until that owner
+handoff completes. The package tracker is in `docs/STABILIZATION.md`; the
+complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
+`docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 

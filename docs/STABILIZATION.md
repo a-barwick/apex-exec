@@ -67,9 +67,9 @@ package.
 | S0-01 | Frontend process safety and correctness | Complete (`c7d4ac7`, `2a8635d`; review approved; merged as `1b16312`, `ae3bf27`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Complete (`8f3ce51`; review approved at `b8b190e`; merged as `c7f78e1`) | S0-02 merged | S0-01, S0-05 |
-| S0-04 | Execution context and lazy class initialization | Review (`ed830f2`; setup-mode evidence `53585f8`; `codex/stab-execution-context`; `s0_04_execution_context`) | S0-02 and S0-03 merged | S0-01, S0-05 |
+| S0-04 | Execution context and lazy class initialization | Complete (`ed830f2`; setup-mode evidence `53585f8`; reviews approved at `ad08c4c`; merged as `c847fb2`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
-| S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
+| S0-GATE | Integrated S0 verification and owner review | Review (post-integration verification passed at `c847fb2`; integrated-diff review pending) | S0-01–S0-05 complete | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
 | S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
@@ -88,8 +88,8 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
 ### S0-04 — Execution context and lazy class initialization
 
 - Implementation `ed830f2` and setup-mode evidence remediation `53585f8` on
-  `codex/stab-execution-context`; ready for fresh read-only runtime review and
-  integration.
+  `codex/stab-execution-context`; fresh read-only runtime re-review and an
+  adversarial merge guard approved immutable handoff `ad08c4c`.
 - Fail-before CLI evidence at claim `9b8aead` reproduced both F-P0-06 cases:
   ordinary `Test.isRunningTest()` printed `true`, and an unused class with
   `static Integer broken = 1 / 0` terminated unrelated execution with a
@@ -104,6 +104,11 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   `Test.isRunningTest()` and records a static setup-observed flag; the existing
   test method asserts that flag. This closes the setup-mode evidence gap
   without adding a Rust test, so the focused binary remains at nine tests.
+- The first fresh reviewer requested that checked-in setup regression at
+  `111de58`; the implementation branch moved back to Active, added it in
+  `53585f8`, and returned to Review. Re-review found no remaining blocker. A
+  separate adversarial audit approved the state machine, async restoration,
+  scope, ancestry, and conflict-free merge.
 - Static slots are allocated to typed null lazily for one active class, then
   field initializers run once in source order through explicit
   `Uninitialized`, `Initializing`, `Initialized`, and `Failed` states.
@@ -230,6 +235,32 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   and retained graph pairs can grow quadratically, and F-P1-13 still owns
   downstream debugger/DAP visibility for exhausted traces.
 
+### S0-04 — Execution context and lazy class initialization
+
+- Implementation `ed830f2`, setup-context regression `53585f8`, Review handoff
+  `ad08c4c`, and integration merge `c847fb2`. The merge has parents `9b8aead`
+  and `ad08c4c` and changed exactly the 13 reviewed runtime, focused-test, and
+  required-documentation paths.
+- Fresh runtime review initially requested one checked-in `@TestSetup`
+  regression and approved the corrected immutable handoff. A separate
+  adversarial reviewer found no functional blocker and confirmed context
+  restoration across async transaction failures, lazy trigger-driven use,
+  custom static properties, type-only dormancy, and bounded initialization.
+- Integrated Rust verification used fresh candidate-specific build targets:
+  `cargo fmt --check`; `cargo test --locked --no-fail-fast` (353 passed, 14
+  ignored North Star indicators); explicit North Star reporting (2 passed, 14
+  ignored); and `cargo clippy --locked --all-targets -- -D warnings`.
+- All 31 focused S0 integration tests passed: 13 frontend, one instrumentation,
+  eight runtime-graph, and nine execution-context tests. Six private
+  cost/safety assertions also passed. The CLI instrumentation fixture emitted
+  `1`; the runtime-graph fixture emitted its exact eight expected lines;
+  ordinary `Test.isRunningTest()` emitted `false`; and the unused failing-class
+  fixture emitted `1`.
+- The pinned Lizard ratchet passed with 64 current violations against 73 debt
+  caps. RustSec found no issue across 99 locked dependencies. Cargo Deny passed
+  advisories, bans, and sources with only the documented duplicate-`hashbrown`
+  warning.
+
 ### S0-05 — CI, complexity ratchet, and release-document gates
 
 - Implementation checkpoints `a2fea18`, `0aaac4a`, `522e44f`, and `767d6a7`;
@@ -257,6 +288,29 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   `codex/stabilization` must require `Required CI gate`, require current
   branches, and prohibit bypass. No branch was pushed and no rule, release, or
   deployment was created.
+
+### S0-GATE — Integrated verification
+
+- Post-integration verification at immutable merge `c847fb2` passed from a
+  clean `codex/stabilization` worktree with `c70a528` and documentation
+  checkpoint `152e5d6` preserved as ancestors.
+- Website clean install/build/test (2 passed)/lint and editor clean
+  install/test/audit (zero vulnerabilities) passed under Node 22.15. Actionlint
+  1.7.12, all 19 tooling tests, 54 Markdown files and 98 local links, the full
+  committed-whitespace range, and the 64/73 Lizard ratchet passed.
+- The npm policy matched four dependency records to the single documented
+  `GHSA-qx2v-qp2m-jg93` allowance. The separate raw production audit returned
+  its expected nonzero status with only two moderate PostCSS records; the
+  allowance expires 2026-08-18.
+- A shared local Cargo target exposed three stale, uncommitted reviewer-probe
+  tests. SHA/source guards caught the mismatch. Every authoritative package and
+  gate result above was rerun in a new candidate-specific target, where the
+  canonical count was 353 passed and 14 ignored. The operations contract now
+  requires isolated targets for review and integration verification.
+- A fresh read-only review of the complete integrated diff remains before the
+  owner handoff. No branch was pushed, `main` remains at `c70a528`, and license,
+  supported-public-API, S1 ADR, release, and deployment decisions remain
+  untouched.
 
 ## Roadmap gates
 

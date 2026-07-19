@@ -6,6 +6,12 @@ buildable branch. Agents must follow
 [`docs/STABILIZATION.md`](../STABILIZATION.md), and stop rather than silently
 expanding scope.
 
+The `Status` fields in this catalog preserve each package's initial dependency
+state when the stabilization program was defined. They are not the live
+execution tracker. The canonical current status, claim, review, and integration
+evidence is the work queue in
+[`docs/STABILIZATION.md`](../STABILIZATION.md).
+
 ## S0-00 — Durable control plane
 
 **Status:** Complete
