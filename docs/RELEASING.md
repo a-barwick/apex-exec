@@ -25,7 +25,7 @@ Protect `main` and the stabilization integration branch with the stable
 required check:
 
 ```text
-CI / Required CI gate
+Required CI gate
 ```
 
 Require the branch to be current before merge and do not allow administrators

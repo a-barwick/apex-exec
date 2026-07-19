@@ -110,7 +110,7 @@ Keep commits coherent and buildable. In the pull request:
 - identify new public APIs and complexity changes;
 - call out known risks, owner decisions, and deliberately excluded scope.
 
-The stable required check is `CI / Required CI gate`. Review and CI do not
+The stable required check is `Required CI gate`. Review and CI do not
 replace the additional integration procedure for active stabilization work.
 
 ## Reporting problems
