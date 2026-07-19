@@ -66,7 +66,7 @@ package.
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Review (`1cda4e0`; `codex/stab-runtime-graph-safety`) | S0-02 merged | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; review blocker: semantic String truncation) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
