@@ -11,13 +11,12 @@ The pre-open-source audit and execution strategy are now captured in
 remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
-S0-02 runtime instrumentation and S0-05 release gates are integrated. S0-01
-frontend safety and its maintainability remediation have passed independent
-review and are in integrated verification. S0-03 runtime graph safety is
-active while a review blocker is corrected; S0-04 execution context/lazy
-class initialization remains blocked until S0-03 integrates. Package status,
-dependencies, acceptance criteria, branch rules, and the coordinator prompt
-live under `docs/stabilization/`.
+S0-01 frontend safety, S0-02 runtime instrumentation, and S0-05 release gates
+are integrated and complete. S0-03 runtime graph safety is in independent
+review after correcting its initial review blockers; S0-04 execution
+context/lazy class initialization remains blocked until S0-03 integrates.
+Package status, dependencies, acceptance criteria, branch rules, and the
+coordinator prompt live under `docs/stabilization/`.
 
 ## Completed
 

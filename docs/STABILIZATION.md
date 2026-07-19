@@ -64,9 +64,9 @@ package.
 | ID | Work package | Status | Depends on | May run with |
 |---|---|---|---|---|
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
-| S0-01 | Frontend process safety and correctness | Review (`2a8635d`; review approved at `7029448`; `codex/stab-frontend-safety`) | S0-00 merged | S0-02, S0-05 |
+| S0-01 | Frontend process safety and correctness | Complete (`c7d4ac7`, `2a8635d`; review approved; merged as `1b16312`, `ae3bf27`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; review blocker under remediation) | S0-02 merged | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Review (`8f3ce51`; `codex/stab-runtime-graph-safety`; corrected handoff `b8b190e`) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
@@ -84,6 +84,29 @@ package.
 The first parallel wave was limited to S0-01, S0-02, and S0-05.
 
 ## Integrated package evidence
+
+### S0-01 — Frontend process safety and correctness
+
+- Implementation `c7d4ac7`, initial handoff `f7693fe`, and integration merge
+  `1b16312`; maintainability remediation `2a8635d`, final Review handoff
+  `7029448`, and follow-up integration merge `ae3bf27`.
+- Fresh read-only compiler review approved both observable behavior and the
+  follow-up refactor. It reproduced the public parser boundary failures,
+  grouped-expression/cast ambiguity, generic `Database.Batchable<Scope>`
+  erasure, editor generic-argument navigation gap, and recursive hierarchy
+  hazards before the fix. The final review also reproduced all three
+  post-integration complexity failures before `2a8635d` and approved the
+  focused parser, collection-type, and Batchable validation extractions.
+- Integrated Rust verification passed: `cargo fmt --check`; `cargo test
+  --locked` (321 passed, 14 ignored North Star indicators); explicit North
+  Star reporting; `cargo clippy --locked --all-targets -- -D warnings`; and
+  all 13 focused S0-01 regressions.
+- Integrated release gates passed: website build/test/lint; editor smoke test
+  and zero-vulnerability audit; 19 tooling tests; 54 Markdown files and 97
+  local links; committed-whitespace range `1b16312..ae3bf27`; Actionlint
+  1.7.12; and the immutable Lizard ratchet with 68 current violations against
+  73 debt caps. RustSec and Cargo Deny passed, and the npm policy matched only
+  the documented time-boxed PostCSS allowance.
 
 ### S0-02 — Opt-in runtime instrumentation
 
