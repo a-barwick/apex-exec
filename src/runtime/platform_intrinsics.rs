@@ -1,6 +1,7 @@
 use super::{
     Collection, EvaluatedArgument, Interpreter, PlatformHost, PlatformValue, Value,
     invalid_runtime_operands, runtime_exception,
+    value_graph::{CycleBehavior, GraphIdentity, TraversalError, ValueGraphTraversal},
 };
 use crate::{
     ast::TypeName, diagnostic::Diagnostic, hir::PlatformIntrinsic, platform::RecordId, span::Span,
@@ -902,7 +903,36 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         })
     }
 
-    fn value_to_json(&self, value: &Value, span: Span) -> Result<JsonValue, Diagnostic> {
+    pub(super) fn value_to_json(&self, value: &Value, span: Span) -> Result<JsonValue, Diagnostic> {
+        let mut traversal = ValueGraphTraversal::for_json();
+        self.value_to_json_inner(value, span, 0, &mut traversal)
+    }
+
+    fn value_to_json_inner(
+        &self,
+        value: &Value,
+        span: Span,
+        depth: usize,
+        traversal: &mut ValueGraphTraversal,
+    ) -> Result<JsonValue, Diagnostic> {
+        if matches!(
+            value,
+            Value::SObject(_) | Value::AggregateResult(_) | Value::Object(_)
+        ) {
+            let mut rendered = String::new();
+            self.render_value_with_traversal(
+                value,
+                depth,
+                traversal,
+                &mut rendered,
+                CycleBehavior::Error,
+            )
+            .map_err(|error| json_traversal_error(error, span))?;
+            return Ok(JsonValue::String(rendered));
+        }
+        traversal
+            .visit_node(depth)
+            .map_err(|error| json_traversal_error(error, span))?;
         Ok(match value {
             Value::Null(_) => JsonValue::Null,
             Value::Boolean(value) => JsonValue::Bool(*value),
@@ -917,29 +947,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 JsonValue::String(value.format("%Y-%m-%dT%H:%M:%S.000Z").to_string())
             }
             Value::Time(value) => JsonValue::String(value.format("%H:%M:%S%.3f").to_string()),
-            Value::Collection(id) => match self.collection(*id) {
-                Collection::List { elements, .. } | Collection::Set { elements, .. } => {
-                    JsonValue::Array(
-                        elements
-                            .iter()
-                            .map(|value| self.value_to_json(value, span))
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )
-                }
-                Collection::Map { entries, .. } => {
-                    let mut object = JsonMap::new();
-                    for (key, value) in entries {
-                        let Value::String(key) = key else {
-                            return Err(platform_error(
-                                "JSON object maps require String keys",
-                                span,
-                            ));
-                        };
-                        object.insert(key.clone(), self.value_to_json(value, span)?);
-                    }
-                    JsonValue::Object(object)
-                }
-            },
+            Value::Collection(id) => {
+                return self.collection_to_json(*id, span, depth, traversal);
+            }
             Value::Platform(id) => match self.store.platform(*id) {
                 PlatformValue::Blob(bytes) => JsonValue::String(BASE64.encode(bytes)),
                 _ => {
@@ -952,12 +962,58 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     ));
                 }
             },
-            Value::SObject(_) | Value::AggregateResult(_) | Value::Object(_) => {
-                JsonValue::String(self.display_value(value))
-            }
             Value::Exception(exception) => JsonValue::String(exception.message.clone()),
             Value::Void => return Err(platform_error("cannot serialize void", span)),
+            Value::SObject(_) | Value::AggregateResult(_) | Value::Object(_) => {
+                unreachable!("handled before entering the structural JSON match")
+            }
         })
+    }
+
+    fn collection_to_json(
+        &self,
+        id: super::CollectionId,
+        span: Span,
+        depth: usize,
+        traversal: &mut ValueGraphTraversal,
+    ) -> Result<JsonValue, Diagnostic> {
+        let identity = GraphIdentity::Collection(id);
+        traversal
+            .enter_identity(identity)
+            .map_err(|error| json_traversal_error(error, span))?;
+        let result = (|| match self.collection(id) {
+            Collection::List { elements, .. } | Collection::Set { elements, .. } => {
+                let mut values = Vec::new();
+                for value in elements {
+                    traversal
+                        .visit_element()
+                        .map_err(|error| json_traversal_error(error, span))?;
+                    values.push(self.value_to_json_inner(value, span, depth + 1, traversal)?);
+                }
+                Ok(JsonValue::Array(values))
+            }
+            Collection::Map { entries, .. } => {
+                let mut object = JsonMap::new();
+                for (key, value) in entries {
+                    traversal
+                        .visit_element()
+                        .map_err(|error| json_traversal_error(error, span))?;
+                    traversal
+                        .visit_node(depth + 1)
+                        .map_err(|error| json_traversal_error(error, span))?;
+                    let Value::String(key) = key else {
+                        return Err(platform_error("JSON object maps require String keys", span));
+                    };
+                    object.insert(
+                        key.clone(),
+                        self.value_to_json_inner(value, span, depth + 1, traversal)?,
+                    );
+                }
+                Ok(JsonValue::Object(object))
+            }
+        })();
+        traversal.leave_identity(identity);
+        result
     }
 
     fn json_to_value(&mut self, value: JsonValue, span: Span) -> Result<Value, Diagnostic> {
@@ -1132,4 +1188,17 @@ fn request_span(arguments: &[EvaluatedArgument], fallback: Span) -> Span {
 
 fn platform_error(message: impl Into<String>, span: Span) -> Diagnostic {
     runtime_exception("IllegalArgumentException", message, span)
+}
+
+fn json_traversal_error(error: TraversalError, span: Span) -> Diagnostic {
+    let message = match error {
+        TraversalError::Cycle => "JSON serialization does not support cyclic runtime values",
+        TraversalError::DepthLimit => "JSON serialization exceeded the runtime value depth limit",
+        TraversalError::NodeLimit => "JSON serialization exceeded the runtime value node limit",
+        TraversalError::ElementLimit => {
+            "JSON serialization exceeded the runtime value element limit"
+        }
+        TraversalError::OutputLimit => "JSON serialization exceeded the runtime value output limit",
+    };
+    platform_error(message, span)
 }

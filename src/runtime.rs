@@ -26,6 +26,7 @@ mod instrumentation;
 mod intrinsics;
 mod platform_intrinsics;
 mod store;
+mod value_graph;
 
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
@@ -947,11 +948,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             let slot = self
                 .lookup_canonical(canonical)
                 .expect("selected debugger variable remains visible");
-            if !builder.push_variable(
-                canonical.to_owned(),
-                slot.ty.apex_name(),
-                self.display_value(&slot.value),
-            ) {
+            let rendered = self.render_value(&slot.value);
+            if rendered.truncated {
+                builder.mark_truncated();
+            }
+            if !builder.push_variable(canonical.to_owned(), slot.ty.apex_name(), rendered.text) {
                 break;
             }
         }
@@ -3095,192 +3096,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             unreachable!("Set method called with another collection kind")
         };
         element_type
-    }
-
-    fn values_equal(&self, left: &Value, right: &Value) -> bool {
-        match (left, right) {
-            (Value::String(left), Value::String(right)) => left == right,
-            (Value::Boolean(left), Value::Boolean(right)) => left == right,
-            (Value::Integer(left), Value::Integer(right)) => left == right,
-            (Value::Decimal(left), Value::Decimal(right)) => left == right,
-            (Value::Date(left), Value::Date(right)) => left == right,
-            (Value::Datetime(left), Value::Datetime(right)) => left == right,
-            (Value::Time(left), Value::Time(right)) => left == right,
-            (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
-            (Value::Platform(left), Value::Platform(right)) => left == right,
-            (Value::Collection(left), Value::Collection(right)) => {
-                self.collections_equal(*left, *right)
-            }
-            (Value::Object(left), Value::Object(right)) => left == right,
-            (Value::SObject(left), Value::SObject(right)) => left == right,
-            (Value::Exception(left), Value::Exception(right)) => left == right,
-            (Value::Null(_), Value::Null(_)) => true,
-            (Value::Void, Value::Void) => true,
-            _ => false,
-        }
-    }
-
-    fn operator_values_equal(&self, left: &Value, right: &Value) -> bool {
-        match (left, right) {
-            (Value::String(left), Value::String(right)) => {
-                left.to_lowercase() == right.to_lowercase()
-            }
-            _ => self.values_equal(left, right),
-        }
-    }
-
-    fn collections_equal(&self, left: CollectionId, right: CollectionId) -> bool {
-        if left == right {
-            return true;
-        }
-        match (self.collection(left), self.collection(right)) {
-            (
-                Collection::List { elements: left, .. },
-                Collection::List {
-                    elements: right, ..
-                },
-            ) => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right)
-                        .all(|(left, right)| self.values_equal(left, right))
-            }
-            (
-                Collection::Set { elements: left, .. },
-                Collection::Set {
-                    elements: right, ..
-                },
-            ) => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .all(|left| right.iter().any(|right| self.values_equal(left, right)))
-            }
-            (Collection::Map { entries: left, .. }, Collection::Map { entries: right, .. }) => {
-                left.len() == right.len()
-                    && left.iter().all(|(left_key, left_value)| {
-                        right.iter().any(|(right_key, right_value)| {
-                            self.values_equal(left_key, right_key)
-                                && self.values_equal(left_value, right_value)
-                        })
-                    })
-            }
-            _ => false,
-        }
-    }
-
-    fn display_value(&self, value: &Value) -> String {
-        match value {
-            Value::String(value) => value.clone(),
-            Value::Boolean(value) => value.to_string(),
-            Value::Integer(value) => value.to_string(),
-            Value::Decimal(value) => value.normalize().to_string(),
-            Value::Date(value) => value.format("%Y-%m-%d").to_string(),
-            Value::Datetime(value) => value.format("%Y-%m-%d %H:%M:%S").to_string(),
-            Value::Time(value) => value.format("%H:%M:%S%.3f").to_string(),
-            Value::Id(value) => value.clone(),
-            Value::Platform(id) => match self.store.platform(*id) {
-                PlatformValue::Blob(bytes) => format!("Blob[{}]", bytes.len()),
-                PlatformValue::Pattern(pattern) => pattern.clone(),
-                PlatformValue::Matcher { .. } => "Matcher".to_owned(),
-                PlatformValue::Http => "Http".to_owned(),
-                PlatformValue::HttpRequest(request) => {
-                    format!("HttpRequest[{} {}]", request.method, request.endpoint)
-                }
-                PlatformValue::HttpResponse(response) => {
-                    format!("HttpResponse[{} {}]", response.status_code, response.status)
-                }
-                PlatformValue::SObjectType(object_id)
-                | PlatformValue::DescribeSObject(object_id) => {
-                    self.program().schema().object_at(*object_id).map_or_else(
-                        || "Schema".to_owned(),
-                        |object| object.api_name().to_owned(),
-                    )
-                }
-                PlatformValue::AsyncContext { ty, job_id } => {
-                    format!("{}[{job_id}]", ty.apex_name())
-                }
-            },
-            Value::Collection(id) => match self.collection(*id) {
-                Collection::List { elements, .. } => format!(
-                    "({})",
-                    elements
-                        .iter()
-                        .map(|value| self.display_value(value))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Collection::Set { elements, .. } => format!(
-                    "{{{}}}",
-                    elements
-                        .iter()
-                        .map(|value| self.display_value(value))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Collection::Map { entries, .. } => format!(
-                    "{{{}}}",
-                    entries
-                        .iter()
-                        .map(|(key, value)| format!(
-                            "{}={}",
-                            self.display_value(key),
-                            self.display_value(value)
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
-            Value::Object(id) => {
-                let instance = self.store.object(*id);
-                format!(
-                    "{}@{}",
-                    self.classes()[instance.class_id].name.spelling,
-                    id.0
-                )
-            }
-            Value::SObject(id) => {
-                let instance = self.store.sobject(*id);
-                let object = self
-                    .program()
-                    .schema()
-                    .object_at(instance.object_id)
-                    .expect("runtime SObject schema index is valid");
-                let fields = instance
-                    .fields
-                    .iter()
-                    .map(|(field_id, value)| {
-                        let field = object
-                            .field_at(*field_id)
-                            .expect("runtime SObject field index is valid");
-                        format!("{}={}", field.api_name(), self.display_value(value))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}:{{{fields}}}", object.api_name())
-            }
-            Value::AggregateResult(id) => {
-                let fields = self
-                    .store
-                    .aggregate_result(*id)
-                    .iter()
-                    .map(|(name, value)| format!("{name}={value:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("AggregateResult:{{{fields}}}")
-            }
-            Value::Exception(exception) => {
-                let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
-                if exception.message.is_empty() {
-                    exception_type.to_owned()
-                } else {
-                    format!("{exception_type}: {}", exception.message)
-                }
-            }
-            Value::Null(_) => "null".to_owned(),
-            Value::Void => "void".to_owned(),
-        }
     }
 
     fn allocate(&mut self, collection: Collection) -> Value {

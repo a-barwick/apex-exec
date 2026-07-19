@@ -1,3 +1,4 @@
+use super::value_graph::MAX_VALUE_DISPLAY_BYTES;
 use crate::span::Span;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,7 +19,7 @@ pub(crate) const MAX_DEBUG_VARIABLES_PER_SNAPSHOT: usize = 256;
 pub(crate) const MAX_DEBUG_FRAMES_PER_SNAPSHOT: usize = 128;
 
 /// Maximum UTF-8 bytes retained for one debugger-rendered value.
-pub(crate) const MAX_DEBUG_RENDERED_VALUE_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_DEBUG_RENDERED_VALUE_BYTES: usize = MAX_VALUE_DISPLAY_BYTES;
 
 const MAX_DEBUG_METADATA_BYTES: usize = 1_024;
 const TRUNCATION_MARKER: &str = "…";
