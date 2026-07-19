@@ -56,3 +56,4 @@ history.
 - [0024 — Separate corpus grammar acceptance from executable support](0024-separate-grammar-acceptance-from-execution.md)
 - [0025 — Freeze enterprise compatibility by Salesforce test](0025-freeze-enterprise-compatibility-by-salesforce-test.md)
 - [0026 — Recheck dynamic SOQL into checked plans](0026-recheck-dynamic-soql-into-checked-plans.md)
+- [0027 — Structure partial DML requests and outcomes](0027-structure-partial-dml-outcomes.md)
