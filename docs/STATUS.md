@@ -12,11 +12,12 @@ remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
 S0-01 frontend safety, S0-02 runtime instrumentation, and S0-05 release gates
-are integrated and complete. S0-03 runtime graph safety is in independent
-review after correcting its initial review blockers; S0-04 execution
-context/lazy class initialization remains blocked until S0-03 integrates.
-Package status, dependencies, acceptance criteria, branch rules, and the
-coordinator prompt live under `docs/stabilization/`.
+are integrated and complete. S0-03 runtime graph safety has independent
+approval and is in integrated verification after correcting its initial
+review blockers; S0-04 execution context/lazy class initialization remains
+blocked until that verification completes. Package status, dependencies,
+acceptance criteria, branch rules, and the coordinator prompt live under
+`docs/stabilization/`.
 
 ## Completed
 
@@ -242,6 +243,11 @@ coordinator prompt live under `docs/stabilization/`.
 - Explicit runtime instrumentation policies keep ordinary execute/invoke paths
   free of coverage and debugger state, limit test execution to consumed
   coverage facts, and bound debugger traces with reported truncation
+- Shared runtime value-graph traversal renders cyclic List, Set, Map, and
+  reachable SObject fields deterministically, bounds debug and debugger
+  presentation without truncating observable semantic String conversions,
+  makes JSON cycles and traversal-limit failures catchable, and compares
+  cyclic or deeply nested collections without using the host call stack
 - A stdio Debug Adapter Protocol server covering launch/configuration, threads,
   frames, scopes, variables, stepping, continue, terminate, and disconnect for
   both anonymous scripts and project `Class.method` entry points
@@ -521,9 +527,14 @@ lexer 5/7, parser 0/7, total 5/14.
   earliest 4,096 snapshots and an estimated 16 MiB of snapshot structures and
   text, with per-snapshot limits of 256 variables and 128 frames and a 16 KiB
   rendered-value limit; `DebugExecution::trace_status` reports truncation.
-  Recursive cycle-safe value rendering remains S0-03 work. Debug-console
-  expression evaluation, mutation, conditional breakpoints, data breakpoints,
-  exception filters, and reverse execution are not implemented.
+  Runtime values additionally stop at 64 graph levels, 4,096 visited nodes,
+  and 4,096 traversed elements; cycles use `<cycle>` and exhausted presentation
+  budgets use `…`. These presentation limits do not truncate String
+  concatenation, `String.valueOf`/`join`, `Object.toString`, assertion
+  messages, or ordinary invocation results. User-class objects retain
+  identity-only `Class@id` rendering. Debug-console expression evaluation,
+  mutation, conditional breakpoints, data breakpoints, exception filters, and
+  reverse execution are not implemented.
 - LSP navigation and rename cover checked project classes and members.
   Local-variable rename, completion, hover, formatting, semantic tokens, code
   actions, and unsaved multi-file semantic linking remain future work.

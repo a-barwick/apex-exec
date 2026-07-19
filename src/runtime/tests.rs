@@ -1,6 +1,7 @@
 use super::instrumentation::{
     MAX_DEBUG_RENDERED_VALUE_BYTES, MAX_DEBUG_RETAINED_BYTES, MAX_DEBUG_SNAPSHOTS,
 };
+use super::value_graph::{MAX_VALUE_GRAPH_DEPTH, MAX_VALUE_GRAPH_ELEMENTS, MAX_VALUE_GRAPH_NODES};
 use super::*;
 
 #[derive(Default)]
@@ -188,6 +189,115 @@ fn typed_nulls_retain_static_string_behavior_and_compare_as_null() {
     assert!(string_null.has_string_type());
     assert!(!integer_null.has_string_type());
     assert!(interpreter.values_equal(&string_null, &Value::Null(None)));
+}
+
+#[test]
+fn display_traversal_enforces_deterministic_cost_budgets() {
+    let mut interpreter = Interpreter::new();
+    let long = Value::String("x".repeat(MAX_DEBUG_RENDERED_VALUE_BYTES + 100));
+    let rendered = interpreter.render_value(&long);
+    assert_eq!(rendered.text.len(), MAX_DEBUG_RENDERED_VALUE_BYTES);
+    assert!(rendered.text.ends_with('…'));
+    assert!(rendered.truncated);
+    assert_eq!(rendered.stats.output_bytes, MAX_DEBUG_RENDERED_VALUE_BYTES);
+
+    let multibyte = Value::String("😀".repeat(MAX_DEBUG_RENDERED_VALUE_BYTES));
+    let rendered = interpreter.render_value(&multibyte);
+    assert!(rendered.text.ends_with('…'));
+    assert!(rendered.truncated);
+    assert!(rendered.text.len() <= MAX_DEBUG_RENDERED_VALUE_BYTES);
+    assert_eq!(rendered.stats.output_bytes, rendered.text.len());
+
+    let mut nested = Value::Integer(1);
+    for _ in 0..=MAX_VALUE_GRAPH_DEPTH {
+        nested = interpreter.allocate(Collection::List {
+            element_type: TypeName::Object,
+            elements: vec![nested],
+            iteration_depth: 0,
+        });
+    }
+    let rendered = interpreter.render_value(&nested);
+    assert!(rendered.truncated);
+    assert_eq!(rendered.stats.max_depth, MAX_VALUE_GRAPH_DEPTH);
+    assert!(rendered.stats.nodes <= MAX_VALUE_GRAPH_NODES);
+    assert!(rendered.stats.elements <= MAX_VALUE_GRAPH_ELEMENTS);
+    assert!(rendered.text.len() <= MAX_DEBUG_RENDERED_VALUE_BYTES);
+
+    let wide = interpreter.allocate(Collection::List {
+        element_type: TypeName::Object,
+        elements: vec![Value::Integer(0); MAX_VALUE_GRAPH_ELEMENTS + 1],
+        iteration_depth: 0,
+    });
+    let rendered = interpreter.render_value(&wide);
+    assert!(rendered.truncated);
+    assert_eq!(rendered.stats.nodes, MAX_VALUE_GRAPH_NODES);
+    assert_eq!(rendered.stats.elements, MAX_VALUE_GRAPH_ELEMENTS);
+    assert!(rendered.text.len() <= MAX_DEBUG_RENDERED_VALUE_BYTES);
+}
+
+#[test]
+fn cyclic_equality_visits_each_collection_pair_once() {
+    let mut interpreter = Interpreter::new();
+    let Value::Collection(left) = interpreter.allocate(Collection::List {
+        element_type: TypeName::Object,
+        elements: Vec::new(),
+        iteration_depth: 0,
+    }) else {
+        unreachable!()
+    };
+    let Value::Collection(right) = interpreter.allocate(Collection::List {
+        element_type: TypeName::Object,
+        elements: Vec::new(),
+        iteration_depth: 0,
+    }) else {
+        unreachable!()
+    };
+    let Collection::List { elements, .. } = interpreter.collection_mut(left) else {
+        unreachable!()
+    };
+    elements.push(Value::Collection(left));
+    let Collection::List { elements, .. } = interpreter.collection_mut(right) else {
+        unreachable!()
+    };
+    elements.push(Value::Collection(right));
+
+    let left = Value::Collection(left);
+    let right = Value::Collection(right);
+    let (equal, stats) = interpreter.values_equal_with_stats(&left, &right);
+
+    assert!(equal);
+    assert_eq!(stats.equality_pairs, 1);
+    assert_eq!(stats.equality_comparisons, 2);
+}
+
+#[test]
+fn internal_sobject_field_cycles_render_safely_and_fail_json_explicitly() {
+    let compilation = crate::project::compile(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/milestone7-project"
+    ))
+    .unwrap();
+    let mut interpreter = Interpreter::new();
+    interpreter.image = Some(RuntimeImage::new(&compilation.program));
+    let Value::SObject(id) = interpreter.store.allocate_sobject(0) else {
+        unreachable!()
+    };
+    interpreter
+        .store
+        .sobject_mut(id)
+        .fields
+        .insert(0, Value::SObject(id));
+    let value = Value::SObject(id);
+
+    assert!(interpreter.stringify_value(&value).contains("=<cycle>"));
+    let error = interpreter
+        .value_to_json(&value, Span::new(0, 1))
+        .unwrap_err();
+    assert_eq!(
+        error.exception_type.as_deref(),
+        Some("IllegalArgumentException")
+    );
+    assert!(error.message.contains("cyclic runtime values"));
 }
 
 #[test]

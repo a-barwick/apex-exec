@@ -1,3 +1,4 @@
+use super::value_graph::MAX_VALUE_DISPLAY_BYTES;
 use crate::span::Span;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,7 +19,7 @@ pub(crate) const MAX_DEBUG_VARIABLES_PER_SNAPSHOT: usize = 256;
 pub(crate) const MAX_DEBUG_FRAMES_PER_SNAPSHOT: usize = 128;
 
 /// Maximum UTF-8 bytes retained for one debugger-rendered value.
-pub(crate) const MAX_DEBUG_RENDERED_VALUE_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_DEBUG_RENDERED_VALUE_BYTES: usize = MAX_VALUE_DISPLAY_BYTES;
 
 const MAX_DEBUG_METADATA_BYTES: usize = 1_024;
 const TRUNCATION_MARKER: &str = "…";
@@ -165,6 +166,12 @@ impl InstrumentationState {
         self.retained_debug_bytes = retained_debug_bytes;
         self.debug_trace_truncated |= truncated;
         self.snapshots.push(snapshot);
+    }
+
+    pub(crate) fn record_render_truncation(&mut self, truncated: bool) {
+        if truncated && self.policy == InstrumentationPolicy::Debugger {
+            self.debug_trace_truncated = true;
+        }
     }
 
     pub(crate) fn take_trace(&mut self) -> ExecutionTrace {

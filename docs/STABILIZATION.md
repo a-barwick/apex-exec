@@ -83,6 +83,39 @@ package.
 
 The first parallel wave was limited to S0-01, S0-02, and S0-05.
 
+## Package review evidence
+
+### S0-03 — Cycle-safe runtime value traversal
+
+- Initial implementation `1cda4e0`; semantic-rendering remediation `f241728`;
+  debug trace-status correction `8f3ce51`; branch
+  `codex/stab-runtime-graph-safety`.
+- The first independent review reproduced a blocking regression at `657a118`:
+  the 16 KiB debug presentation budget shortened a 20,480-character String to
+  16,382 characters in concatenation, `String.valueOf`/`join`,
+  `Object.toString`, assertion messages, and ordinary invocation output.
+  `f241728` separates bounded debug presentation from semantic
+  stringification and adds the fail-before/pass-after regressions. A preflight
+  then proved that truncated `System.debug` output did not set debugger trace
+  status; `8f3ce51` propagates that metadata under debugger instrumentation and
+  adds the direct-literal regression.
+- The recorded List display, equality, JSON, Set display, Map display, and
+  object-identity CLI cases now terminate deterministically. Cycles render as
+  `<cycle>`, while JSON raises a catchable `IllegalArgumentException`.
+- Focused verification passed: eight integration tests covering the library and
+  CLI reproduction, cyclic List/Set/Map equality, an adversarial equality
+  backtracking case, 5,000-level iterative equality, catchable JSON failures,
+  JSON structural limits, shared-DAG handling, debugger capture, complete
+  semantic String paths, and acyclic compatibility. Runtime unit coverage also
+  proves bounded multibyte rendering ends on a valid UTF-8 boundary.
+- Full branch verification passed before handoff: `cargo fmt --check`; `cargo
+  test` (323 passed, 14 ignored North Star indicators); and `cargo clippy
+  --all-targets -- -D warnings`. The exact cyclic CLI reproduction emitted all
+  eight expected lines.
+- Comparable Lizard evidence removes the 112-NLOC `display_value` hotspot,
+  introduces no new function above the 80-NLOC/15-CCN ratchet, and passes the
+  immutable S0-05 baseline with 71 current violations against 73 debt caps.
+
 ## Integrated package evidence
 
 ### S0-01 — Frontend process safety and correctness
