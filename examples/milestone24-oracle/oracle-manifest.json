@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "partial-dml-result-fidelity",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "M24PartialDmlTest.partialResultsMatchSalesforce"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

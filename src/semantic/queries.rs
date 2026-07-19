@@ -8,10 +8,22 @@ use crate::{
     hir::{
         CallTarget, CheckedCondition, CheckedFieldPath, CheckedInValues, CheckedOrderBy,
         CheckedQuery, CheckedRelationship, CheckedSelectItem, CheckedSoqlQuery, CheckedSoslQuery,
-        CheckedSoslReturning, CheckedValue, DatabaseQueryKind, ExpressionType, QueryResultKind,
+        CheckedSoslReturning, CheckedValue, DatabaseDmlTarget, DatabaseQueryKind, ExpressionType,
+        FieldId, ObjectTypeId, QueryResultKind,
     },
     platform::{DataValue, FieldType},
 };
+
+#[derive(Clone, Copy)]
+pub(super) struct DmlValueShape {
+    pub object_id: Option<usize>,
+    pub is_list: bool,
+}
+
+struct DatabaseDmlOptions {
+    external_id: Option<(ObjectTypeId, FieldId)>,
+    all_or_none_argument: Option<usize>,
+}
 
 impl Checker {
     pub(super) fn sobject_relationship_target(
@@ -682,32 +694,39 @@ impl Checker {
         Ok(checked)
     }
 
-    pub(super) fn check_dml_value(&mut self, value: &Expression) -> Result<(), Diagnostic> {
+    pub(super) fn check_dml_value(
+        &mut self,
+        value: &Expression,
+    ) -> Result<DmlValueShape, Diagnostic> {
         let actual = self.expression_type(value)?;
-        let compatible = match &actual {
-            ExpressionType::Value(ty) => {
-                self.is_sobject_type(ty)
-                    || self.is_dynamic_sobject_type(ty)
-                    || matches!(
-                        ty,
-                        TypeName::List(element)
-                            if self.is_sobject_type(element)
-                                || self.is_dynamic_sobject_type(element)
-                    )
+        let shape = match &actual {
+            ExpressionType::Value(ty)
+                if self.is_sobject_type(ty) || self.is_dynamic_sobject_type(ty) =>
+            {
+                DmlValueShape {
+                    object_id: self.sobject_object_id(ty),
+                    is_list: false,
+                }
             }
-            ExpressionType::Null | ExpressionType::Void => false,
+            ExpressionType::Value(TypeName::List(element))
+                if self.is_sobject_type(element) || self.is_dynamic_sobject_type(element) =>
+            {
+                DmlValueShape {
+                    object_id: self.sobject_object_id(element),
+                    is_list: true,
+                }
+            }
+            ExpressionType::Null | ExpressionType::Void | ExpressionType::Value(_) => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "DML requires an SObject or List<SObject>, found {}",
+                        actual.apex_name()
+                    ),
+                    value.span(),
+                ));
+            }
         };
-        if compatible {
-            Ok(())
-        } else {
-            Err(Diagnostic::new(
-                format!(
-                    "DML requires an SObject or List<SObject>, found {}",
-                    actual.apex_name()
-                ),
-                value.span(),
-            ))
-        }
+        Ok(shape)
     }
 
     pub(super) fn database_method_type(
@@ -739,21 +758,179 @@ impl Checker {
                 ));
             }
         };
-        if !(arguments.len() == 1 || arguments.len() == 2) {
+        let Some(value) = arguments.first() else {
             return Err(Diagnostic::new(
-                format!(
-                    "Database.{} expects one record argument and optional allOrNone Boolean",
-                    method.spelling
-                ),
+                format!("Database.{} expects a record argument", method.spelling),
+                method.span,
+            ));
+        };
+        let shape = self.check_dml_value(value)?;
+        let options = self.database_dml_options(operation, &shape, arguments, method)?;
+        self.calls.insert(
+            span,
+            CallTarget::DatabaseDml(DatabaseDmlTarget {
+                operation,
+                external_id: options.external_id,
+                all_or_none_argument: options.all_or_none_argument,
+            }),
+        );
+        let result = database_dml_result_type(operation);
+        Ok(ExpressionType::Value(if shape.is_list {
+            TypeName::List(Box::new(result))
+        } else {
+            result
+        }))
+    }
+
+    fn database_dml_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        if arguments.len() > 3 {
+            return Err(Diagnostic::new(
+                format!("Database.{} received too many arguments", method.spelling),
                 method.span,
             ));
         }
-        self.check_dml_value(&arguments[0])?;
-        if arguments.len() == 2 {
-            self.require_operand(&arguments[1], &TypeName::Boolean, arguments[1].span())?;
+        match arguments.len() {
+            1 => Ok(DatabaseDmlOptions {
+                external_id: None,
+                all_or_none_argument: None,
+            }),
+            2 => {
+                if self.expression_type(&arguments[1])
+                    == Ok(ExpressionType::Value(TypeName::Boolean))
+                {
+                    Ok(DatabaseDmlOptions {
+                        external_id: None,
+                        all_or_none_argument: Some(1),
+                    })
+                } else if operation == crate::ast::DmlOperation::Upsert {
+                    Ok(DatabaseDmlOptions {
+                        external_id: Some(self.resolve_external_id_token(shape, &arguments[1])?),
+                        all_or_none_argument: None,
+                    })
+                } else {
+                    Err(Diagnostic::new(
+                        format!(
+                            "Database.{} second argument must be allOrNone Boolean",
+                            method.spelling
+                        ),
+                        arguments[1].span(),
+                    ))
+                }
+            }
+            3 if operation == crate::ast::DmlOperation::Upsert => {
+                let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
+                self.require_operand(&arguments[2], &TypeName::Boolean, arguments[2].span())?;
+                Ok(DatabaseDmlOptions {
+                    external_id: Some(external_id),
+                    all_or_none_argument: Some(2),
+                })
+            }
+            3 => Err(Diagnostic::new(
+                format!(
+                    "Database.{} accepts only a record and optional allOrNone Boolean",
+                    method.spelling
+                ),
+                method.span,
+            )),
+            _ => unreachable!("DML argument count was checked"),
         }
-        self.calls.insert(span, CallTarget::DatabaseDml(operation));
-        Ok(ExpressionType::Void)
+    }
+
+    pub(super) fn resolve_external_id_name(
+        &self,
+        shape: &DmlValueShape,
+        field_name: &Identifier,
+    ) -> Result<(ObjectTypeId, FieldId), Diagnostic> {
+        let object_id = shape.object_id.ok_or_else(|| {
+            Diagnostic::new(
+                "external-ID upsert requires one statically known SObject type",
+                field_name.span,
+            )
+        })?;
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("checked SObject type is valid");
+        let field_id = object.field_index(&field_name.spelling).ok_or_else(|| {
+            Diagnostic::new(
+                format!(
+                    "unknown external ID field `{}.{}`",
+                    object.api_name(),
+                    field_name.spelling
+                ),
+                field_name.span,
+            )
+        })?;
+        let field = object
+            .field_at(field_id)
+            .expect("checked SObject field is valid");
+        if !field.is_external_id() {
+            return Err(Diagnostic::new(
+                format!(
+                    "`{}.{}` is not configured as an external ID",
+                    object.api_name(),
+                    field.api_name()
+                ),
+                field_name.span,
+            ));
+        }
+        Ok((
+            ObjectTypeId::from_index(object_id),
+            FieldId::from_index(field_id),
+        ))
+    }
+
+    fn resolve_external_id_token(
+        &self,
+        shape: &DmlValueShape,
+        expression: &Expression,
+    ) -> Result<(ObjectTypeId, FieldId), Diagnostic> {
+        let qualified = super::qualified_expression_name(expression).ok_or_else(|| {
+            Diagnostic::new(
+                "external ID argument must be a direct Object.Fields.Field token",
+                expression.span(),
+            )
+        })?;
+        let segments = qualified.split('.').collect::<Vec<_>>();
+        let [object_name, fields, field_name] = segments.as_slice() else {
+            return Err(Diagnostic::new(
+                "external ID argument must be a direct Object.Fields.Field token",
+                expression.span(),
+            ));
+        };
+        if *fields != "fields" {
+            return Err(Diagnostic::new(
+                "external ID argument must use Object.Fields.Field",
+                expression.span(),
+            ));
+        }
+        let object_id = shape.object_id.ok_or_else(|| {
+            Diagnostic::new(
+                "external-ID upsert requires one statically known SObject type",
+                expression.span(),
+            )
+        })?;
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("checked SObject type is valid");
+        if !object.api_name().eq_ignore_ascii_case(object_name) {
+            return Err(Diagnostic::new(
+                format!(
+                    "external ID token for `{object_name}` cannot be used with {}",
+                    object.api_name()
+                ),
+                expression.span(),
+            ));
+        }
+        let identifier = Identifier::new((*field_name).to_owned(), expression.span());
+        self.resolve_external_id_name(shape, &identifier)
     }
 
     fn database_query_method_type(
@@ -900,6 +1077,15 @@ fn relationship_field_name(relationship: &str) -> Option<String> {
         .strip_suffix("__r")
         .or_else(|| relationship.strip_suffix("__R"))
         .map(|prefix| format!("{prefix}__c"))
+}
+
+fn database_dml_result_type(operation: crate::ast::DmlOperation) -> TypeName {
+    match operation {
+        crate::ast::DmlOperation::Insert | crate::ast::DmlOperation::Update => TypeName::SaveResult,
+        crate::ast::DmlOperation::Upsert => TypeName::UpsertResult,
+        crate::ast::DmlOperation::Delete => TypeName::DeleteResult,
+        crate::ast::DmlOperation::Undelete => TypeName::UndeleteResult,
+    }
 }
 
 fn ensure_having_fields_are_grouped(

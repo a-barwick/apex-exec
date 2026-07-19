@@ -692,6 +692,12 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::QueueableContext
         | TypeName::BatchableContext
         | TypeName::QueryLocator
+        | TypeName::SaveResult
+        | TypeName::UpsertResult
+        | TypeName::DeleteResult
+        | TypeName::UndeleteResult
+        | TypeName::DatabaseError
+        | TypeName::StatusCode
         | TypeName::SchedulableContext
         | TypeName::SObjectType
         | TypeName::DescribeSObjectResult

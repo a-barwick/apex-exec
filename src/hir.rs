@@ -334,7 +334,9 @@ pub enum CallTarget {
     },
     SObjectGet,
     SObjectPut,
-    DatabaseDml(ast::DmlOperation),
+    DatabaseDml(DatabaseDmlTarget),
+    DmlResultMethod(DmlResultMethod),
+    DmlErrorMethod(DmlErrorMethod),
     DatabaseQuery {
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
@@ -345,6 +347,28 @@ pub enum CallTarget {
         method: EnumMethod,
     },
     PlatformConstructor(PlatformConstructor),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DatabaseDmlTarget {
+    pub operation: ast::DmlOperation,
+    pub external_id: Option<(ObjectTypeId, FieldId)>,
+    pub all_or_none_argument: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlResultMethod {
+    IsSuccess,
+    GetId,
+    GetErrors,
+    IsCreated,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlErrorMethod {
+    GetStatusCode,
+    GetMessage,
+    GetFields,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -479,6 +503,7 @@ pub enum MemberTarget {
         relationship: String,
     },
     TriggerContext(TriggerContextVariable),
+    DmlStatus(crate::platform::DmlStatus),
     EnumConstant {
         class_id: ClassId,
         ordinal: usize,

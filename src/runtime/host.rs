@@ -1,6 +1,6 @@
 use crate::platform::{
-    DatabaseError, DatabaseSnapshot, DmlOperation, LocalDatabase, PreparedDmlRecord, QueryOutcome,
-    SObject, SchemaCatalog, SoqlRequest, SoslRequest,
+    DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow, DmlRowOutcome,
+    LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog, SoqlRequest, SoslRequest,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -95,6 +95,8 @@ pub struct DmlEvent {
     pub operation: DmlOperation,
     pub objects: Vec<String>,
     pub records: usize,
+    pub successful_records: usize,
+    pub failed_records: usize,
     pub succeeded: bool,
 }
 
@@ -188,34 +190,20 @@ pub trait PlatformHost {
         &mut self,
         _schema: &SchemaCatalog,
         _operation: DmlOperation,
-        _records: Vec<SObject>,
-    ) -> Result<Vec<SObject>, DatabaseError> {
+        _rows: Vec<DmlRow>,
+    ) -> Result<Vec<DmlRowOutcome>, DatabaseError> {
         Err(DatabaseError::unavailable())
     }
 
     fn prepare_dml(
         &mut self,
         _schema: &SchemaCatalog,
-        operation: DmlOperation,
-        records: &[SObject],
-    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
-        Ok(records
-            .iter()
-            .cloned()
-            .map(|record| {
-                let concrete = match operation {
-                    DmlOperation::Upsert if record.id().is_some() => DmlOperation::Update,
-                    DmlOperation::Upsert => DmlOperation::Insert,
-                    operation => operation,
-                };
-                PreparedDmlRecord {
-                    operation: concrete,
-                    old: (concrete == DmlOperation::Delete).then(|| record.clone()),
-                    new: (concrete != DmlOperation::Delete).then_some(record),
-                }
-            })
-            .collect())
+        _request: &DmlRequest,
+    ) -> Result<Vec<PreparedDmlOutcome>, DatabaseError> {
+        Err(DatabaseError::unavailable())
     }
+
+    fn record_dml(&mut self, _event: DmlEvent) {}
 
     fn begin_unit(&mut self, _schema: &SchemaCatalog) -> Result<(), DatabaseError> {
         Ok(())
@@ -295,18 +283,21 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         &mut self,
         schema: &SchemaCatalog,
         operation: DmlOperation,
-        records: Vec<SObject>,
-    ) -> Result<Vec<SObject>, DatabaseError> {
-        (**self).dml(schema, operation, records)
+        rows: Vec<DmlRow>,
+    ) -> Result<Vec<DmlRowOutcome>, DatabaseError> {
+        (**self).dml(schema, operation, rows)
     }
 
     fn prepare_dml(
         &mut self,
         schema: &SchemaCatalog,
-        operation: DmlOperation,
-        records: &[SObject],
-    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
-        (**self).prepare_dml(schema, operation, records)
+        request: &DmlRequest,
+    ) -> Result<Vec<PreparedDmlOutcome>, DatabaseError> {
+        (**self).prepare_dml(schema, request)
+    }
+
+    fn record_dml(&mut self, event: DmlEvent) {
+        (**self).record_dml(event);
     }
 
     fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
@@ -368,6 +359,7 @@ pub struct RecordingHost {
     database: Option<LocalDatabase>,
     queries: Vec<QueryEvent>,
     dml: Vec<DmlEvent>,
+    dml_statements: usize,
     triggers: Vec<TriggerEvent>,
     async_events: Vec<AsyncEvent>,
     timeline: Vec<TransactionEvent>,
@@ -442,6 +434,7 @@ impl Default for RecordingHost {
             database: None,
             queries: Vec::new(),
             dml: Vec::new(),
+            dml_statements: 0,
             triggers: Vec::new(),
             async_events: Vec::new(),
             timeline: Vec::new(),
@@ -510,9 +503,10 @@ impl PlatformHost for RecordingHost {
         &mut self,
         schema: &SchemaCatalog,
         operation: DmlOperation,
-        mut records: Vec<SObject>,
-    ) -> Result<Vec<SObject>, DatabaseError> {
-        for record in &mut records {
+        mut rows: Vec<DmlRow>,
+    ) -> Result<Vec<DmlRowOutcome>, DatabaseError> {
+        for row in &mut rows {
+            let record = &mut row.record;
             if operation == DmlOperation::Insert
                 && schema
                     .field(record.object_api_name(), "CreatedDate")
@@ -542,17 +536,27 @@ impl PlatformHost for RecordingHost {
                     .map_err(|error| DatabaseError::new(error.to_string()))?;
             }
         }
-        let objects = records
+        let objects = rows
             .iter()
-            .map(|record| record.object_api_name().to_owned())
+            .map(|row| row.record.object_api_name().to_owned())
             .collect::<Vec<_>>();
-        let count = records.len();
-        let result = self.database(schema)?.execute_dml(operation, records);
+        let records = rows.len();
+        let result = self.database(schema)?.execute_dml(operation, rows);
+        let successful_records = result.as_ref().map_or(0, |outcomes| {
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.is_success())
+                .count()
+        });
         let event = DmlEvent {
             operation,
             objects,
-            records: count,
-            succeeded: result.is_ok(),
+            records,
+            successful_records,
+            failed_records: records - successful_records,
+            succeeded: result
+                .as_ref()
+                .is_ok_and(|outcomes| outcomes.iter().all(DmlRowOutcome::is_success)),
         };
         self.dml.push(event.clone());
         self.timeline.push(TransactionEvent::Dml(event));
@@ -562,10 +566,13 @@ impl PlatformHost for RecordingHost {
     fn prepare_dml(
         &mut self,
         schema: &SchemaCatalog,
-        operation: DmlOperation,
-        records: &[SObject],
-    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
-        self.database(schema)?.prepare_dml(operation, records)
+        request: &DmlRequest,
+    ) -> Result<Vec<PreparedDmlOutcome>, DatabaseError> {
+        self.database(schema)?.prepare_dml(request)
+    }
+
+    fn record_dml(&mut self, _event: DmlEvent) {
+        self.dml_statements += 1;
     }
 
     fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
@@ -637,7 +644,7 @@ impl PlatformHost for RecordingHost {
     fn limit_usage(&self) -> LimitUsage {
         let absolute = LimitUsage {
             queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
-            dml_statements: i64::try_from(self.dml.len()).unwrap_or(i64::MAX),
+            dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
             callouts: self.callouts,
         };
         let baseline = self.test_window_baseline.unwrap_or_default();
@@ -651,7 +658,7 @@ impl PlatformHost for RecordingHost {
     fn begin_test_window(&mut self) {
         self.test_window_baseline = Some(LimitUsage {
             queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
-            dml_statements: i64::try_from(self.dml.len()).unwrap_or(i64::MAX),
+            dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
             callouts: self.callouts,
         });
     }

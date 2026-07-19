@@ -15,10 +15,155 @@ pub enum DmlOperation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreparedDmlRecord {
+pub struct DmlExternalId {
+    pub object: String,
+    pub field: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DmlRow {
+    pub input_index: usize,
+    pub record: SObject,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DmlRequest {
     pub operation: DmlOperation,
+    pub all_or_none: bool,
+    pub external_id: Option<DmlExternalId>,
+    pub rows: Vec<DmlRow>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlStatus {
+    CannotInsertUpdateActivateEntity,
+    DuplicateExternalId,
+    DuplicateValue,
+    InvalidCrossReferenceKey,
+    InvalidFieldForInsertUpdate,
+    MissingArgument,
+    RequiredFieldMissing,
+    UnknownException,
+}
+
+impl DmlStatus {
+    pub fn from_apex_name(name: &str) -> Option<Self> {
+        match name.to_ascii_uppercase().as_str() {
+            "CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY" => Some(Self::CannotInsertUpdateActivateEntity),
+            "DUPLICATE_EXTERNAL_ID" => Some(Self::DuplicateExternalId),
+            "DUPLICATE_VALUE" => Some(Self::DuplicateValue),
+            "INVALID_CROSS_REFERENCE_KEY" => Some(Self::InvalidCrossReferenceKey),
+            "INVALID_FIELD_FOR_INSERT_UPDATE" => Some(Self::InvalidFieldForInsertUpdate),
+            "MISSING_ARGUMENT" => Some(Self::MissingArgument),
+            "REQUIRED_FIELD_MISSING" => Some(Self::RequiredFieldMissing),
+            "UNKNOWN_EXCEPTION" => Some(Self::UnknownException),
+            _ => None,
+        }
+    }
+
+    pub fn apex_name(self) -> &'static str {
+        match self {
+            Self::CannotInsertUpdateActivateEntity => "CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY",
+            Self::DuplicateExternalId => "DUPLICATE_EXTERNAL_ID",
+            Self::DuplicateValue => "DUPLICATE_VALUE",
+            Self::InvalidCrossReferenceKey => "INVALID_CROSS_REFERENCE_KEY",
+            Self::InvalidFieldForInsertUpdate => "INVALID_FIELD_FOR_INSERT_UPDATE",
+            Self::MissingArgument => "MISSING_ARGUMENT",
+            Self::RequiredFieldMissing => "REQUIRED_FIELD_MISSING",
+            Self::UnknownException => "UNKNOWN_EXCEPTION",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DmlError {
+    pub status: DmlStatus,
+    pub message: String,
+    pub fields: Vec<String>,
+}
+
+impl DmlError {
+    pub fn new(
+        status: DmlStatus,
+        message: impl Into<String>,
+        fields: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            fields: fields.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedDmlRecord {
+    pub input_index: usize,
+    pub operation: DmlOperation,
+    pub created: bool,
     pub old: Option<SObject>,
     pub new: Option<SObject>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreparedDmlOutcome {
+    Ready(PreparedDmlRecord),
+    Failed {
+        input_index: usize,
+        errors: Vec<DmlError>,
+    },
+}
+
+impl PreparedDmlOutcome {
+    pub fn input_index(&self) -> usize {
+        match self {
+            Self::Ready(record) => record.input_index,
+            Self::Failed { input_index, .. } => *input_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DmlRowOutcome {
+    pub input_index: usize,
+    pub id: Option<RecordId>,
+    pub created: bool,
+    pub record: Option<SObject>,
+    pub errors: Vec<DmlError>,
+}
+
+impl DmlRowOutcome {
+    pub fn success(
+        input_index: usize,
+        record: SObject,
+        created: bool,
+    ) -> Result<Self, DatabaseError> {
+        let id = record
+            .id()
+            .cloned()
+            .ok_or_else(|| DatabaseError::new("successful DML row is missing its record Id"))?;
+        Ok(Self {
+            input_index,
+            id: Some(id),
+            created,
+            record: Some(record),
+            errors: Vec::new(),
+        })
+    }
+
+    pub fn failure(input_index: usize, errors: Vec<DmlError>) -> Self {
+        Self {
+            input_index,
+            id: None,
+            created: false,
+            record: None,
+            errors,
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.errors.is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -262,129 +407,28 @@ impl LocalDatabase {
 
     pub fn prepare_dml(
         &mut self,
-        operation: DmlOperation,
-        records: &[SObject],
-    ) -> Result<Vec<PreparedDmlRecord>, DatabaseError> {
+        request: &DmlRequest,
+    ) -> Result<Vec<PreparedDmlOutcome>, DatabaseError> {
         let schema = self.storage.schema().clone();
         let mut transaction = self
             .storage
             .begin_transaction()
             .map_err(DatabaseError::storage)?;
-        let result = records
-            .iter()
-            .map(|value| {
-                let object = schema
-                    .object(value.object_api_name())
-                    .map_err(DatabaseError::schema)?;
-                let existing = value
-                    .id()
-                    .map(|id| {
-                        transaction
-                            .read(object.api_name(), id)
-                            .map_err(DatabaseError::storage)
-                    })
-                    .transpose()?
-                    .flatten();
-                let recycled = value.id().and_then(|id| {
-                    self.recycle_bin
-                        .get(&(object.api_name().to_ascii_lowercase(), id.clone()))
-                        .cloned()
-                });
-                match operation {
-                    DmlOperation::Insert => {
-                        if value.id().is_some() {
-                            return Err(DatabaseError::new(format!(
-                                "insert requires a new {} record without an Id",
-                                object.api_name()
-                            )));
-                        }
-                        Ok(PreparedDmlRecord {
-                            operation: DmlOperation::Insert,
-                            old: None,
-                            new: Some(value.clone()),
-                        })
-                    }
-                    DmlOperation::Update => {
-                        let stored = existing.ok_or_else(|| {
-                            DatabaseError::new(format!(
-                                "update could not find {} record `{}`",
-                                object.api_name(),
-                                value
-                                    .id()
-                                    .map(ToString::to_string)
-                                    .unwrap_or_else(|| "null".to_owned())
-                            ))
-                        })?;
-                        let old = SObject::from_record(&schema, stored.clone())
-                            .map_err(DatabaseError::sobject)?;
-                        let new = merge_sobject(&schema, stored, value)?;
-                        Ok(PreparedDmlRecord {
-                            operation: DmlOperation::Update,
-                            old: Some(old),
-                            new: Some(new),
-                        })
-                    }
-                    DmlOperation::Upsert if existing.is_some() => {
-                        let stored = existing.expect("upsert existing was checked");
-                        let old = SObject::from_record(&schema, stored.clone())
-                            .map_err(DatabaseError::sobject)?;
-                        let new = merge_sobject(&schema, stored, value)?;
-                        Ok(PreparedDmlRecord {
-                            operation: DmlOperation::Update,
-                            old: Some(old),
-                            new: Some(new),
-                        })
-                    }
-                    DmlOperation::Upsert => Ok(PreparedDmlRecord {
-                        operation: DmlOperation::Insert,
-                        old: None,
-                        new: Some(value.clone()),
-                    }),
-                    DmlOperation::Delete => {
-                        let stored = existing.ok_or_else(|| {
-                            DatabaseError::new(format!(
-                                "delete could not find {} record `{}`",
-                                object.api_name(),
-                                value
-                                    .id()
-                                    .map(ToString::to_string)
-                                    .unwrap_or_else(|| "null".to_owned())
-                            ))
-                        })?;
-                        Ok(PreparedDmlRecord {
-                            operation: DmlOperation::Delete,
-                            old: Some(
-                                SObject::from_record(&schema, stored)
-                                    .map_err(DatabaseError::sobject)?,
-                            ),
-                            new: None,
-                        })
-                    }
-                    DmlOperation::Undelete => {
-                        let stored = recycled.ok_or_else(|| {
-                            DatabaseError::new(format!(
-                                "undelete could not find recycled {} record `{}`",
-                                object.api_name(),
-                                value
-                                    .id()
-                                    .map(ToString::to_string)
-                                    .unwrap_or_else(|| "null".to_owned())
-                            ))
-                        })?;
-                        Ok(PreparedDmlRecord {
-                            operation: DmlOperation::Undelete,
-                            old: None,
-                            new: Some(
-                                SObject::from_record(&schema, stored)
-                                    .map_err(DatabaseError::sobject)?,
-                            ),
-                        })
-                    }
-                }
-            })
-            .collect::<Result<Vec<_>, _>>();
+        let mut outcomes = Vec::with_capacity(request.rows.len());
+        for row in &request.rows {
+            let outcome =
+                prepare_dml_row(&schema, &mut transaction, &self.recycle_bin, request, row)?;
+            outcomes.push(match outcome {
+                Ok(record) => PreparedDmlOutcome::Ready(record),
+                Err(error) => PreparedDmlOutcome::Failed {
+                    input_index: row.input_index,
+                    errors: vec![error],
+                },
+            });
+        }
         transaction.commit().map_err(DatabaseError::storage)?;
-        result
+        outcomes.sort_by_key(PreparedDmlOutcome::input_index);
+        Ok(outcomes)
     }
 
     pub fn execute_soql(&mut self, request: &SoqlRequest) -> Result<QueryOutcome, DatabaseError> {
@@ -497,134 +541,559 @@ impl LocalDatabase {
     pub fn execute_dml(
         &mut self,
         operation: DmlOperation,
-        records: Vec<SObject>,
-    ) -> Result<Vec<SObject>, DatabaseError> {
+        rows: Vec<DmlRow>,
+    ) -> Result<Vec<DmlRowOutcome>, DatabaseError> {
         let schema = self.storage.schema().clone();
         let mut transaction = self
             .storage
             .begin_transaction()
             .map_err(DatabaseError::storage)?;
-        let mut persisted = Vec::with_capacity(records.len());
+        let mut outcomes = Vec::with_capacity(rows.len());
         let mut recycle_bin = self.recycle_bin.clone();
         let mut sequences = self.sequences.clone();
-        for mut value in records {
-            let object = schema
-                .object(value.object_api_name())
-                .map_err(DatabaseError::schema)?;
-            let existing = value
-                .id()
-                .map(|id| {
-                    transaction
-                        .read(object.api_name(), id)
-                        .map_err(DatabaseError::storage)
-                })
-                .transpose()?
-                .flatten();
-            match operation {
-                DmlOperation::Insert if value.id().is_some() => {
-                    return Err(DatabaseError::new(format!(
-                        "insert requires a new {} record without an Id",
-                        object.api_name()
-                    )));
-                }
-                DmlOperation::Insert | DmlOperation::Upsert if value.id().is_none() => {
-                    let canonical = object.api_name().to_ascii_lowercase();
-                    let sequence = sequences.entry(canonical).or_default();
-                    loop {
-                        *sequence += 1;
-                        let id = RecordId::generate(object.key_prefix(), *sequence)
-                            .map_err(DatabaseError::id)?;
-                        if transaction
-                            .read(object.api_name(), &id)
-                            .map_err(DatabaseError::storage)?
-                            .is_none()
-                        {
-                            value.set_id(id);
-                            break;
-                        }
-                    }
-                    transaction
-                        .write(
-                            value
-                                .clone()
-                                .into_record()
-                                .map_err(DatabaseError::sobject)?,
-                        )
-                        .map_err(DatabaseError::storage)?;
-                }
-                DmlOperation::Insert => unreachable!("insert with Id returned above"),
-                DmlOperation::Update if existing.is_none() => {
-                    return Err(DatabaseError::new(format!(
-                        "update could not find {} record `{}`",
-                        object.api_name(),
-                        value.id().expect("update has an Id")
-                    )));
-                }
-                DmlOperation::Update | DmlOperation::Upsert => {
-                    let incoming = value
-                        .clone()
-                        .into_record()
-                        .map_err(DatabaseError::sobject)?;
-                    let record = if let Some(mut stored) = existing {
-                        for (name, field_value) in incoming.fields() {
-                            stored.set_field(name, field_value.clone());
-                        }
-                        stored
-                    } else {
-                        incoming
-                    };
-                    transaction.write(record).map_err(DatabaseError::storage)?;
-                }
-                DmlOperation::Undelete => {
-                    let Some(id) = value.id().cloned() else {
-                        return Err(DatabaseError::new("undelete requires a record Id"));
-                    };
-                    let key = (object.api_name().to_ascii_lowercase(), id.clone());
-                    let record = recycle_bin.remove(&key).ok_or_else(|| {
-                        DatabaseError::new(format!(
-                            "undelete could not find recycled {} record `{id}`",
-                            object.api_name()
-                        ))
-                    })?;
-                    value = merge_sobject(&schema, record, &value)?;
-                    transaction
-                        .write(
-                            value
-                                .clone()
-                                .into_record()
-                                .map_err(DatabaseError::sobject)?,
-                        )
-                        .map_err(DatabaseError::storage)?;
-                }
-                DmlOperation::Delete => {
-                    let Some(id) = value.id() else {
-                        return Err(DatabaseError::new("delete requires a record Id"));
-                    };
-                    let stored = transaction
-                        .read(object.api_name(), id)
-                        .map_err(DatabaseError::storage)?;
-                    if !transaction
-                        .delete(object.api_name(), id)
-                        .map_err(DatabaseError::storage)?
-                    {
-                        return Err(DatabaseError::new(format!(
-                            "delete could not find {} record `{id}`",
-                            object.api_name()
-                        )));
-                    }
-                    recycle_bin.insert(
-                        (object.api_name().to_ascii_lowercase(), id.clone()),
-                        stored.expect("successful delete had a stored record"),
-                    );
+        for row in rows {
+            let input_index = row.input_index;
+            match execute_dml_row(
+                &schema,
+                &mut transaction,
+                &mut recycle_bin,
+                &mut sequences,
+                operation,
+                row.record,
+            )? {
+                Ok(record) => outcomes.push(DmlRowOutcome::success(
+                    input_index,
+                    record,
+                    operation == DmlOperation::Insert,
+                )?),
+                Err(error) => {
+                    outcomes.push(DmlRowOutcome::failure(input_index, vec![error]));
                 }
             }
-            persisted.push(value);
         }
         transaction.commit().map_err(DatabaseError::storage)?;
         self.recycle_bin = recycle_bin;
         self.sequences = sequences;
-        Ok(persisted)
+        outcomes.sort_by_key(|outcome| outcome.input_index);
+        Ok(outcomes)
     }
+}
+
+fn execute_dml_row<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    recycle_bin: &mut BTreeMap<(String, RecordId), Record>,
+    sequences: &mut BTreeMap<String, u64>,
+    operation: DmlOperation,
+    mut value: SObject,
+) -> Result<Result<SObject, DmlError>, DatabaseError> {
+    let object = schema
+        .object(value.object_api_name())
+        .map_err(DatabaseError::schema)?;
+    match operation {
+        DmlOperation::Insert => {
+            if let Err(error) =
+                execute_insert_row(transaction, object, sequences, &mut value, true)?
+            {
+                return Ok(Err(error));
+            }
+        }
+        DmlOperation::Upsert if value.id().is_none() => {
+            if let Err(error) =
+                execute_insert_row(transaction, object, sequences, &mut value, false)?
+            {
+                return Ok(Err(error));
+            }
+        }
+        DmlOperation::Update | DmlOperation::Upsert => {
+            value = match execute_update_row(schema, transaction, object, value, operation)? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            }
+        }
+        DmlOperation::Undelete => {
+            value = match execute_undelete_row(schema, transaction, recycle_bin, object, value)? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            }
+        }
+        DmlOperation::Delete => {
+            if let Err(error) = execute_delete_row(transaction, recycle_bin, object, &value)? {
+                return Ok(Err(error));
+            }
+        }
+    }
+    Ok(Ok(value))
+}
+
+fn execute_insert_row<T: StorageTransaction>(
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    sequences: &mut BTreeMap<String, u64>,
+    value: &mut SObject,
+    reject_supplied_id: bool,
+) -> Result<Result<(), DmlError>, DatabaseError> {
+    if reject_supplied_id && value.id().is_some() {
+        return Ok(Err(DmlError::new(
+            DmlStatus::InvalidFieldForInsertUpdate,
+            format!(
+                "cannot specify Id in an insert call for {}",
+                object.api_name()
+            ),
+            ["Id".to_owned()],
+        )));
+    }
+    assign_generated_id(transaction, object, sequences, value)?;
+    validate_and_write(transaction, object, value)
+}
+
+fn execute_update_row<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    value: SObject,
+    operation: DmlOperation,
+) -> Result<Result<SObject, DmlError>, DatabaseError> {
+    let existing = value
+        .id()
+        .map(|id| transaction.read(object.api_name(), id))
+        .transpose()
+        .map_err(DatabaseError::storage)?
+        .flatten();
+    let Some(existing) = existing else {
+        return Ok(Err(missing_record_error(
+            if operation == DmlOperation::Update {
+                "update"
+            } else {
+                "upsert"
+            },
+            object.api_name(),
+            &value,
+        )));
+    };
+    let incoming = value.into_record().map_err(DatabaseError::sobject)?;
+    let mut record = existing;
+    for (name, field_value) in incoming.fields() {
+        record.set_field(name, field_value.clone());
+    }
+    let merged = SObject::from_record(schema, record).map_err(DatabaseError::sobject)?;
+    if let Err(error) = validate_and_write(transaction, object, &merged)? {
+        return Ok(Err(error));
+    }
+    Ok(Ok(merged))
+}
+
+fn execute_undelete_row<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    recycle_bin: &mut BTreeMap<(String, RecordId), Record>,
+    object: &super::ObjectSchema,
+    value: SObject,
+) -> Result<Result<SObject, DmlError>, DatabaseError> {
+    let Some(key) = value
+        .id()
+        .cloned()
+        .map(|id| (object.api_name().to_ascii_lowercase(), id))
+    else {
+        return Ok(Err(missing_record_error(
+            "undelete",
+            object.api_name(),
+            &value,
+        )));
+    };
+    let Some(record) = recycle_bin.remove(&key) else {
+        return Ok(Err(missing_record_error(
+            "undelete",
+            object.api_name(),
+            &value,
+        )));
+    };
+    let merged = merge_sobject(schema, record.clone(), &value)?;
+    if let Err(error) = validate_and_write(transaction, object, &merged)? {
+        recycle_bin.insert(key, record);
+        return Ok(Err(error));
+    }
+    Ok(Ok(merged))
+}
+
+fn execute_delete_row<T: StorageTransaction>(
+    transaction: &mut T,
+    recycle_bin: &mut BTreeMap<(String, RecordId), Record>,
+    object: &super::ObjectSchema,
+    value: &SObject,
+) -> Result<Result<(), DmlError>, DatabaseError> {
+    let Some(id) = value.id() else {
+        return Ok(Err(missing_record_error(
+            "delete",
+            object.api_name(),
+            value,
+        )));
+    };
+    let stored = transaction
+        .read(object.api_name(), id)
+        .map_err(DatabaseError::storage)?;
+    if !transaction
+        .delete(object.api_name(), id)
+        .map_err(DatabaseError::storage)?
+    {
+        return Ok(Err(missing_record_error(
+            "delete",
+            object.api_name(),
+            value,
+        )));
+    }
+    recycle_bin.insert(
+        (object.api_name().to_ascii_lowercase(), id.clone()),
+        stored.expect("successful delete had a stored record"),
+    );
+    Ok(Ok(()))
+}
+
+fn validate_and_write<T: StorageTransaction>(
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    value: &SObject,
+) -> Result<Result<(), DmlError>, DatabaseError> {
+    if let Err(error) = validate_required_fields(object, value) {
+        return Ok(Err(error));
+    }
+    if let Err(error) = validate_unique_fields(transaction, object, value)? {
+        return Ok(Err(error));
+    }
+    transaction
+        .write(
+            value
+                .clone()
+                .into_record()
+                .map_err(DatabaseError::sobject)?,
+        )
+        .map_err(DatabaseError::storage)?;
+    Ok(Ok(()))
+}
+
+fn assign_generated_id<T: StorageTransaction>(
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    sequences: &mut BTreeMap<String, u64>,
+    value: &mut SObject,
+) -> Result<(), DatabaseError> {
+    let sequence = sequences
+        .entry(object.api_name().to_ascii_lowercase())
+        .or_default();
+    loop {
+        *sequence += 1;
+        let id = RecordId::generate(object.key_prefix(), *sequence).map_err(DatabaseError::id)?;
+        if transaction
+            .read(object.api_name(), &id)
+            .map_err(DatabaseError::storage)?
+            .is_none()
+        {
+            value.set_id(id);
+            return Ok(());
+        }
+    }
+}
+
+fn validate_required_fields(object: &super::ObjectSchema, value: &SObject) -> Result<(), DmlError> {
+    let missing = object
+        .fields()
+        .filter(|field| {
+            !field.api_name().eq_ignore_ascii_case("Id")
+                && !field.is_nullable()
+                && value
+                    .fields()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(field.api_name()))
+                    .is_none_or(|(_, value)| matches!(value, DataValue::Null))
+        })
+        .map(|field| field.api_name().to_owned())
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(DmlError::new(
+            DmlStatus::RequiredFieldMissing,
+            format!("required fields are missing: {}", missing.join(", ")),
+            missing,
+        ))
+    }
+}
+
+fn validate_unique_fields<T: StorageTransaction>(
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    value: &SObject,
+) -> Result<Result<(), DmlError>, DatabaseError> {
+    let records = transaction
+        .scan(object.api_name())
+        .map_err(DatabaseError::storage)?;
+    for field in object.fields().filter(|field| field.is_unique()) {
+        let Some(candidate) = value
+            .fields()
+            .find(|(name, _)| name.eq_ignore_ascii_case(field.api_name()))
+            .map(|(_, value)| value)
+            .filter(|value| !matches!(value, DataValue::Null))
+        else {
+            continue;
+        };
+        let duplicate = records.iter().any(|record| {
+            value.id().is_none_or(|id| record.id() != id)
+                && record
+                    .field(field.api_name())
+                    .is_some_and(|stored| values_equal(stored, candidate))
+        });
+        if duplicate {
+            return Ok(Err(DmlError::new(
+                DmlStatus::DuplicateValue,
+                format!(
+                    "duplicate value on unique field {}.{}",
+                    object.api_name(),
+                    field.api_name()
+                ),
+                [field.api_name().to_owned()],
+            )));
+        }
+    }
+    Ok(Ok(()))
+}
+
+fn prepare_dml_row<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    recycle_bin: &BTreeMap<(String, RecordId), Record>,
+    request: &DmlRequest,
+    row: &DmlRow,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    let value = &row.record;
+    let object = schema
+        .object(value.object_api_name())
+        .map_err(DatabaseError::schema)?;
+    let existing = match resolve_dml_existing(schema, transaction, object, request, value)? {
+        Ok(existing) => existing,
+        Err(error) => return Ok(Err(error)),
+    };
+    match request.operation {
+        DmlOperation::Insert => prepare_insert(row, object),
+        DmlOperation::Update => prepare_update(schema, row, object, existing),
+        DmlOperation::Upsert if existing.is_some() => {
+            prepare_upsert_update(schema, row, existing.expect("checked existing upsert"))
+        }
+        DmlOperation::Upsert => Ok(Ok(prepared_insert(row))),
+        DmlOperation::Delete => prepare_delete(schema, row, object, existing),
+        DmlOperation::Undelete => prepare_undelete(schema, row, object, recycle_bin),
+    }
+}
+
+fn resolve_dml_existing<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    object: &super::ObjectSchema,
+    request: &DmlRequest,
+    value: &SObject,
+) -> Result<Result<Option<Record>, DmlError>, DatabaseError> {
+    if request.operation == DmlOperation::Upsert
+        && let Some(external_id) = &request.external_id
+    {
+        return external_id_match(schema, transaction, object.api_name(), external_id, value);
+    }
+    let existing = value
+        .id()
+        .map(|id| transaction.read(object.api_name(), id))
+        .transpose()
+        .map_err(DatabaseError::storage)?
+        .flatten();
+    Ok(Ok(existing))
+}
+
+fn prepare_insert(
+    row: &DmlRow,
+    object: &super::ObjectSchema,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    if row.record.id().is_some() {
+        return Ok(Err(DmlError::new(
+            DmlStatus::InvalidFieldForInsertUpdate,
+            format!(
+                "cannot specify Id in an insert call for {}",
+                object.api_name()
+            ),
+            ["Id".to_owned()],
+        )));
+    }
+    Ok(Ok(prepared_insert(row)))
+}
+
+fn prepared_insert(row: &DmlRow) -> PreparedDmlRecord {
+    PreparedDmlRecord {
+        input_index: row.input_index,
+        operation: DmlOperation::Insert,
+        created: true,
+        old: None,
+        new: Some(row.record.clone()),
+    }
+}
+
+fn prepare_update(
+    schema: &SchemaCatalog,
+    row: &DmlRow,
+    object: &super::ObjectSchema,
+    existing: Option<Record>,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    let Some(stored) = existing else {
+        return Ok(Err(missing_record_error(
+            "update",
+            object.api_name(),
+            &row.record,
+        )));
+    };
+    prepare_upsert_update(schema, row, stored)
+}
+
+fn prepare_upsert_update(
+    schema: &SchemaCatalog,
+    row: &DmlRow,
+    stored: Record,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    let old = SObject::from_record(schema, stored.clone()).map_err(DatabaseError::sobject)?;
+    let new = merge_sobject(schema, stored, &row.record)?;
+    Ok(Ok(PreparedDmlRecord {
+        input_index: row.input_index,
+        operation: DmlOperation::Update,
+        created: false,
+        old: Some(old),
+        new: Some(new),
+    }))
+}
+
+fn prepare_delete(
+    schema: &SchemaCatalog,
+    row: &DmlRow,
+    object: &super::ObjectSchema,
+    existing: Option<Record>,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    let Some(stored) = existing else {
+        return Ok(Err(missing_record_error(
+            "delete",
+            object.api_name(),
+            &row.record,
+        )));
+    };
+    Ok(Ok(PreparedDmlRecord {
+        input_index: row.input_index,
+        operation: DmlOperation::Delete,
+        created: false,
+        old: Some(SObject::from_record(schema, stored).map_err(DatabaseError::sobject)?),
+        new: None,
+    }))
+}
+
+fn prepare_undelete(
+    schema: &SchemaCatalog,
+    row: &DmlRow,
+    object: &super::ObjectSchema,
+    recycle_bin: &BTreeMap<(String, RecordId), Record>,
+) -> Result<Result<PreparedDmlRecord, DmlError>, DatabaseError> {
+    let recycled = row
+        .record
+        .id()
+        .and_then(|id| recycle_bin.get(&(object.api_name().to_ascii_lowercase(), id.clone())));
+    let Some(stored) = recycled else {
+        return Ok(Err(missing_record_error(
+            "undelete",
+            object.api_name(),
+            &row.record,
+        )));
+    };
+    Ok(Ok(PreparedDmlRecord {
+        input_index: row.input_index,
+        operation: DmlOperation::Undelete,
+        created: false,
+        old: None,
+        new: Some(SObject::from_record(schema, stored.clone()).map_err(DatabaseError::sobject)?),
+    }))
+}
+
+fn external_id_match<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    object_api_name: &str,
+    external_id: &DmlExternalId,
+    value: &SObject,
+) -> Result<Result<Option<Record>, DmlError>, DatabaseError> {
+    if !external_id.object.eq_ignore_ascii_case(object_api_name) {
+        return Ok(Err(DmlError::new(
+            DmlStatus::InvalidFieldForInsertUpdate,
+            format!(
+                "external ID field {}.{} does not belong to {}",
+                external_id.object, external_id.field, object_api_name
+            ),
+            [external_id.field.clone()],
+        )));
+    }
+    let field = schema
+        .field(object_api_name, &external_id.field)
+        .map_err(DatabaseError::schema)?;
+    if !field.is_external_id() {
+        return Ok(Err(DmlError::new(
+            DmlStatus::InvalidFieldForInsertUpdate,
+            format!(
+                "{}.{} is not configured as an external ID",
+                object_api_name,
+                field.api_name()
+            ),
+            [field.api_name().to_owned()],
+        )));
+    }
+    let external_value = value
+        .get(schema, field.api_name())
+        .map_err(DatabaseError::sobject)?;
+    let Some(external_value) = external_value.filter(|value| !matches!(value, DataValue::Null))
+    else {
+        return Ok(Err(DmlError::new(
+            DmlStatus::MissingArgument,
+            format!(
+                "external ID field {}.{} must have a value",
+                object_api_name,
+                field.api_name()
+            ),
+            [field.api_name().to_owned()],
+        )));
+    };
+    let matches = transaction
+        .scan(object_api_name)
+        .map_err(DatabaseError::storage)?
+        .into_iter()
+        .filter(|record| {
+            record
+                .field(field.api_name())
+                .is_some_and(|stored| values_equal(stored, external_value))
+        })
+        .collect::<Vec<_>>();
+    match matches.len() {
+        0 => Ok(Ok(None)),
+        1 => Ok(Ok(matches.into_iter().next())),
+        _ => Ok(Err(DmlError::new(
+            DmlStatus::DuplicateExternalId,
+            format!(
+                "external ID field {}.{} matches multiple records",
+                object_api_name,
+                field.api_name()
+            ),
+            [field.api_name().to_owned()],
+        ))),
+    }
+}
+
+fn missing_record_error(operation: &str, object: &str, value: &SObject) -> DmlError {
+    DmlError::new(
+        DmlStatus::InvalidCrossReferenceKey,
+        format!(
+            "{operation} could not find {object} record `{}`",
+            value
+                .id()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "null".to_owned())
+        ),
+        ["Id".to_owned()],
+    )
 }
 
 fn merge_sobject(

@@ -384,6 +384,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 traversal.write(output, "]")
             }
             PlatformValue::QueryLocator(_) => traversal.write(output, "Database.QueryLocator"),
+            value @ (PlatformValue::DmlResult { .. }
+            | PlatformValue::DmlError(_)
+            | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
         }
         .or_else(|error| handle_output_error(error, traversal, output, cycle_behavior))
     }
@@ -675,6 +678,33 @@ fn finish_container(
     }
 }
 
+fn render_dml_platform(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    match value {
+        PlatformValue::DmlResult { ty, outcome } => {
+            traversal.write(output, &ty.apex_name())?;
+            traversal.write(
+                output,
+                if outcome.is_success() {
+                    "[success]"
+                } else {
+                    "[failure]"
+                },
+            )
+        }
+        PlatformValue::DmlError(error) => {
+            traversal.write(output, error.status.apex_name())?;
+            traversal.write(output, ": ")?;
+            traversal.write(output, &error.message)
+        }
+        PlatformValue::DmlStatus(status) => traversal.write(output, status.apex_name()),
+        _ => unreachable!("caller selects DML platform values"),
+    }
+}
+
 enum EqualityTask<'value> {
     Compare(&'value Value, &'value Value),
     FinishPair {
@@ -783,7 +813,18 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
             (Value::Datetime(left), Value::Datetime(right)) => left == right,
             (Value::Time(left), Value::Time(right)) => left == right,
             (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
-            (Value::Platform(left), Value::Platform(right)) => left == right,
+            (Value::Platform(left), Value::Platform(right)) => {
+                match (
+                    self.interpreter.store.platform(*left),
+                    self.interpreter.store.platform(*right),
+                ) {
+                    (
+                        PlatformValue::DmlStatus(left_status),
+                        PlatformValue::DmlStatus(right_status),
+                    ) => left_status == right_status,
+                    _ => left == right,
+                }
+            }
             (Value::Collection(left), Value::Collection(right)) => {
                 self.start_collection(*left, *right);
                 return;

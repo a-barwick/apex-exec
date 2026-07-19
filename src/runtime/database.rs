@@ -10,18 +10,34 @@ use crate::{
     diagnostic::Diagnostic,
     hir::{
         CheckedCondition, CheckedFieldPath, CheckedInValues, CheckedOrderBy, CheckedQuery,
-        CheckedSelectItem, CheckedSoqlQuery, CheckedSoslQuery, CheckedValue, DatabaseQueryKind,
-        QueryResultKind,
+        CheckedSelectItem, CheckedSoqlQuery, CheckedSoslQuery, CheckedValue, DatabaseDmlTarget,
+        DatabaseQueryKind, DmlErrorMethod, DmlResultMethod, QueryResultKind,
     },
     platform::{
-        AggregateFunction, DataValue, DmlOperation, NullOrder, QueryComparison, QueryCondition,
-        QueryDateLiteral, QueryDateLiteralKind, QueryField, QueryInValues, QueryLogical,
-        QueryOrder, QueryOutcome, QueryRecord, QueryRelationship, QuerySelect, QueryValue, SObject,
-        SoqlRequest, SortOrder, SoslRequest, SoslReturningRequest,
+        AggregateFunction, DataValue, DmlError, DmlExternalId, DmlOperation, DmlRequest, DmlRow,
+        DmlRowOutcome, DmlStatus, NullOrder, PreparedDmlOutcome, PreparedDmlRecord,
+        QueryComparison, QueryCondition, QueryDateLiteral, QueryDateLiteralKind, QueryField,
+        QueryInValues, QueryLogical, QueryOrder, QueryOutcome, QueryRecord, QueryRelationship,
+        QuerySelect, QueryValue, SObject, SoqlRequest, SortOrder, SoslRequest,
+        SoslReturningRequest,
     },
     span::Span,
 };
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
+use std::collections::BTreeMap;
+
+struct CollectedDmlRows {
+    input_count: usize,
+    handles: BTreeMap<usize, SObjectId>,
+    rows: Vec<DmlRow>,
+    outcomes: Vec<DmlRowOutcome>,
+}
+
+struct PreparedTriggerImages {
+    object: String,
+    old_by_index: BTreeMap<usize, SObjectId>,
+    old_handles: Vec<SObjectId>,
+}
 
 impl<'program, H: PlatformHost> Interpreter<'program, H> {
     pub(super) fn evaluate_database_query_call(
@@ -232,41 +248,25 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
     pub(super) fn execute_dml(
         &mut self,
-        operation: AstDmlOperation,
+        target: DatabaseDmlTarget,
         expression: &Expression,
         span: Span,
     ) -> Result<(), Diagnostic> {
         let value = self.evaluate(expression)?;
-        self.execute_dml_value(operation, value, span)
+        self.execute_dml_value(target, value, true, span)
+            .map(|_| ())
     }
 
-    pub(super) fn execute_dml_value(
-        &mut self,
-        operation: AstDmlOperation,
+    fn collect_dml_rows(
+        &self,
         value: Value,
+        schema: &crate::platform::SchemaCatalog,
         span: Span,
-    ) -> Result<(), Diagnostic> {
-        if self.trigger_depth >= 16 {
-            return Err(runtime_exception(
-                "DmlException",
-                "maximum recursive trigger depth of 16 exceeded",
-                span,
-            ));
-        }
-        let handles = match value {
-            Value::SObject(id) => vec![id],
+    ) -> Result<CollectedDmlRows, Diagnostic> {
+        let values = match value {
+            Value::SObject(id) => vec![Value::SObject(id)],
             Value::Collection(id) => match self.store.collection(id) {
-                Collection::List { elements, .. } => elements
-                    .iter()
-                    .map(|value| match value {
-                        Value::SObject(id) => Ok(*id),
-                        _ => Err(runtime_exception(
-                            "DmlException",
-                            "DML collection contains a null or non-SObject value",
-                            span,
-                        )),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
+                Collection::List { elements, .. } => elements.clone(),
                 _ => {
                     return Err(runtime_exception(
                         "DmlException",
@@ -275,148 +275,411 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     ));
                 }
             },
-            _ => {
-                return Err(runtime_exception(
-                    "DmlException",
-                    "DML requires a non-null SObject or List<SObject>",
-                    span,
+            value => vec![value],
+        };
+        let mut handles = BTreeMap::new();
+        let mut rows = Vec::new();
+        let mut outcomes = Vec::new();
+        for (input_index, value) in values.iter().enumerate() {
+            if let Value::SObject(handle) = value {
+                handles.insert(input_index, *handle);
+                rows.push(DmlRow {
+                    input_index,
+                    record: self.platform_sobject(*handle, schema, span)?,
+                });
+            } else {
+                outcomes.push(DmlRowOutcome::failure(
+                    input_index,
+                    vec![DmlError::new(
+                        DmlStatus::MissingArgument,
+                        "DML row is null or is not an SObject",
+                        [],
+                    )],
                 ));
             }
-        };
+        }
+        Ok(CollectedDmlRows {
+            input_count: values.len(),
+            handles,
+            rows,
+            outcomes,
+        })
+    }
+
+    fn dml_external_id(
+        &self,
+        target: DatabaseDmlTarget,
+        schema: &crate::platform::SchemaCatalog,
+    ) -> Option<DmlExternalId> {
+        target.external_id.map(|(object_id, field_id)| {
+            let object = schema
+                .object_at(object_id.index())
+                .expect("checked external-ID object is valid");
+            let field = object
+                .field_at(field_id.index())
+                .expect("checked external-ID field is valid");
+            DmlExternalId {
+                object: object.api_name().to_owned(),
+                field: field.api_name().to_owned(),
+            }
+        })
+    }
+
+    pub(super) fn execute_dml_value(
+        &mut self,
+        target: DatabaseDmlTarget,
+        value: Value,
+        all_or_none: bool,
+        span: Span,
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        if self.trigger_depth >= 16 {
+            return Err(runtime_exception(
+                "DmlException",
+                "maximum recursive trigger depth of 16 exceeded",
+                span,
+            ));
+        }
         let schema = self.program().schema().clone();
-        let records = handles
-            .iter()
-            .map(|id| self.platform_sobject(*id, &schema, span))
-            .collect::<Result<Vec<_>, _>>()?;
-        let operation = map_dml_operation(operation);
-        let original_instances = handles
-            .iter()
+        let mut collected = self.collect_dml_rows(value, &schema, span)?;
+        if all_or_none && !collected.outcomes.is_empty() {
+            return Err(dml_outcome_exception(&collected.outcomes[0], span));
+        }
+        let operation = map_dml_operation(target.operation);
+        let original_instances = collected
+            .handles
+            .values()
             .map(|id| (*id, self.store.sobject(*id).clone()))
+            .collect::<BTreeMap<_, _>>();
+        let request = DmlRequest {
+            operation,
+            all_or_none,
+            external_id: self.dml_external_id(target, &schema),
+            rows: std::mem::take(&mut collected.rows),
+        };
+        let objects = request
+            .rows
+            .iter()
+            .map(|row| row.record.object_api_name().to_owned())
             .collect::<Vec<_>>();
+        let record_count = collected.input_count;
         self.begin_transaction(span)?;
-        let result = self.execute_dml_transaction(operation, &handles, records, &schema, span);
+        let result = self.execute_dml_transaction(
+            &request,
+            &collected.handles,
+            collected.outcomes,
+            &schema,
+            span,
+        );
         if result.is_err() {
             for (id, instance) in original_instances {
                 *self.store.sobject_mut(id) = instance;
             }
         }
-        self.finish_transaction(result, span)
+        let result = self.finish_transaction(result, span);
+        let (successful_records, failed_records, succeeded) = match &result {
+            Ok(outcomes) => {
+                let successful = outcomes
+                    .iter()
+                    .filter(|outcome| outcome.is_success())
+                    .count();
+                (
+                    successful,
+                    outcomes.len() - successful,
+                    successful == outcomes.len(),
+                )
+            }
+            Err(_) => (0, record_count, false),
+        };
+        self.host.record_dml(super::DmlEvent {
+            operation,
+            objects,
+            records: record_count,
+            successful_records,
+            failed_records,
+            succeeded,
+        });
+        result
+    }
+
+    pub(super) fn dml_outcomes_value(
+        &mut self,
+        outcomes: Vec<DmlRowOutcome>,
+        result_type: &TypeName,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match result_type {
+            TypeName::List(element) => {
+                let result_type = element.as_ref();
+                let elements = outcomes
+                    .into_iter()
+                    .map(|outcome| {
+                        self.store.allocate_platform(PlatformValue::DmlResult {
+                            ty: result_type.clone(),
+                            outcome,
+                        })
+                    })
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type: result_type.clone(),
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            TypeName::SaveResult
+            | TypeName::UpsertResult
+            | TypeName::DeleteResult
+            | TypeName::UndeleteResult => {
+                let [outcome] = <[DmlRowOutcome; 1]>::try_from(outcomes).map_err(|_| {
+                    Diagnostic::new("scalar Database DML returned multiple row outcomes", span)
+                })?;
+                Ok(self.store.allocate_platform(PlatformValue::DmlResult {
+                    ty: result_type.clone(),
+                    outcome,
+                }))
+            }
+            _ => Err(Diagnostic::new(
+                "Database DML call has an invalid checked result type",
+                span,
+            )),
+        }
     }
 
     fn execute_dml_transaction(
         &mut self,
-        requested_operation: DmlOperation,
-        handles: &[SObjectId],
-        records: Vec<SObject>,
+        request: &DmlRequest,
+        handles: &BTreeMap<usize, SObjectId>,
+        mut outcomes: Vec<DmlRowOutcome>,
         schema: &crate::platform::SchemaCatalog,
         span: Span,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        let expected_outcome_count = handles.len() + outcomes.len();
         let prepared = self
             .host
-            .prepare_dml(schema, requested_operation, &records)
+            .prepare_dml(schema, request)
             .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
-        if prepared.len() != handles.len() {
+        if prepared.len() != request.rows.len() {
             return Err(Diagnostic::new(
                 "platform DML preflight returned an invalid record count",
                 span,
             ));
         }
-        let first_object = prepared.first().and_then(|record| {
-            record
-                .new
-                .as_ref()
-                .or(record.old.as_ref())
-                .map(|value| value.object_api_name())
-        });
-        if prepared.iter().any(|record| {
-            record
-                .new
-                .as_ref()
-                .or(record.old.as_ref())
-                .is_some_and(|value| {
-                    first_object
-                        .is_some_and(|first| !value.object_api_name().eq_ignore_ascii_case(first))
-                })
-        }) {
-            return Err(runtime_exception(
-                "DmlException",
-                "mixed-SObject bulk DML is not supported",
-                span,
-            ));
+        let mut ready = Vec::new();
+        for outcome in prepared {
+            match outcome {
+                PreparedDmlOutcome::Ready(record) => ready.push(record),
+                PreparedDmlOutcome::Failed {
+                    input_index,
+                    errors,
+                } => outcomes.push(DmlRowOutcome::failure(input_index, errors)),
+            }
         }
-
+        if request.all_or_none
+            && let Some(failed) = outcomes.iter().find(|outcome| !outcome.is_success())
+        {
+            return Err(dml_outcome_exception(failed, span));
+        }
+        ensure_one_dml_object(&ready, span)?;
         for operation in [
             DmlOperation::Insert,
             DmlOperation::Update,
             DmlOperation::Delete,
             DmlOperation::Undelete,
         ] {
-            let indices = prepared
+            let group = ready
                 .iter()
-                .enumerate()
-                .filter_map(|(index, record)| (record.operation == operation).then_some(index))
+                .filter(|record| record.operation == operation)
+                .cloned()
                 .collect::<Vec<_>>();
-            if indices.is_empty() {
+            if group.is_empty() {
                 continue;
             }
-            let group_handles = indices
-                .iter()
-                .map(|index| handles[*index])
-                .collect::<Vec<_>>();
-            let mut old_handles = Vec::new();
-            for index in &indices {
-                if let Some(value) = &prepared[*index].new {
-                    self.update_runtime_sobject(handles[*index], value, schema, span)?;
-                }
-                if let Some(value) = &prepared[*index].old {
-                    old_handles.push(self.allocate_platform_sobject(value, schema, span)?);
-                }
-            }
-            let object = prepared[indices[0]]
-                .new
-                .as_ref()
-                .or(prepared[indices[0]].old.as_ref())
-                .expect("prepared DML record has an old or new value")
-                .object_api_name()
-                .to_owned();
-
-            self.execute_trigger_phase(
+            outcomes.extend(self.execute_dml_group(
                 operation,
-                TriggerPhase::Before,
-                &object,
-                &group_handles,
-                &old_handles,
+                &group,
+                handles,
+                schema,
+                request.all_or_none,
                 span,
-            )?;
+            )?);
+        }
+        outcomes.sort_by_key(|outcome| outcome.input_index);
+        if outcomes.len() != expected_outcome_count {
+            return Err(Diagnostic::new(
+                "platform DML returned an incomplete outcome set",
+                span,
+            ));
+        }
+        Ok(outcomes)
+    }
 
-            let group_records = group_handles
-                .iter()
-                .map(|id| self.platform_sobject(*id, schema, span))
-                .collect::<Result<Vec<_>, _>>()?;
-            let persisted = self
-                .host
-                .dml(schema, operation, group_records)
-                .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
-            if persisted.len() != group_handles.len() {
-                return Err(Diagnostic::new(
-                    "platform DML returned an invalid record count",
-                    span,
-                ));
+    fn execute_dml_group(
+        &mut self,
+        operation: DmlOperation,
+        group: &[PreparedDmlRecord],
+        handles: &BTreeMap<usize, SObjectId>,
+        schema: &crate::platform::SchemaCatalog,
+        all_or_none: bool,
+        span: Span,
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        let group_handles = group
+            .iter()
+            .map(|record| handles[&record.input_index])
+            .collect::<Vec<_>>();
+        let originals = group_handles
+            .iter()
+            .map(|handle| (*handle, self.store.sobject(*handle).clone()))
+            .collect::<Vec<_>>();
+        self.begin_transaction(span)?;
+        let result = self.execute_dml_group_inner(operation, group, &group_handles, schema, span);
+        if result.is_err() {
+            for (handle, original) in &originals {
+                *self.store.sobject_mut(*handle) = original.clone();
             }
-            for (id, value) in group_handles.iter().copied().zip(&persisted) {
-                self.update_runtime_sobject(id, value, schema, span)?;
+        }
+        match self.finish_transaction(result, span) {
+            Ok(outcomes) => {
+                if all_or_none
+                    && let Some(failed) = outcomes.iter().find(|outcome| !outcome.is_success())
+                {
+                    Err(dml_outcome_exception(failed, span))
+                } else {
+                    for (record, (handle, original)) in group.iter().zip(&originals) {
+                        if outcomes.iter().any(|outcome| {
+                            outcome.input_index == record.input_index && !outcome.is_success()
+                        }) {
+                            *self.store.sobject_mut(*handle) = original.clone();
+                        }
+                    }
+                    Ok(outcomes)
+                }
             }
+            Err(error) if all_or_none => Err(error),
+            Err(error) => {
+                let failure = trigger_failure_error(&error);
+                Ok(group
+                    .iter()
+                    .map(|record| DmlRowOutcome::failure(record.input_index, vec![failure.clone()]))
+                    .collect())
+            }
+        }
+    }
 
+    fn execute_dml_group_inner(
+        &mut self,
+        operation: DmlOperation,
+        group: &[PreparedDmlRecord],
+        group_handles: &[SObjectId],
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        let images = self.prepare_dml_trigger_images(group, group_handles, schema, span)?;
+        self.execute_trigger_phase(
+            operation,
+            TriggerPhase::Before,
+            &images.object,
+            group_handles,
+            &images.old_handles,
+            span,
+        )?;
+        let rows = self.dml_rows_from_group(group, group_handles, schema, span)?;
+        let outcomes = self
+            .host
+            .dml(schema, operation, rows)
+            .map_err(|error| runtime_exception("DmlException", error.to_string(), span))?;
+        validate_group_outcomes(group, &outcomes, span)?;
+        let (after_handles, after_old_handles) = self.apply_dml_outcomes(
+            group,
+            group_handles,
+            &outcomes,
+            &images.old_by_index,
+            schema,
+            span,
+        )?;
+        if !after_handles.is_empty() {
             self.execute_trigger_phase(
                 operation,
                 TriggerPhase::After,
-                &object,
-                &group_handles,
-                &old_handles,
+                &images.object,
+                &after_handles,
+                &after_old_handles,
                 span,
             )?;
         }
-        Ok(())
+        Ok(outcomes)
+    }
+
+    fn prepare_dml_trigger_images(
+        &mut self,
+        group: &[PreparedDmlRecord],
+        group_handles: &[SObjectId],
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<PreparedTriggerImages, Diagnostic> {
+        let mut old_by_index = BTreeMap::new();
+        for (record, handle) in group.iter().zip(group_handles) {
+            if let Some(value) = &record.new {
+                self.update_runtime_sobject(*handle, value, schema, span)?;
+            }
+            if let Some(value) = &record.old {
+                old_by_index.insert(
+                    record.input_index,
+                    self.allocate_platform_sobject(value, schema, span)?,
+                );
+            }
+        }
+        let object = prepared_record_object(&group[0]).to_owned();
+        let old_handles = group
+            .iter()
+            .filter_map(|record| old_by_index.get(&record.input_index).copied())
+            .collect::<Vec<_>>();
+        Ok(PreparedTriggerImages {
+            object,
+            old_by_index,
+            old_handles,
+        })
+    }
+
+    fn dml_rows_from_group(
+        &self,
+        group: &[PreparedDmlRecord],
+        group_handles: &[SObjectId],
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<Vec<DmlRow>, Diagnostic> {
+        group
+            .iter()
+            .zip(group_handles)
+            .map(|(record, handle)| {
+                Ok(DmlRow {
+                    input_index: record.input_index,
+                    record: self.platform_sobject(*handle, schema, span)?,
+                })
+            })
+            .collect()
+    }
+
+    fn apply_dml_outcomes(
+        &mut self,
+        group: &[PreparedDmlRecord],
+        group_handles: &[SObjectId],
+        outcomes: &[DmlRowOutcome],
+        old_by_index: &BTreeMap<usize, SObjectId>,
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<(Vec<SObjectId>, Vec<SObjectId>), Diagnostic> {
+        let mut after_handles = Vec::new();
+        let mut after_old_handles = Vec::new();
+        for outcome in outcomes {
+            if let Some(value) = &outcome.record {
+                let handle = handles_for_group(group, group_handles, outcome.input_index);
+                self.update_runtime_sobject(handle, value, schema, span)?;
+                after_handles.push(handle);
+                if let Some(old) = old_by_index.get(&outcome.input_index) {
+                    after_old_handles.push(*old);
+                }
+            }
+        }
+        Ok((after_handles, after_old_handles))
     }
 
     pub(super) fn execute_trigger_phase(
@@ -654,6 +917,98 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .get(&name.to_ascii_lowercase())
             .map(data_to_value)
             .unwrap_or(Value::Null(Some(crate::ast::TypeName::Object))))
+    }
+
+    pub(super) fn evaluate_dml_result_method(
+        &mut self,
+        target: DmlResultMethod,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        let Value::Platform(id) = receiver else {
+            return Err(runtime_exception(
+                "NullPointerException",
+                "Database result receiver is null",
+                span,
+            ));
+        };
+        let PlatformValue::DmlResult { ty, outcome } = self.store.platform(id).clone() else {
+            return Err(Diagnostic::new(
+                "invalid checked Database result receiver",
+                span,
+            ));
+        };
+        match target {
+            DmlResultMethod::IsSuccess => Ok(Value::Boolean(outcome.is_success())),
+            DmlResultMethod::GetId => Ok(outcome.id.map_or_else(
+                || Value::Null(Some(TypeName::Id)),
+                |id| Value::Id(id.to_string()),
+            )),
+            DmlResultMethod::GetErrors => {
+                let elements = outcome
+                    .errors
+                    .into_iter()
+                    .map(|error| self.store.allocate_platform(PlatformValue::DmlError(error)))
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type: TypeName::DatabaseError,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            DmlResultMethod::IsCreated if ty == TypeName::UpsertResult => {
+                Ok(Value::Boolean(outcome.created))
+            }
+            DmlResultMethod::IsCreated => Err(Diagnostic::new(
+                "isCreated target attached to a non-UpsertResult",
+                span,
+            )),
+        }
+    }
+
+    pub(super) fn evaluate_dml_error_method(
+        &mut self,
+        target: DmlErrorMethod,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        let Value::Platform(id) = receiver else {
+            return Err(runtime_exception(
+                "NullPointerException",
+                "Database.Error receiver is null",
+                span,
+            ));
+        };
+        let PlatformValue::DmlError(error) = self.store.platform(id).clone() else {
+            return Err(Diagnostic::new(
+                "invalid checked Database.Error receiver",
+                span,
+            ));
+        };
+        match target {
+            DmlErrorMethod::GetStatusCode => Ok(self
+                .store
+                .allocate_platform(PlatformValue::DmlStatus(error.status))),
+            DmlErrorMethod::GetMessage => Ok(Value::String(error.message)),
+            DmlErrorMethod::GetFields => {
+                let elements = error.fields.into_iter().map(Value::String).collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type: TypeName::String,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+        }
     }
 
     fn soql_request(
@@ -1335,6 +1690,90 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             )),
         }
     }
+}
+
+fn ensure_one_dml_object(prepared: &[PreparedDmlRecord], span: Span) -> Result<(), Diagnostic> {
+    let first_object = prepared.first().map(prepared_record_object);
+    if prepared.iter().any(|record| {
+        first_object
+            .is_some_and(|first| !prepared_record_object(record).eq_ignore_ascii_case(first))
+    }) {
+        Err(runtime_exception(
+            "DmlException",
+            "mixed-SObject bulk DML is not supported",
+            span,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn prepared_record_object(record: &PreparedDmlRecord) -> &str {
+    record
+        .new
+        .as_ref()
+        .or(record.old.as_ref())
+        .expect("prepared DML record has an old or new value")
+        .object_api_name()
+}
+
+fn validate_group_outcomes(
+    group: &[PreparedDmlRecord],
+    outcomes: &[DmlRowOutcome],
+    span: Span,
+) -> Result<(), Diagnostic> {
+    if outcomes.len() != group.len() {
+        return Err(Diagnostic::new(
+            "platform DML returned an invalid record count",
+            span,
+        ));
+    }
+    let mut expected = group
+        .iter()
+        .map(|record| record.input_index)
+        .collect::<Vec<_>>();
+    let mut actual = outcomes
+        .iter()
+        .map(|outcome| outcome.input_index)
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    actual.sort_unstable();
+    if actual != expected || actual.windows(2).any(|indices| indices[0] == indices[1]) {
+        return Err(Diagnostic::new(
+            "platform DML returned invalid row indexes",
+            span,
+        ));
+    }
+    Ok(())
+}
+
+fn handles_for_group(
+    group: &[PreparedDmlRecord],
+    handles: &[SObjectId],
+    input_index: usize,
+) -> SObjectId {
+    group
+        .iter()
+        .position(|record| record.input_index == input_index)
+        .and_then(|position| handles.get(position).copied())
+        .expect("validated DML outcome index belongs to the concrete group")
+}
+
+fn dml_outcome_exception(outcome: &DmlRowOutcome, span: Span) -> Diagnostic {
+    let message = outcome
+        .errors
+        .first()
+        .map(|error| format!("{}: {}", error.status.apex_name(), error.message))
+        .unwrap_or_else(|| "DML row failed without a structured error".to_owned());
+    runtime_exception("DmlException", message, span)
+}
+
+fn trigger_failure_error(error: &Diagnostic) -> DmlError {
+    DmlError::new(
+        DmlStatus::CannotInsertUpdateActivateEntity,
+        error.message.clone(),
+        [],
+    )
 }
 
 fn map_dml_operation(operation: AstDmlOperation) -> DmlOperation {

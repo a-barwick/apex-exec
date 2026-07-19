@@ -17,7 +17,8 @@ pub mod sqlite;
 pub mod storage;
 
 pub use database::{
-    AggregateFunction, DatabaseError, DatabaseSnapshot, DmlOperation, LocalDatabase, NullOrder,
+    AggregateFunction, DatabaseError, DatabaseSnapshot, DmlError, DmlExternalId, DmlOperation,
+    DmlRequest, DmlRow, DmlRowOutcome, DmlStatus, LocalDatabase, NullOrder, PreparedDmlOutcome,
     PreparedDmlRecord, QueryComparison, QueryCondition, QueryDateLiteral, QueryDateLiteralKind,
     QueryField, QueryInValues, QueryLogical, QueryOrder, QueryOutcome, QueryRecord,
     QueryRelationship, QuerySelect, QueryValue, SoqlRequest, SortOrder, SoslRequest,
