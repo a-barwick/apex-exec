@@ -13,8 +13,8 @@ the bounded S0 process-safety and correctness criteria pass.
 
 Initial S0 work may begin in three disjoint packages:
 
-- S0-01 — frontend process safety and correctness (in Review on
-  `codex/stab-frontend-safety` at `c7d4ac7`)
+- S0-01 — frontend process safety and correctness (Active maintainability
+  remediation on `codex/stab-frontend-safety` from `c7d4ac7`)
 - S0-02 — opt-in runtime instrumentation
 - S0-05 — CI, maintainability ratchet, and release-document gates
 
