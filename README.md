@@ -25,9 +25,10 @@ reviewed candidate-bound live Salesforce evidence. The bounded S0 stabilization
 gate is complete after its process-safety, correctness, instrumentation, and
 maintainability criteria passed independent review. M18 completes checked safe
 navigation and null coalescing with evaluate-once, lazy, chained runtime
-behavior. M19 bitwise, shift, `Long`, and compound operators are next. The
-primary syntax gate remains all 14 pinned
-North Star lexer/parser indicators passing; the current frontier is 5 of 14.
+behavior. M19 completes bitwise and shift expressions, checked `Long`, and
+evaluate-once compound assignment. M20 nested declarations, enums, and type
+literals are next. The primary syntax gate remains all 14 pinned North Star
+lexer/parser indicators passing; the current frontier is 7 of 14.
 The phase then carries that syntax foundation into a representative 60–80%
 enterprise test benchmark, broader metadata accounting, selected platform
 fidelity, and persistent incremental compiler work. See

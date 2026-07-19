@@ -2,14 +2,14 @@
 
 ## Status
 
-Primitive expressions, including M16 ternary and runtime-type tests, lexical
-scopes, control flow, mutable collections, checked calls/exceptions, classes,
-cross-file execution, isolated tests, schema-backed SObjects, SOQL/SOSL/DML,
-triggers, curated platform services, and deterministic async execution are
-implemented at the fidelity summarized in `docs/COMPATIBILITY.md`. M12–M15 add
-debug/editor observations, provider comparison, hermetic CI, and hybrid
-validation above the same runtime boundaries. Remaining Phase 2 expressions,
-declarations, sharing/security, and API-version profiles remain planned.
+Primitive expressions through M19, lexical scopes, control flow, mutable
+collections, checked calls/exceptions, classes, cross-file execution, isolated
+tests, schema-backed SObjects, SOQL/SOSL/DML, triggers, curated platform
+services, and deterministic async execution are implemented at the fidelity
+summarized in `docs/COMPATIBILITY.md`. M12–M15 add debug/editor observations,
+provider comparison, hermetic CI, and hybrid validation above the same runtime
+boundaries. Remaining Phase 2 declarations, sharing/security, and API-version
+profiles remain planned.
 
 ## Program execution
 
@@ -38,11 +38,18 @@ hosts can consume or stream events without changing language execution.
 
 ## Expressions
 
-**Implemented.** Arithmetic uses checked `i64` operations and reports division,
-remainder, and overflow failures. `&&` and `||` short-circuit. Assignment is
-right-associative. Prefix and postfix increment/decrement mutate `Integer`
-variables or Integer-valued List indexes while returning the new or prior value
-respectively.
+**Implemented.** Arithmetic uses checked signed 32-bit Integer, signed 64-bit
+Long, and Decimal operations and reports division, remainder, and overflow
+failures. Integral `&`, `|`, `^`, `~`, `<<`, `>>`, and `>>>` use Integer or
+Long width; shift distances are masked to 31 or 63 and unsigned right shift
+zero-fills. Boolean `&`, `|`, and `^` evaluate both operands, while `&&` and
+`||` short-circuit.
+
+Assignment is right-associative. Simple and compound assignments plus prefix
+and postfix increment/decrement resolve locals, List indexes, class members,
+and SObject fields through one checked place. Receiver and index expressions
+are evaluated once before the right operand. A failed read or numeric operation
+does not write a partial value.
 
 Ternary evaluates its Boolean condition once, records the condition outcome for
 coverage, and evaluates exactly one arm. A runtime null Boolean raises
@@ -140,8 +147,8 @@ The supported collection methods are:
 
 - List: `add`, `addAll`, `clear`, `clone`, `contains`, `get`, `indexOf`,
   `isEmpty`, `remove`, `set`, `size`, and scalar `sort`. `add` accepts either a
-  value or an index and value. Sorting accepts String and Integer elements and
-  orders null before non-null values.
+  value or an index and value. Sorting accepts String, Integer, and Long
+  elements and orders null before non-null values.
 - Set: `add`, `addAll`, `clear`, `clone`, `contains`, `containsAll`, `isEmpty`,
   `remove`, `removeAll`, `retainAll`, and `size`. Mutating Set methods report
   whether membership changed, except `clear`, which returns Void.

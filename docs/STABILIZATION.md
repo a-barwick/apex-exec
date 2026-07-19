@@ -10,9 +10,9 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Next feature milestone:** M19 — bitwise, shift, `Long`, and compound operators
-- **Feature policy:** M18 is complete after the S0 exit criteria passed. M19
-  and M20 retain the additional architecture prerequisites below.
+- **Next feature milestone:** M20 — nested declarations, enums, and type literals
+- **Feature policy:** M18 and M19 are complete. M20 retains the additional
+  architecture prerequisites below.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.
@@ -70,10 +70,10 @@ package.
 | S0-04 | Execution context and lazy class initialization | Complete (`ed830f2`; setup-mode evidence `53585f8`; reviews approved at `ad08c4c`; merged as `c847fb2`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Complete (reviewed candidate `8a360ac`; merged to `main` as `556d485`) | S0-01–S0-05 complete | Nothing |
-| S1-01 | Compiler/runtime substrate ADRs | Active (`codex/milestone-19-bitwise-long-compound`, owner: `/root`) | S0-GATE | M18 implementation |
-| S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
+| S1-01 | Compiler/runtime substrate ADRs | Complete (ADR 0023 owner-approved 2026-07-19) | S0-GATE | M18 implementation |
+| S1-02 | Lossless type syntax and typed identities | Ready (shared parser type grammar landed in M19; full TypeRef/identity slice remains) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
-| S1-04 | `Place` and centralized numeric operations | Blocked | S1-02 | Disjoint docs/tooling work |
+| S1-04 | `Place` and centralized numeric operations | Complete (M19 checked place/numeric vertical slice) | S1-01 and M19 typed identity slice | Disjoint docs/tooling work |
 | S1-05 | Intrinsic and compatibility-profile catalog | Blocked | S1-03 | Disjoint data work |
 | S1-06 | Structured diagnostic model | Blocked | S1-03, S1-05 | Nothing cross-cutting |
 | S2-01 | Transaction, host-capability, and DML contracts | Blocked | S0-GATE | S1 work with disjoint files |

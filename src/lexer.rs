@@ -80,20 +80,30 @@ impl<'a> Lexer<'a> {
             '=' => TokenKind::Equal,
             '!' if self.take('=') => TokenKind::BangEqual,
             '!' => TokenKind::Bang,
-            '<' if self.take('=') => TokenKind::LessEqual,
-            '<' => TokenKind::Less,
-            '>' if self.take('=') => TokenKind::GreaterEqual,
-            '>' => TokenKind::Greater,
+            '<' => self.less_token_kind(),
+            '>' => self.greater_token_kind(),
             '+' if self.take('+') => TokenKind::PlusPlus,
+            '+' if self.take('=') => TokenKind::PlusEqual,
             '+' => TokenKind::Plus,
             '-' if self.take('-') => TokenKind::MinusMinus,
+            '-' if self.take('=') => TokenKind::MinusEqual,
             '-' => TokenKind::Minus,
+            '*' if self.take('=') => TokenKind::StarEqual,
             '*' => TokenKind::Star,
+            '/' if self.take('=') => TokenKind::SlashEqual,
             '/' => TokenKind::Slash,
+            '%' if self.take('=') => TokenKind::PercentEqual,
             '%' => TokenKind::Percent,
+            '~' => TokenKind::Tilde,
             '@' => TokenKind::At,
             '&' if self.take('&') => TokenKind::AndAnd,
+            '&' if self.take('=') => TokenKind::AmpersandEqual,
+            '&' => TokenKind::Ampersand,
             '|' if self.take('|') => TokenKind::OrOr,
+            '|' if self.take('=') => TokenKind::PipeEqual,
+            '|' => TokenKind::Pipe,
+            '^' if self.take('=') => TokenKind::CaretEqual,
+            '^' => TokenKind::Caret,
             '(' => TokenKind::LeftParen,
             ')' => TokenKind::RightParen,
             '{' => TokenKind::LeftBrace,
@@ -159,6 +169,18 @@ impl<'a> Lexer<'a> {
                         self.bump();
                     }
                     TokenKind::DecimalLiteral(self.source[start..self.cursor].to_owned())
+                } else if self
+                    .peek()
+                    .is_some_and(|suffix| suffix == 'l' || suffix == 'L')
+                {
+                    self.bump();
+                    let value = text.parse::<i128>().map_err(|_| {
+                        Diagnostic::new(
+                            "Long literal is out of range",
+                            self.span(start, self.cursor),
+                        )
+                    })?;
+                    TokenKind::LongLiteral(value)
                 } else {
                     let value = text.parse::<i64>().map_err(|_| {
                         Diagnostic::new(
@@ -227,6 +249,40 @@ impl<'a> Lexer<'a> {
             TokenKind::SafeNavigation
         } else {
             TokenKind::Question
+        }
+    }
+
+    fn less_token_kind(&mut self) -> TokenKind {
+        if self.take('<') {
+            if self.take('=') {
+                TokenKind::ShiftLeftEqual
+            } else {
+                TokenKind::ShiftLeft
+            }
+        } else if self.take('=') {
+            TokenKind::LessEqual
+        } else {
+            TokenKind::Less
+        }
+    }
+
+    fn greater_token_kind(&mut self) -> TokenKind {
+        if self.take('>') {
+            if self.take('>') {
+                if self.take('=') {
+                    TokenKind::UnsignedShiftRightEqual
+                } else {
+                    TokenKind::UnsignedShiftRight
+                }
+            } else if self.take('=') {
+                TokenKind::ShiftRightEqual
+            } else {
+                TokenKind::ShiftRight
+            }
+        } else if self.take('=') {
+            TokenKind::GreaterEqual
+        } else {
+            TokenKind::Greater
         }
     }
 

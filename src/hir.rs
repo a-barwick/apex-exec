@@ -27,6 +27,9 @@ pub struct Program {
     calls: HashMap<Span, CallTarget>,
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
+    places: HashMap<Span, PlaceTarget>,
+    binary_operations: HashMap<Span, CheckedBinaryOperation>,
+    unary_operations: HashMap<Span, CheckedUnaryOperation>,
     queries: HashMap<Span, CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
@@ -40,6 +43,9 @@ impl Program {
             calls,
             references,
             members,
+            places,
+            binary_operations,
+            unary_operations,
             queries,
             null_aware_queries,
             async_contracts,
@@ -50,6 +56,9 @@ impl Program {
             calls,
             references,
             members,
+            places,
+            binary_operations,
+            unary_operations,
             queries,
             null_aware_queries,
             async_contracts,
@@ -77,6 +86,18 @@ impl Program {
         self.members.get(&span).copied()
     }
 
+    pub(crate) fn place_target(&self, span: Span) -> Option<PlaceTarget> {
+        self.places.get(&span).copied()
+    }
+
+    pub(crate) fn binary_operation(&self, span: Span) -> Option<CheckedBinaryOperation> {
+        self.binary_operations.get(&span).copied()
+    }
+
+    pub(crate) fn unary_operation(&self, span: Span) -> Option<CheckedUnaryOperation> {
+        self.unary_operations.get(&span).copied()
+    }
+
     pub fn checked_query(&self, span: Span) -> Option<&CheckedQuery> {
         self.queries.get(&span)
     }
@@ -99,6 +120,9 @@ pub(crate) struct ProgramFacts {
     pub calls: HashMap<Span, CallTarget>,
     pub references: HashMap<Span, ReferenceTarget>,
     pub members: HashMap<Span, MemberTarget>,
+    pub places: HashMap<Span, PlaceTarget>,
+    pub binary_operations: HashMap<Span, CheckedBinaryOperation>,
+    pub unary_operations: HashMap<Span, CheckedUnaryOperation>,
     pub queries: HashMap<Span, CheckedQuery>,
     pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
@@ -173,6 +197,76 @@ pub enum CallTarget {
 pub struct ClassMemberId {
     pub class_id: usize,
     pub member_id: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ObjectTypeId(usize);
+
+impl ObjectTypeId {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FieldId(usize);
+
+impl FieldId {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaceTarget {
+    Local,
+    InstanceMember(ClassMemberId),
+    StaticMember(ClassMemberId),
+    ListIndex,
+    SObjectField {
+        object_id: ObjectTypeId,
+        field_id: FieldId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericKind {
+    Integer,
+    Long,
+    Decimal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckedBinaryOperation {
+    StringConcat,
+    Numeric {
+        operator: ast::BinaryOperator,
+        kind: NumericKind,
+    },
+    BooleanBitwise(ast::BinaryOperator),
+    Integral {
+        operator: ast::BinaryOperator,
+        kind: NumericKind,
+    },
+    Shift {
+        operator: ast::BinaryOperator,
+        kind: NumericKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckedUnaryOperation {
+    Positive(NumericKind),
+    Negate(NumericKind),
+    BitwiseNot(NumericKind),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

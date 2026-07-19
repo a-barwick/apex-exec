@@ -1,6 +1,6 @@
 # ADR 0023: Stage typed compiler and runtime substrate before M19
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-19
 
 ## Context

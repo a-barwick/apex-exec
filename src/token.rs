@@ -5,6 +5,7 @@ pub enum TokenKind {
     Identifier(String),
     StringLiteral(String),
     IntegerLiteral(i64),
+    LongLiteral(i128),
     DecimalLiteral(String),
     BooleanLiteral(bool),
     Null,
@@ -44,6 +45,17 @@ pub enum TokenKind {
     NullCoalesce,
     SafeNavigation,
     Equal,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    PercentEqual,
+    AmpersandEqual,
+    PipeEqual,
+    CaretEqual,
+    ShiftLeftEqual,
+    ShiftRightEqual,
+    UnsignedShiftRightEqual,
     EqualEqual,
     FatArrow,
     Bang,
@@ -52,6 +64,9 @@ pub enum TokenKind {
     LessEqual,
     Greater,
     GreaterEqual,
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
     Plus,
     PlusPlus,
     Minus,
@@ -59,6 +74,10 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    Tilde,
+    Ampersand,
+    Pipe,
+    Caret,
     AndAnd,
     OrOr,
     LeftParen,
@@ -80,13 +99,13 @@ pub struct Token {
 
 impl TokenKind {
     pub fn description(&self) -> &'static str {
+        if let Some(description) = self.value_description() {
+            return description;
+        }
+        if let Some(description) = self.symbol_description() {
+            return description;
+        }
         match self {
-            Self::Identifier(_) => "identifier",
-            Self::StringLiteral(_) => "string literal",
-            Self::IntegerLiteral(_) => "integer literal",
-            Self::DecimalLiteral(_) => "decimal literal",
-            Self::BooleanLiteral(_) => "boolean literal",
-            Self::Null => "`null`",
             Self::If => "`if`",
             Self::Else => "`else`",
             Self::For => "`for`",
@@ -115,6 +134,26 @@ impl TokenKind {
             Self::Abstract => "`abstract`",
             Self::Override => "`override`",
             Self::Final => "`final`",
+            Self::Eof => "end of file",
+            _ => unreachable!("value and symbol tokens have descriptions"),
+        }
+    }
+
+    fn value_description(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Identifier(_) => "identifier",
+            Self::StringLiteral(_) => "string literal",
+            Self::IntegerLiteral(_) => "integer literal",
+            Self::LongLiteral(_) => "Long literal",
+            Self::DecimalLiteral(_) => "decimal literal",
+            Self::BooleanLiteral(_) => "boolean literal",
+            Self::Null => "`null`",
+            _ => return None,
+        })
+    }
+
+    fn symbol_description(&self) -> Option<&'static str> {
+        Some(match self {
             Self::At => "`@`",
             Self::Dot => "`.`",
             Self::Comma => "`,`",
@@ -123,6 +162,17 @@ impl TokenKind {
             Self::NullCoalesce => "`??`",
             Self::SafeNavigation => "`?.`",
             Self::Equal => "`=`",
+            Self::PlusEqual => "`+=`",
+            Self::MinusEqual => "`-=`",
+            Self::StarEqual => "`*=`",
+            Self::SlashEqual => "`/=`",
+            Self::PercentEqual => "`%=`",
+            Self::AmpersandEqual => "`&=`",
+            Self::PipeEqual => "`|=`",
+            Self::CaretEqual => "`^=`",
+            Self::ShiftLeftEqual => "`<<=`",
+            Self::ShiftRightEqual => "`>>=`",
+            Self::UnsignedShiftRightEqual => "`>>>=`",
             Self::EqualEqual => "`==`",
             Self::FatArrow => "`=>`",
             Self::Bang => "`!`",
@@ -131,6 +181,9 @@ impl TokenKind {
             Self::LessEqual => "`<=`",
             Self::Greater => "`>`",
             Self::GreaterEqual => "`>=`",
+            Self::ShiftLeft => "`<<`",
+            Self::ShiftRight => "`>>`",
+            Self::UnsignedShiftRight => "`>>>`",
             Self::Plus => "`+`",
             Self::PlusPlus => "`++`",
             Self::Minus => "`-`",
@@ -138,6 +191,10 @@ impl TokenKind {
             Self::Star => "`*`",
             Self::Slash => "`/`",
             Self::Percent => "`%`",
+            Self::Tilde => "`~`",
+            Self::Ampersand => "`&`",
+            Self::Pipe => "`|`",
+            Self::Caret => "`^`",
             Self::AndAnd => "`&&`",
             Self::OrOr => "`||`",
             Self::LeftParen => "`(`",
@@ -147,7 +204,7 @@ impl TokenKind {
             Self::LeftBracket => "`[`",
             Self::RightBracket => "`]`",
             Self::Semicolon => "`;`",
-            Self::Eof => "end of file",
-        }
+            _ => return None,
+        })
     }
 }

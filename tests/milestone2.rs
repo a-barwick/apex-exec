@@ -209,7 +209,7 @@ fn rejects_invalid_increment_and_statement_expressions() {
     let error = check("String value = 'x'; value++;").unwrap_err();
     assert_eq!(
         error.message,
-        "increment/decrement requires Integer, found String"
+        "increment/decrement requires Integer or Long, found String"
     );
 
     let error = check("Integer value = 1; (value + 1)++;").unwrap_err();

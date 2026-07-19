@@ -12,7 +12,7 @@ mod queries;
 mod statements;
 mod types;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,

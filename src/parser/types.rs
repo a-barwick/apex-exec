@@ -5,13 +5,6 @@ use crate::{
     token::TokenKind,
 };
 
-#[derive(Clone, Copy)]
-struct TypeLookahead {
-    end: usize,
-    numeric_scalar: bool,
-    has_unrecognized_qualification: bool,
-}
-
 impl Parser {
     pub(super) fn parse_type_name(&mut self) -> Result<(TypeName, crate::span::Span), Diagnostic> {
         let (mut ty, mut span) = self.parse_base_type_name()?;
@@ -61,10 +54,7 @@ impl Parser {
             "list" | "set" => {
                 self.expect_simple(TokenKind::Less, "expected `<` after collection type name")?;
                 let (element, _) = self.parse_type_name()?;
-                let end = self.expect_simple(
-                    TokenKind::Greater,
-                    "expected `>` after collection element type",
-                )?;
+                let end = self.expect_type_greater("expected `>` after collection element type")?;
                 let ty = if identifier.canonical == "list" {
                     TypeName::List(Box::new(element))
                 } else {
@@ -77,8 +67,7 @@ impl Parser {
                 let (key, _) = self.parse_type_name()?;
                 self.expect_simple(TokenKind::Comma, "expected `,` after map key type")?;
                 let (value, _) = self.parse_type_name()?;
-                let end =
-                    self.expect_simple(TokenKind::Greater, "expected `>` after map value type")?;
+                let end = self.expect_type_greater("expected `>` after map value type")?;
                 Ok((
                     TypeName::Map(Box::new(key), Box::new(value)),
                     identifier.span.merge(end.span),
@@ -120,10 +109,7 @@ impl Parser {
                 }
                 self.advance();
             }
-            let end = self.expect_simple(
-                TokenKind::Greater,
-                "expected `>` after interface type argument",
-            )?;
+            let end = self.expect_type_greater("expected `>` after interface type argument")?;
             span = span.merge(end.span);
         }
         Ok(NamedType::with_type_arguments(
@@ -134,14 +120,27 @@ impl Parser {
     }
 
     pub(super) fn is_declaration_start(&self) -> bool {
-        self.type_end_at(self.cursor)
-            .is_some_and(|end| matches!(self.token_at(end).kind, TokenKind::Identifier(_)))
+        let mut probe = self.clone();
+        match probe.parse_type_name() {
+            Ok(_) => matches!(probe.current().kind, TokenKind::Identifier(_)),
+            Err(error) if error.message == "only one array suffix is supported" => {
+                while probe.check(&TokenKind::LeftBracket)
+                    && matches!(probe.peek(1).kind, TokenKind::RightBracket)
+                {
+                    probe.advance();
+                    probe.advance();
+                }
+                matches!(probe.current().kind, TokenKind::Identifier(_))
+            }
+            Err(_) => false,
+        }
     }
 
     pub(super) fn is_method_declaration_start(&self) -> bool {
-        self.return_type_end_at(self.cursor).is_some_and(|end| {
-            matches!(self.token_at(end).kind, TokenKind::Identifier(_))
-                && matches!(self.token_at(end + 1).kind, TokenKind::LeftParen)
+        let mut probe = self.clone();
+        probe.parse_return_type().is_ok_and(|_| {
+            matches!(probe.current().kind, TokenKind::Identifier(_))
+                && matches!(probe.peek(1).kind, TokenKind::LeftParen)
         })
     }
 
@@ -209,112 +208,42 @@ impl Parser {
         if !self.check(&TokenKind::LeftParen) {
             return false;
         }
-        let type_start = self.cursor + 1;
-        let Some(candidate) = self.type_lookahead_at(type_start) else {
+        let mut probe = self.clone();
+        probe.advance();
+        let Ok((candidate, _)) = probe.parse_type_name() else {
             return false;
         };
-        if !matches!(self.token_at(candidate.end).kind, TokenKind::RightParen)
-            || candidate.has_unrecognized_qualification
+        if !matches!(probe.current().kind, TokenKind::RightParen)
+            || matches!(&candidate, TypeName::Custom(name) if name.canonical.contains('.'))
         {
             // Arbitrary qualified custom types are outside the current grammar,
             // so `(receiver.member)` remains an expression rather than a cast.
             return false;
         }
-        let operand_cursor = candidate.end + 1;
-        match &self.token_at(operand_cursor).kind {
+        probe.advance();
+        let numeric_scalar = matches!(
+            candidate,
+            TypeName::Integer | TypeName::Long | TypeName::Decimal
+        );
+        match &probe.current().kind {
             // Signed unary operands disambiguate only numeric scalar casts;
             // reference-shaped candidates remain grouped binary expressions.
-            TokenKind::Plus | TokenKind::Minus => candidate.numeric_scalar,
+            TokenKind::Plus | TokenKind::Minus => numeric_scalar,
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
-                candidate.numeric_scalar
-                    && is_unary_expression_start(&self.token_at(operand_cursor + 1).kind)
+                numeric_scalar && is_unary_expression_start(&probe.peek(1).kind)
             }
             // `[` continues a grouped value as indexing unless it starts the
             // supported SOQL/SOSL primary-expression shape.
-            TokenKind::LeftBracket => self.is_query_expression_start_at(operand_cursor),
+            TokenKind::LeftBracket => probe.is_query_expression_start_at(probe.cursor),
             operand => is_unary_expression_start(operand),
         }
     }
 
     pub(super) fn is_for_each_start(&self) -> bool {
-        self.type_end_at(self.cursor).is_some_and(|end| {
-            matches!(self.token_at(end).kind, TokenKind::Identifier(_))
-                && matches!(self.token_at(end + 1).kind, TokenKind::Colon)
-        })
-    }
-
-    pub(super) fn type_end_at(&self, cursor: usize) -> Option<usize> {
-        self.type_lookahead_at(cursor)
-            .map(|lookahead| lookahead.end)
-    }
-
-    fn type_lookahead_at(&self, cursor: usize) -> Option<TypeLookahead> {
-        let TokenKind::Identifier(spelling) = &self.token_at(cursor).kind else {
-            return None;
-        };
-        let canonical = spelling.to_ascii_lowercase();
-        let mut end = cursor + 1;
-        let mut qualified = canonical.clone();
-        let mut has_qualification = false;
-        if matches!(self.token_at(end).kind, TokenKind::Dot)
-            && matches!(self.token_at(end + 1).kind, TokenKind::Identifier(_))
-        {
-            let TokenKind::Identifier(nested) = &self.token_at(end + 1).kind else {
-                unreachable!()
-            };
-            qualified.push('.');
-            qualified.push_str(&nested.to_ascii_lowercase());
-            end += 2;
-            has_qualification = true;
-        }
-        let mut has_unrecognized_qualification =
-            has_qualification && TypeName::from_apex_name(&qualified).is_none();
-        let mut numeric_scalar = matches!(qualified.as_str(), "integer" | "decimal");
-        match qualified.as_str() {
-            "list" | "set" => {
-                if !matches!(self.token_at(end).kind, TokenKind::Less) {
-                    return None;
-                }
-                let element = self.type_lookahead_at(end + 1)?;
-                end = element.end;
-                has_unrecognized_qualification |= element.has_unrecognized_qualification;
-                if !matches!(self.token_at(end).kind, TokenKind::Greater) {
-                    return None;
-                }
-                end += 1;
-                numeric_scalar = false;
-            }
-            "map" => {
-                if !matches!(self.token_at(end).kind, TokenKind::Less) {
-                    return None;
-                }
-                let key = self.type_lookahead_at(end + 1)?;
-                end = key.end;
-                has_unrecognized_qualification |= key.has_unrecognized_qualification;
-                if !matches!(self.token_at(end).kind, TokenKind::Comma) {
-                    return None;
-                }
-                let value = self.type_lookahead_at(end + 1)?;
-                end = value.end;
-                has_unrecognized_qualification |= value.has_unrecognized_qualification;
-                if !matches!(self.token_at(end).kind, TokenKind::Greater) {
-                    return None;
-                }
-                end += 1;
-                numeric_scalar = false;
-            }
-            _ => {}
-        }
-        while matches!(self.token_at(end).kind, TokenKind::LeftBracket)
-            && matches!(self.token_at(end + 1).kind, TokenKind::RightBracket)
-        {
-            end += 2;
-            numeric_scalar = false;
-        }
-        Some(TypeLookahead {
-            end,
-            numeric_scalar,
-            has_unrecognized_qualification,
+        let mut probe = self.clone();
+        probe.parse_type_name().is_ok_and(|_| {
+            matches!(probe.current().kind, TokenKind::Identifier(_))
+                && matches!(probe.peek(1).kind, TokenKind::Colon)
         })
     }
 
@@ -327,12 +256,49 @@ impl Parser {
         )
     }
 
-    pub(super) fn return_type_end_at(&self, cursor: usize) -> Option<usize> {
-        if matches!(&self.token_at(cursor).kind, TokenKind::Void) {
-            Some(cursor + 1)
-        } else {
-            self.type_end_at(cursor)
+    fn expect_type_greater(&mut self, message: &str) -> Result<crate::token::Token, Diagnostic> {
+        let token = self.current().clone();
+        if !token.lexeme.starts_with('>') {
+            return Err(Diagnostic::new(message, token.span));
         }
+
+        let consumed = crate::token::Token {
+            kind: TokenKind::Greater,
+            span: crate::span::Span::new_in(
+                token.span.source_id,
+                token.span.start,
+                token.span.start + 1,
+            ),
+            lexeme: ">".to_owned(),
+        };
+        let remainder = &token.lexeme[1..];
+        if remainder.is_empty() {
+            self.advance();
+        } else {
+            let kind = match remainder {
+                ">" => TokenKind::Greater,
+                ">>" => TokenKind::ShiftRight,
+                "=" => TokenKind::Equal,
+                ">=" => TokenKind::GreaterEqual,
+                ">>=" => TokenKind::ShiftRightEqual,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "invalid token after generic type closer",
+                        token.span,
+                    ));
+                }
+            };
+            self.tokens[self.cursor] = crate::token::Token {
+                kind,
+                span: crate::span::Span::new_in(
+                    token.span.source_id,
+                    token.span.start + 1,
+                    token.span.end,
+                ),
+                lexeme: remainder.to_owned(),
+            };
+        }
+        Ok(consumed)
     }
 }
 
@@ -343,6 +309,7 @@ fn is_unary_expression_start(kind: &TokenKind) -> bool {
             | TokenKind::StringLiteral(_)
             | TokenKind::BooleanLiteral(_)
             | TokenKind::IntegerLiteral(_)
+            | TokenKind::LongLiteral(_)
             | TokenKind::DecimalLiteral(_)
             | TokenKind::Null
             | TokenKind::New
@@ -353,5 +320,6 @@ fn is_unary_expression_start(kind: &TokenKind) -> bool {
             | TokenKind::Minus
             | TokenKind::MinusMinus
             | TokenKind::Bang
+            | TokenKind::Tilde
     )
 }

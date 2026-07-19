@@ -1,12 +1,13 @@
 use crate::{
     ast::{
-        AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassMember,
-        CollectionInitializer, DmlOperation, Expression, Identifier, Modifier, PostfixOperator,
-        ReturnType, Statement, TypeName, UnaryOperator,
+        AccessorKind, AssignmentOperator, AssignmentTarget, BinaryOperator, CatchClause,
+        ClassMember, CollectionInitializer, DmlOperation, Expression, Identifier, Modifier,
+        PostfixOperator, ReturnType, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
-        CallTarget, ClassMemberId, ExpressionType, MemberTarget, Program, ReferenceTarget,
+        CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassMemberId, ExpressionType,
+        FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget,
         TriggerContextVariable,
     },
     platform::FieldType,
@@ -27,6 +28,7 @@ mod host;
 mod image;
 mod instrumentation;
 mod intrinsics;
+mod numeric;
 mod platform_intrinsics;
 mod store;
 mod value_graph;
@@ -85,6 +87,7 @@ enum Value {
     String(String),
     Boolean(bool),
     Integer(i64),
+    Long(i64),
     Decimal(Decimal),
     Date(NaiveDate),
     Datetime(DateTime<Utc>),
@@ -98,6 +101,13 @@ enum Value {
     Exception(Box<Diagnostic>),
     Null(Option<TypeName>),
     Void,
+}
+
+#[cfg(test)]
+impl Value {
+    fn has_string_type(&self) -> bool {
+        matches!(self, Self::String(_) | Self::Null(Some(TypeName::String)))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -134,12 +144,6 @@ impl PlatformValue {
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
             Self::AsyncContext { ty, .. } => ty.clone(),
         }
-    }
-}
-
-impl Value {
-    fn has_string_type(&self) -> bool {
-        matches!(self, Self::String(_) | Self::Null(Some(TypeName::String)))
     }
 }
 
@@ -185,6 +189,45 @@ struct SObjectInstance {
 struct EvaluatedArgument {
     value: Value,
     span: Span,
+}
+
+enum PlaceSyntax<'a> {
+    Variable(&'a Identifier),
+    Index {
+        collection: &'a Expression,
+        index: &'a Expression,
+        span: Span,
+    },
+    Member {
+        receiver: &'a Expression,
+        span: Span,
+    },
+}
+
+impl PlaceSyntax<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Variable(identifier) => identifier.span,
+            Self::Index { span, .. } | Self::Member { span, .. } => *span,
+        }
+    }
+}
+
+enum Place {
+    Local(Identifier),
+    ClassMember {
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+    },
+    ListIndex {
+        collection: CollectionId,
+        index: usize,
+    },
+    SObjectField {
+        receiver: SObjectId,
+        object_id: usize,
+        field_id: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1140,6 +1183,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Expression::StringLiteral(value, _) => Ok(Value::String(value.clone())),
             Expression::BooleanLiteral(value, _) => Ok(Value::Boolean(*value)),
             Expression::IntegerLiteral(value, _) => Ok(Value::Integer(*value)),
+            Expression::LongLiteral(value, span) => i64::try_from(*value)
+                .map(Value::Long)
+                .map_err(|_| Diagnostic::new("Long literal is out of range", *span)),
             Expression::DecimalLiteral(value, span) => value
                 .parse::<Decimal>()
                 .map(Value::Decimal)
@@ -1148,7 +1194,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Expression::Soql(query) => self.evaluate_soql(query.span),
             Expression::Sosl(query) => self.evaluate_sosl(query.span),
             Expression::Variable(identifier) => self.evaluate_variable(identifier),
-            Expression::Assignment { target, value, .. } => self.evaluate_assignment(target, value),
+            Expression::Assignment {
+                target,
+                operator,
+                operator_span,
+                value,
+                ..
+            } => self.evaluate_assignment(target, *operator, *operator_span, value),
             Expression::NewCollection {
                 ty,
                 initializer,
@@ -2427,6 +2479,21 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         if matches!(value, Value::Null(_)) {
             return Ok(Value::Null(Some(target.clone())));
         }
+        match (&value, target) {
+            (Value::Integer(value), TypeName::Long) => return Ok(Value::Long(*value)),
+            (Value::Long(value), TypeName::Integer) => {
+                return i32::try_from(*value)
+                    .map(|value| Value::Integer(i64::from(value)))
+                    .map_err(|_| {
+                        runtime_exception(
+                            "TypeException",
+                            "Long value is out of range for Integer",
+                            span,
+                        )
+                    });
+            }
+            _ => {}
+        }
         if self.value_has_type(&value, target) || matches!(target, TypeName::Object) {
             return Ok(value);
         }
@@ -2445,90 +2512,242 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn evaluate_assignment(
         &mut self,
         target: &AssignmentTarget,
+        operator: AssignmentOperator,
+        operator_span: Span,
         value: &Expression,
     ) -> Result<Value, Diagnostic> {
-        match target {
-            AssignmentTarget::Variable(identifier) => {
-                let value = self.evaluate(value)?;
-                let target = self
-                    .program()
-                    .reference_target(identifier.span)
-                    .ok_or_else(|| {
-                        Diagnostic::new("unresolved assignment target", identifier.span)
-                    })?;
-                match target {
-                    ReferenceTarget::Local => self.assign_variable(identifier, value),
-                    ReferenceTarget::InstanceMember(target) => {
-                        let receiver = self.current_receiver.ok_or_else(|| {
-                            Diagnostic::new("missing assignment receiver", identifier.span)
-                        })?;
-                        self.write_class_member(target, Some(receiver), value, identifier.span)
-                    }
-                    ReferenceTarget::StaticMember(target) => {
-                        self.write_class_member(target, None, value, identifier.span)
-                    }
-                    ReferenceTarget::This | ReferenceTarget::Super(_) => Err(Diagnostic::new(
-                        "cannot assign to this or super",
-                        identifier.span,
-                    )),
-                }
-            }
+        let place = self.resolve_assignment_place(target)?;
+        if operator == AssignmentOperator::Assign {
+            let value = self.evaluate(value)?;
+            return self.write_place(&place, value, target.span());
+        }
+
+        let left = self.read_place(&place, operator_span)?;
+        let right = self.evaluate(value)?;
+        let operation = self
+            .program()
+            .binary_operation(operator_span)
+            .ok_or_else(|| Diagnostic::new("unresolved compound operation", operator_span))?;
+        let result = self.apply_checked_binary(operation, left, right, operator_span)?;
+        self.write_place(&place, result, target.span())
+    }
+
+    fn resolve_assignment_place(&mut self, target: &AssignmentTarget) -> Result<Place, Diagnostic> {
+        let syntax = match target {
+            AssignmentTarget::Variable(identifier) => PlaceSyntax::Variable(identifier),
             AssignmentTarget::Index {
                 collection,
                 index,
                 span,
-            } => {
-                let collection_value = self.evaluate(collection)?;
-                let index_value = self.evaluate(index)?;
-                let value = self.evaluate(value)?;
-                self.assign_index(collection_value, index_value, value, index.span(), *span)
-            }
-            AssignmentTarget::Member {
+            } => PlaceSyntax::Index {
+                collection,
+                index,
+                span: *span,
+            },
+            AssignmentTarget::Member { receiver, span, .. } => PlaceSyntax::Member {
                 receiver,
-                member: _,
+                span: *span,
+            },
+        };
+        self.resolve_place(syntax)
+    }
+
+    fn resolve_mutation_place(&mut self, operand: &Expression) -> Result<Place, Diagnostic> {
+        let syntax = match operand {
+            Expression::Variable(identifier) => PlaceSyntax::Variable(identifier),
+            Expression::Index {
+                collection,
+                index,
                 span,
-            } => {
-                let target = self
-                    .program()
-                    .member_target(*span)
-                    .ok_or_else(|| Diagnostic::new("unresolved member assignment", *span))?;
-                let value = self.evaluate(value)?;
-                match target {
-                    MemberTarget::Static(target) => {
-                        self.write_class_member(target, None, value, *span)
-                    }
-                    MemberTarget::Instance(target) => {
-                        let receiver = match self.evaluate(receiver)? {
-                            Value::Object(receiver) => receiver,
-                            Value::Null(_) => {
-                                return Err(runtime_exception(
-                                    "NullPointerException",
-                                    "member assignment receiver is null",
-                                    receiver.span(),
-                                ));
-                            }
-                            _ => return Err(invalid_runtime_operands(receiver.span())),
-                        };
-                        self.write_class_member(target, Some(receiver), value, *span)
-                    }
-                    MemberTarget::SObjectField {
-                        object_id,
-                        field_id,
-                    } => {
-                        let receiver = self.evaluate_sobject_receiver(receiver, None)?;
-                        self.write_sobject_field(receiver, object_id, field_id, value, *span)
-                    }
-                    MemberTarget::SObjectRelationship { .. } => Err(Diagnostic::new(
-                        "cannot assign a parent relationship value directly",
-                        *span,
-                    )),
-                    MemberTarget::TriggerContext(_) => Err(Diagnostic::new(
-                        "Trigger context variables are read-only",
-                        *span,
-                    )),
-                }
+            } => PlaceSyntax::Index {
+                collection,
+                index,
+                span: *span,
+            },
+            Expression::MemberAccess {
+                receiver,
+                safe_navigation: false,
+                span,
+                ..
+            } => PlaceSyntax::Member {
+                receiver,
+                span: *span,
+            },
+            _ => {
+                return Err(Diagnostic::new(
+                    "mutation operand must be an assignable value",
+                    operand.span(),
+                ));
             }
+        };
+        self.resolve_place(syntax)
+    }
+
+    fn resolve_place(&mut self, syntax: PlaceSyntax<'_>) -> Result<Place, Diagnostic> {
+        let span = syntax.span();
+        let target = self
+            .program()
+            .place_target(span)
+            .ok_or_else(|| Diagnostic::new("unresolved assignable place", span))?;
+        match target {
+            PlaceTarget::Local => {
+                let PlaceSyntax::Variable(identifier) = syntax else {
+                    return Err(Diagnostic::new("invalid local place syntax", span));
+                };
+                Ok(Place::Local(identifier.clone()))
+            }
+            PlaceTarget::InstanceMember(target) => {
+                self.resolve_instance_member_place(syntax, target, span)
+            }
+            PlaceTarget::StaticMember(target) => Ok(Place::ClassMember {
+                target,
+                receiver: None,
+            }),
+            PlaceTarget::ListIndex => self.resolve_list_index_place(syntax, span),
+            PlaceTarget::SObjectField {
+                object_id,
+                field_id,
+            } => self.resolve_sobject_field_place(syntax, object_id, field_id, span),
         }
+    }
+
+    fn resolve_instance_member_place(
+        &mut self,
+        syntax: PlaceSyntax<'_>,
+        target: ClassMemberId,
+        span: Span,
+    ) -> Result<Place, Diagnostic> {
+        let receiver = match syntax {
+            PlaceSyntax::Variable(_) => self
+                .current_receiver
+                .ok_or_else(|| Diagnostic::new("missing instance receiver", span))?,
+            PlaceSyntax::Member { receiver, .. } => match self.evaluate(receiver)? {
+                Value::Object(receiver) => receiver,
+                Value::Null(_) => {
+                    return Err(runtime_exception(
+                        "NullPointerException",
+                        "member assignment receiver is null",
+                        receiver.span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(receiver.span())),
+            },
+            PlaceSyntax::Index { .. } => {
+                return Err(Diagnostic::new("invalid member place syntax", span));
+            }
+        };
+        Ok(Place::ClassMember {
+            target,
+            receiver: Some(receiver),
+        })
+    }
+
+    fn resolve_list_index_place(
+        &mut self,
+        syntax: PlaceSyntax<'_>,
+        place_span: Span,
+    ) -> Result<Place, Diagnostic> {
+        let PlaceSyntax::Index {
+            collection, index, ..
+        } = syntax
+        else {
+            return Err(Diagnostic::new("invalid indexed place syntax", place_span));
+        };
+        let collection_value = self.evaluate(collection)?;
+        let index_span = index.span();
+        let index_value = self.evaluate(index)?;
+        let collection = self.expect_collection_id(collection_value, collection.span())?;
+        let index = self.expect_index(index_value, index_span)?;
+        self.ensure_collection_mutable(collection, place_span)?;
+        let Collection::List { elements, .. } = self.collection(collection) else {
+            return Err(invalid_runtime_operands(place_span));
+        };
+        let index = checked_list_index(index, elements.len(), false, index_span)?;
+        Ok(Place::ListIndex { collection, index })
+    }
+
+    fn resolve_sobject_field_place(
+        &mut self,
+        syntax: PlaceSyntax<'_>,
+        object_id: ObjectTypeId,
+        field_id: FieldId,
+        span: Span,
+    ) -> Result<Place, Diagnostic> {
+        let PlaceSyntax::Member { receiver, .. } = syntax else {
+            return Err(Diagnostic::new("invalid SObject place syntax", span));
+        };
+        let receiver = self.evaluate_sobject_receiver(receiver, None)?;
+        Ok(Place::SObjectField {
+            receiver,
+            object_id: object_id.index(),
+            field_id: field_id.index(),
+        })
+    }
+
+    fn read_place(&mut self, place: &Place, span: Span) -> Result<Value, Diagnostic> {
+        match place {
+            Place::Local(identifier) => self.lookup(identifier).map(|slot| slot.value.clone()),
+            Place::ClassMember { target, receiver } => {
+                self.read_class_member(*target, *receiver, span)
+            }
+            Place::ListIndex { collection, index } => {
+                let Collection::List { elements, .. } = self.collection(*collection) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(elements[*index].clone())
+            }
+            Place::SObjectField {
+                receiver,
+                object_id,
+                field_id,
+            } => self.read_sobject_field(*receiver, *object_id, *field_id, span),
+        }
+    }
+
+    fn write_place(
+        &mut self,
+        place: &Place,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match place {
+            Place::Local(identifier) => self.assign_variable(identifier, value),
+            Place::ClassMember { target, receiver } => {
+                self.write_class_member(*target, *receiver, value, span)
+            }
+            Place::ListIndex { collection, index } => {
+                let element_type = match self.collection(*collection) {
+                    Collection::List { element_type, .. } => element_type.clone(),
+                    _ => return Err(invalid_runtime_operands(span)),
+                };
+                let value = typed_value(value, &element_type);
+                let Collection::List { elements, .. } = self.collection_mut(*collection) else {
+                    unreachable!("List place was resolved above")
+                };
+                elements[*index] = value.clone();
+                Ok(value)
+            }
+            Place::SObjectField {
+                receiver,
+                object_id,
+                field_id,
+            } => self.write_sobject_field(*receiver, *object_id, *field_id, value, span),
+        }
+    }
+
+    fn apply_checked_binary(
+        &self,
+        operation: CheckedBinaryOperation,
+        left: Value,
+        right: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if operation == CheckedBinaryOperation::StringConcat {
+            return Ok(Value::String(
+                self.stringify_value(&left) + &self.stringify_value(&right),
+            ));
+        }
+        numeric::apply_binary(operation, left, right, span)
     }
 
     fn evaluate_new_collection(
@@ -2558,12 +2777,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             CollectionInitializer::SizedArray(size) => {
                 let size_span = size.span();
                 let value = self.evaluate(size)?;
-                let Value::Integer(size_value) = value else {
-                    return Err(runtime_exception(
-                        "NullPointerException",
-                        "array size must be a non-null Integer",
-                        size_span,
-                    ));
+                let size_value = match value {
+                    Value::Integer(value) | Value::Long(value) => value,
+                    _ => {
+                        return Err(runtime_exception(
+                            "NullPointerException",
+                            "array size must be a non-null Integer",
+                            size_span,
+                        ));
+                    }
                 };
                 if size_value < 0 {
                     return Err(runtime_exception(
@@ -2790,39 +3012,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(elements[index].clone())
     }
 
-    fn assign_index(
-        &mut self,
-        collection_value: Value,
-        index_value: Value,
-        value: Value,
-        index_span: Span,
-        target_span: Span,
-    ) -> Result<Value, Diagnostic> {
-        let id = self.expect_collection_id(collection_value, target_span)?;
-        let index = self.expect_index(index_value, index_span)?;
-        self.ensure_collection_mutable(id, target_span)?;
-        let (element_type, size) = match self.collection(id) {
-            Collection::List {
-                element_type,
-                elements,
-                ..
-            } => (element_type.clone(), elements.len()),
-            _ => {
-                return Err(Diagnostic::new(
-                    "only List values support indexed assignment at runtime",
-                    target_span,
-                ));
-            }
-        };
-        let index = checked_list_index(index, size, false, index_span)?;
-        let value = typed_value(value, &element_type);
-        let Collection::List { elements, .. } = self.collection_mut(id) else {
-            unreachable!("List checked above")
-        };
-        elements[index] = value.clone();
-        Ok(value)
-    }
-
     fn evaluate_arguments(
         &mut self,
         arguments: &[Expression],
@@ -2845,38 +3034,41 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         operator_span: Span,
     ) -> Result<Value, Diagnostic> {
         match operator {
-            UnaryOperator::Positive => match self.evaluate(operand)? {
-                value @ (Value::Integer(_) | Value::Decimal(_)) => Ok(value),
-                Value::Null(_) => Err(runtime_exception(
-                    "NullPointerException",
-                    "expected non-null numeric value at runtime",
-                    operand.span(),
-                )),
-                _ => Err(invalid_runtime_operands(operand.span())),
-            },
-            UnaryOperator::Negate => match self.evaluate(operand)? {
-                Value::Integer(value) => value
-                    .checked_neg()
-                    .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(operator_span)),
-                Value::Decimal(value) => value
-                    .checked_mul(Decimal::NEGATIVE_ONE)
-                    .map(Value::Decimal)
-                    .ok_or_else(|| integer_overflow(operator_span)),
-                Value::Null(_) => Err(runtime_exception(
-                    "NullPointerException",
-                    "expected non-null numeric value at runtime",
-                    operand.span(),
-                )),
-                _ => Err(invalid_runtime_operands(operand.span())),
-            },
+            UnaryOperator::Positive | UnaryOperator::Negate | UnaryOperator::BitwiseNot => {
+                let operation = self
+                    .program()
+                    .unary_operation(operator_span)
+                    .ok_or_else(|| Diagnostic::new("unresolved unary operation", operator_span))?;
+                if operation == CheckedUnaryOperation::Negate(NumericKind::Integer)
+                    && matches!(
+                        operand,
+                        Expression::IntegerLiteral(value, _)
+                            if *value == i64::from(i32::MAX) + 1
+                    )
+                {
+                    return Ok(Value::Integer(i64::from(i32::MIN)));
+                }
+                if operation == CheckedUnaryOperation::Negate(NumericKind::Long)
+                    && matches!(
+                        operand,
+                        Expression::LongLiteral(value, _)
+                            if *value == i128::from(i64::MAX) + 1
+                    )
+                {
+                    return Ok(Value::Long(i64::MIN));
+                }
+                let value = self.evaluate(operand)?;
+                numeric::apply_unary(operation, value, operator_span)
+            }
             UnaryOperator::Not => {
                 let value = self.evaluate_boolean(operand)?;
                 Ok(Value::Boolean(!value))
             }
-            UnaryOperator::PrefixIncrement => self.mutate_integer(operand, 1, false, operator_span),
+            UnaryOperator::PrefixIncrement => {
+                self.mutate_integral(operand, 1, false, operator_span)
+            }
             UnaryOperator::PrefixDecrement => {
-                self.mutate_integer(operand, -1, false, operator_span)
+                self.mutate_integral(operand, -1, false, operator_span)
             }
         }
     }
@@ -2891,7 +3083,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             PostfixOperator::Increment => 1,
             PostfixOperator::Decrement => -1,
         };
-        self.mutate_integer(operand, delta, true, operator_span)
+        self.mutate_integral(operand, delta, true, operator_span)
     }
 
     fn evaluate_binary(
@@ -2920,96 +3112,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
         let left = self.evaluate(left)?;
         let right = self.evaluate(right)?;
+        if let Some(operation) = self.program().binary_operation(operator_span) {
+            return self.apply_checked_binary(operation, left, right, operator_span);
+        }
         match operator {
-            BinaryOperator::Add => {
-                if left.has_string_type() || right.has_string_type() {
-                    Ok(Value::String(
-                        self.stringify_value(&left) + &self.stringify_value(&right),
-                    ))
-                } else {
-                    match (&left, &right) {
-                        (Value::Integer(left), Value::Integer(right)) => left
-                            .checked_add(*right)
-                            .map(Value::Integer)
-                            .ok_or_else(|| integer_overflow(operator_span)),
-                        _ if is_numeric_value(&left) && is_numeric_value(&right) => {
-                            decimal_binary(left, right, operator_span, Decimal::checked_add)
-                        }
-                        (Value::Null(_), _) | (_, Value::Null(_)) => Err(runtime_exception(
-                            "NullPointerException",
-                            "operator cannot be applied to null at runtime",
-                            operator_span,
-                        )),
-                        _ => Err(invalid_runtime_operands(operator_span)),
-                    }
-                }
-            }
-            BinaryOperator::Subtract => {
-                if matches!((&left, &right), (Value::Integer(_), Value::Integer(_))) {
-                    checked_integer_binary(left, right, operator_span, i64::checked_sub)
-                } else {
-                    decimal_binary(left, right, operator_span, Decimal::checked_sub)
-                }
-            }
-            BinaryOperator::Multiply => {
-                if matches!((&left, &right), (Value::Integer(_), Value::Integer(_))) {
-                    checked_integer_binary(left, right, operator_span, i64::checked_mul)
-                } else {
-                    decimal_binary(left, right, operator_span, Decimal::checked_mul)
-                }
-            }
-            BinaryOperator::Divide => {
-                if is_numeric_value(&left)
-                    && is_numeric_value(&right)
-                    && !matches!((&left, &right), (Value::Integer(_), Value::Integer(_)))
-                {
-                    if decimal_value(&right, operator_span)?.is_zero() {
-                        return Err(runtime_exception(
-                            "MathException",
-                            "division by zero",
-                            operator_span,
-                        ));
-                    }
-                    return decimal_binary(left, right, operator_span, Decimal::checked_div);
-                }
-                let (left, right) = integer_pair(left, right, operator_span)?;
-                if right == 0 {
-                    return Err(runtime_exception(
-                        "MathException",
-                        "division by zero",
-                        operator_span,
-                    ));
-                }
-                left.checked_div(right)
-                    .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(operator_span))
-            }
-            BinaryOperator::Remainder => {
-                if is_numeric_value(&left)
-                    && is_numeric_value(&right)
-                    && !matches!((&left, &right), (Value::Integer(_), Value::Integer(_)))
-                {
-                    if decimal_value(&right, operator_span)?.is_zero() {
-                        return Err(runtime_exception(
-                            "MathException",
-                            "remainder by zero",
-                            operator_span,
-                        ));
-                    }
-                    return decimal_binary(left, right, operator_span, Decimal::checked_rem);
-                }
-                let (left, right) = integer_pair(left, right, operator_span)?;
-                if right == 0 {
-                    return Err(runtime_exception(
-                        "MathException",
-                        "remainder by zero",
-                        operator_span,
-                    ));
-                }
-                left.checked_rem(right)
-                    .map(Value::Integer)
-                    .ok_or_else(|| integer_overflow(operator_span))
-            }
             BinaryOperator::Less => {
                 compare_values(left, right, operator_span, |ordering| ordering.is_lt())
             }
@@ -3025,6 +3131,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             BinaryOperator::Equal => Ok(Value::Boolean(self.operator_values_equal(&left, &right))),
             BinaryOperator::NotEqual => {
                 Ok(Value::Boolean(!self.operator_values_equal(&left, &right)))
+            }
+            BinaryOperator::Add
+            | BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::Divide
+            | BinaryOperator::Remainder
+            | BinaryOperator::BitwiseAnd
+            | BinaryOperator::BitwiseOr
+            | BinaryOperator::BitwiseXor
+            | BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight
+            | BinaryOperator::UnsignedShiftRight => {
+                Err(Diagnostic::new("missing checked operation", operator_span))
             }
             BinaryOperator::And | BinaryOperator::Or => unreachable!("handled above"),
         }
@@ -3042,191 +3161,30 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
-    fn mutate_integer(
+    fn mutate_integral(
         &mut self,
         operand: &Expression,
-        delta: i64,
+        delta: i32,
         return_old: bool,
         operator_span: Span,
     ) -> Result<Value, Diagnostic> {
-        match operand {
-            Expression::Variable(identifier) => {
-                let target = self
-                    .program()
-                    .reference_target(identifier.span)
-                    .ok_or_else(|| Diagnostic::new("unresolved increment target", operator_span))?;
-                match target {
-                    ReferenceTarget::Local => {
-                        let old = match self.lookup(identifier)?.value {
-                            Value::Integer(value) => value,
-                            _ => {
-                                return Err(runtime_exception(
-                                    "NullPointerException",
-                                    "increment/decrement requires a non-null Integer value",
-                                    operator_span,
-                                ));
-                            }
-                        };
-                        let new = old
-                            .checked_add(delta)
-                            .ok_or_else(|| integer_overflow(operator_span))?;
-                        self.lookup_mut(identifier)?.value = Value::Integer(new);
-                        Ok(Value::Integer(if return_old { old } else { new }))
-                    }
-                    ReferenceTarget::InstanceMember(target) => {
-                        let receiver = self.current_receiver.ok_or_else(|| {
-                            Diagnostic::new("missing increment receiver", operator_span)
-                        })?;
-                        self.mutate_class_member(
-                            target,
-                            Some(receiver),
-                            delta,
-                            return_old,
-                            operator_span,
-                        )
-                    }
-                    ReferenceTarget::StaticMember(target) => {
-                        self.mutate_class_member(target, None, delta, return_old, operator_span)
-                    }
-                    ReferenceTarget::This | ReferenceTarget::Super(_) => {
-                        Err(invalid_runtime_operands(operator_span))
-                    }
-                }
-            }
-            Expression::MemberAccess { receiver, span, .. } => {
-                let target = self
-                    .program()
-                    .member_target(*span)
-                    .ok_or_else(|| Diagnostic::new("unresolved increment target", *span))?;
-                match target {
-                    MemberTarget::Static(target) => {
-                        self.mutate_class_member(target, None, delta, return_old, operator_span)
-                    }
-                    MemberTarget::Instance(target) => {
-                        let receiver = match self.evaluate(receiver)? {
-                            Value::Object(receiver) => receiver,
-                            Value::Null(_) => {
-                                return Err(runtime_exception(
-                                    "NullPointerException",
-                                    "increment receiver is null",
-                                    receiver.span(),
-                                ));
-                            }
-                            _ => return Err(invalid_runtime_operands(receiver.span())),
-                        };
-                        self.mutate_class_member(
-                            target,
-                            Some(receiver),
-                            delta,
-                            return_old,
-                            operator_span,
-                        )
-                    }
-                    MemberTarget::SObjectField {
-                        object_id,
-                        field_id,
-                    } => {
-                        let receiver = self.evaluate_sobject_receiver(receiver, None)?;
-                        let old = match self.read_sobject_field(
-                            receiver,
-                            object_id,
-                            field_id,
-                            operator_span,
-                        )? {
-                            Value::Integer(value) => value,
-                            Value::Null(_) => {
-                                return Err(runtime_exception(
-                                    "NullPointerException",
-                                    "increment/decrement requires a non-null Integer value",
-                                    operator_span,
-                                ));
-                            }
-                            _ => return Err(invalid_runtime_operands(operator_span)),
-                        };
-                        let new = old
-                            .checked_add(delta)
-                            .ok_or_else(|| integer_overflow(operator_span))?;
-                        self.write_sobject_field(
-                            receiver,
-                            object_id,
-                            field_id,
-                            Value::Integer(new),
-                            operator_span,
-                        )?;
-                        Ok(Value::Integer(if return_old { old } else { new }))
-                    }
-                    MemberTarget::SObjectRelationship { .. } => {
-                        Err(invalid_runtime_operands(operator_span))
-                    }
-                    MemberTarget::TriggerContext(_) => Err(invalid_runtime_operands(operator_span)),
-                }
-            }
-            Expression::Index {
-                collection,
-                index,
-                span,
-            } => {
-                let collection_value = self.evaluate(collection)?;
-                let index_value = self.evaluate(index)?;
-                let id = self.expect_collection_id(collection_value, collection.span())?;
-                let index_value = self.expect_index(index_value, index.span())?;
-                self.ensure_collection_mutable(id, *span)?;
-                let (size, old) = match self.collection(id) {
-                    Collection::List { elements, .. } => {
-                        let index =
-                            checked_list_index(index_value, elements.len(), false, index.span())?;
-                        (elements.len(), (index, elements[index].clone()))
-                    }
-                    _ => return Err(invalid_runtime_operands(*span)),
-                };
-                let (index, old) = old;
-                let Value::Integer(old) = old else {
-                    return Err(runtime_exception(
-                        "NullPointerException",
-                        "increment/decrement requires a non-null Integer value",
-                        operator_span,
-                    ));
-                };
-                let new = old
-                    .checked_add(delta)
-                    .ok_or_else(|| integer_overflow(operator_span))?;
-                debug_assert!(index < size);
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements[index] = Value::Integer(new);
-                Ok(Value::Integer(if return_old { old } else { new }))
-            }
-            _ => Err(Diagnostic::new(
-                "increment/decrement operand must be an assignable value",
-                operator_span,
-            )),
-        }
-    }
-
-    fn mutate_class_member(
-        &mut self,
-        target: ClassMemberId,
-        receiver: Option<ObjectId>,
-        delta: i64,
-        return_old: bool,
-        span: Span,
-    ) -> Result<Value, Diagnostic> {
-        let old = match self.read_class_member(target, receiver, span)? {
-            Value::Integer(value) => value,
-            _ => {
+        let place = self.resolve_mutation_place(operand)?;
+        let old = self.read_place(&place, operator_span)?;
+        let kind = match old {
+            Value::Integer(_) | Value::Null(Some(TypeName::Integer)) => NumericKind::Integer,
+            Value::Long(_) | Value::Null(Some(TypeName::Long)) => NumericKind::Long,
+            Value::Null(_) => {
                 return Err(runtime_exception(
                     "NullPointerException",
-                    "increment/decrement requires a non-null Integer value",
-                    span,
+                    "increment/decrement requires a non-null Integer or Long value",
+                    operator_span,
                 ));
             }
+            _ => return Err(invalid_runtime_operands(operator_span)),
         };
-        let new = old
-            .checked_add(delta)
-            .ok_or_else(|| integer_overflow(span))?;
-        self.write_class_member(target, receiver, Value::Integer(new), span)?;
-        Ok(Value::Integer(if return_old { old } else { new }))
+        let new = numeric::increment(kind, old.clone(), delta, operator_span)?;
+        self.write_place(&place, new.clone(), operator_span)?;
+        Ok(if return_old { old } else { new })
     }
 
     fn assign_variable(
@@ -3361,6 +3319,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::String(_) => matches!(target, TypeName::String),
             Value::Boolean(_) => matches!(target, TypeName::Boolean),
             Value::Integer(_) => matches!(target, TypeName::Integer),
+            Value::Long(_) => matches!(target, TypeName::Long),
             Value::Decimal(_) => matches!(target, TypeName::Decimal),
             Value::Date(_) => matches!(target, TypeName::Date),
             Value::Datetime(_) => matches!(target, TypeName::Datetime),
@@ -3407,6 +3366,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::String(_) => TypeName::String.apex_name(),
             Value::Boolean(_) => TypeName::Boolean.apex_name(),
             Value::Integer(_) => TypeName::Integer.apex_name(),
+            Value::Long(_) => TypeName::Long.apex_name(),
             Value::Decimal(_) => TypeName::Decimal.apex_name(),
             Value::Date(_) => TypeName::Date.apex_name(),
             Value::Datetime(_) => TypeName::Datetime.apex_name(),
@@ -3509,45 +3469,21 @@ fn exception_matches(exception: &Diagnostic, catch_type: &TypeName) -> bool {
         || exception_type.eq_ignore_ascii_case(&catch_type.apex_name())
 }
 
-fn checked_integer_binary(
-    left: Value,
-    right: Value,
-    span: Span,
-    operation: fn(i64, i64) -> Option<i64>,
-) -> Result<Value, Diagnostic> {
-    let (left, right) = integer_pair(left, right, span)?;
-    operation(left, right)
-        .map(Value::Integer)
-        .ok_or_else(|| integer_overflow(span))
-}
-
-fn integer_pair(left: Value, right: Value, span: Span) -> Result<(i64, i64), Diagnostic> {
-    match (left, right) {
-        (Value::Integer(left), Value::Integer(right)) => Ok((left, right)),
-        (Value::Null(_), _) | (_, Value::Null(_)) => Err(runtime_exception(
-            "NullPointerException",
-            "operator cannot be applied to null at runtime",
-            span,
-        )),
-        _ => Err(invalid_runtime_operands(span)),
-    }
-}
-
 fn typed_value(value: Value, ty: &TypeName) -> Value {
     match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
-        Value::Integer(value) if *ty == TypeName::Decimal => Value::Decimal(Decimal::from(value)),
+        Value::Integer(value) if *ty == TypeName::Long => Value::Long(value),
+        Value::Integer(value) | Value::Long(value) if *ty == TypeName::Decimal => {
+            Value::Decimal(Decimal::from(value))
+        }
         value => value,
     }
-}
-
-fn is_numeric_value(value: &Value) -> bool {
-    matches!(value, Value::Integer(_) | Value::Decimal(_))
 }
 
 fn decimal_value(value: &Value, span: Span) -> Result<Decimal, Diagnostic> {
     match value {
         Value::Integer(value) => Ok(Decimal::from(*value)),
+        Value::Long(value) => Ok(Decimal::from(*value)),
         Value::Decimal(value) => Ok(*value),
         Value::Null(_) => Err(runtime_exception(
             "NullPointerException",
@@ -3558,19 +3494,6 @@ fn decimal_value(value: &Value, span: Span) -> Result<Decimal, Diagnostic> {
     }
 }
 
-fn decimal_binary(
-    left: Value,
-    right: Value,
-    span: Span,
-    operation: fn(Decimal, Decimal) -> Option<Decimal>,
-) -> Result<Value, Diagnostic> {
-    let left = decimal_value(&left, span)?;
-    let right = decimal_value(&right, span)?;
-    operation(left, right)
-        .map(Value::Decimal)
-        .ok_or_else(|| runtime_exception("MathException", "Decimal arithmetic overflow", span))
-}
-
 fn compare_values(
     left: Value,
     right: Value,
@@ -3578,12 +3501,10 @@ fn compare_values(
     comparison: impl FnOnce(Ordering) -> bool,
 ) -> Result<Value, Diagnostic> {
     let ordering = match (&left, &right) {
-        (Value::Integer(_), Value::Integer(_))
-        | (Value::Integer(_), Value::Decimal(_))
-        | (Value::Decimal(_), Value::Integer(_))
-        | (Value::Decimal(_), Value::Decimal(_)) => {
-            decimal_value(&left, span)?.cmp(&decimal_value(&right, span)?)
-        }
+        (
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_),
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_),
+        ) => decimal_value(&left, span)?.cmp(&decimal_value(&right, span)?),
         (Value::Date(left), Value::Date(right)) => left.cmp(right),
         (Value::Datetime(left), Value::Datetime(right)) => left.cmp(right),
         (Value::Time(left), Value::Time(right)) => left.cmp(right),

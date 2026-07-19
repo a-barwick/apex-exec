@@ -353,11 +353,9 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
     expression: &'ast Expression,
 ) {
     match expression {
-        Expression::StringLiteral(..)
-        | Expression::BooleanLiteral(..)
-        | Expression::IntegerLiteral(..)
-        | Expression::DecimalLiteral(..)
-        | Expression::NullLiteral(..) => {}
+        Expression::StringLiteral(..) | Expression::BooleanLiteral(..) => {}
+        Expression::IntegerLiteral(..) | Expression::LongLiteral(..) => {}
+        Expression::DecimalLiteral(..) | Expression::NullLiteral(..) => {}
         Expression::Soql(query) => walk_soql_query(visitor, query),
         Expression::Sosl(query) => walk_sosl_query(visitor, query),
         Expression::Variable(identifier) => visitor.visit_identifier(identifier),
@@ -556,6 +554,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         TypeName::String
         | TypeName::Boolean
         | TypeName::Integer
+        | TypeName::Long
         | TypeName::Decimal
         | TypeName::Date
         | TypeName::Datetime

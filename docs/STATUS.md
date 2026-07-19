@@ -9,7 +9,8 @@ S0 — Phase 2 stabilization — Complete
 The pre-open-source audit and execution strategy are now captured in
 [`docs/STABILIZATION.md`](STABILIZATION.md). The bounded S0 process-safety and
 correctness criteria have passed. M18 — null-aware expressions is complete;
-M19 — bitwise, shift, `Long`, and compound operators is next.
+M19 — bitwise, shift, `Long`, and compound operators is complete; M20 — nested
+declarations, enums, and type literals is next.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -38,6 +39,15 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Single-quoted strings, comments, and common string escapes
 - Precedence-based arithmetic, comparison, equality, and Boolean expressions
 - String concatenation and prefix/postfix increment and decrement
+- Signed 32-bit `Integer` and signed 64-bit `Long` arithmetic with checked
+  overflow, `L` literals, mixed numeric promotion, casts, equality, sorting,
+  epoch-millisecond platform results, and deterministic serialization
+- Boolean/integral `&`, `|`, and `^`, unary `~`, `<<`, `>>`, and `>>>` with
+  Apex-width shift masking, precedence, sign extension, and eager Boolean
+  operand evaluation
+- Arithmetic, String, bitwise, and shift compound assignment over locals, List
+  indexes, class members, and SObject fields through a shared evaluate-once
+  checked place boundary
 - Right-associative ternary expressions with checked Boolean conditions,
   common result typing, lazy arm execution, and production branch coverage
 - Checked `instanceof` expressions with viable-alternative diagnostics,
@@ -199,7 +209,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Trigger statement and branch observations included in Apex test coverage
 - A handler-oriented M9 example that checks, invokes, and runs three Apex tests
   with 100% production line and branch coverage
-- Decimal literals and checked mixed Integer/Decimal arithmetic, comparison,
+- Decimal literals and checked mixed Integer/Long/Decimal arithmetic, comparison,
   scale, parsing, formatting, and overflow/division failures
 - Immutable `Date`, `Datetime`, and `Time` values with deterministic UTC
   construction, parsing, component access, formatting, and arithmetic
@@ -366,41 +376,35 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 366 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 85.08% overall
-  and 82.80% across the M18-changed production modules. The checked-in M18 Apex
-  project reports 19/19 production lines and 24/24 null-aware branches covered.
+- 380 ordinary tests pass with no failures (seven future North Star parser
+  goals remain intentionally ignored); LLVM source-line coverage is 85.28%
+  overall and 83.87% across the M19-changed production modules. The checked-in
+  M19 Apex project passes 4/4 Apex tests and reports 37/37 production lines
+  covered.
 
 ## Immediate target
 
-M19 bitwise, shift, `Long`, and compound operators is the next planned feature
+M20 nested declarations, enums, and type literals is the next planned feature
 milestone. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-M18 reproduces 5 of 14 passing indicators (**35.71%**): lexer 5 of 7
-(**71.43%**) and parser 0 of 7 (**0%**), a gain of four lexer indicators from
-the Phase 2 baseline. `SOQL.cls`, `Logger.cls`, `Rollup.cls`,
-`RollupService.cls`, and `JSONParse.cls` now lex completely. Their first parser
-diagnostics are unsupported annotations or nested declarations; the two
-remaining lexer blockers are bitwise/compound operators in
-`fflib_SObjectDomain.cls` and `Puff.cls`. Ternary and `instanceof` no longer
-appear as first diagnostics.
+M19 reproduces 7 of 14 passing indicators (**50.00%**): lexer 7 of 7
+(**100.00%**) and parser 0 of 7 (**0%**), a gain of six lexer indicators from
+the Phase 2 baseline. All seven pinned files now lex completely and the lexer
+goals run in the ordinary suite. Their first parser diagnostics are unsupported
+annotations or nested declarations; bitwise and compound tokens no longer
+block `fflib_SObjectDomain.cls` or `Puff.cls`.
 
 Later reachable blockers include arbitrary annotations, nested declarations,
 enums, class literals, static initializer blocks, `switch`/`when`,
 uninitialized and multi-declarator locals, constructor delegation, arbitrary
 generic type references, and additional modifiers/literals. These are
 syntax-progress indicators, not semantic, execution, or Salesforce
-compatibility percentages. Safe navigation and null coalescing no longer
-appear as first diagnostics. M21 requires all 14 original fixtures to pass
+compatibility percentages. M21 requires all 14 original fixtures to pass
 without `#[ignore]` or corpus changes.
-
-M18 moves the null-aware language slice through checking and execution but
-does not clear the earlier grammar blockers in the pinned sources, so its North
-Star movement is zero: lexer 5/7, parser 0/7, total 5/14.
 
 ## Phase 2 evidence baseline
 

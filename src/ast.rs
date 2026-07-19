@@ -279,6 +279,7 @@ pub enum Expression {
     StringLiteral(String, Span),
     BooleanLiteral(bool, Span),
     IntegerLiteral(i64, Span),
+    LongLiteral(i128, Span),
     DecimalLiteral(String, Span),
     NullLiteral(Span),
     Soql(Box<SoqlQuery>),
@@ -286,6 +287,8 @@ pub enum Expression {
     Variable(Identifier),
     Assignment {
         target: AssignmentTarget,
+        operator: AssignmentOperator,
+        operator_span: Span,
         value: Box<Expression>,
         span: Span,
     },
@@ -381,6 +384,7 @@ impl Expression {
             Self::StringLiteral(_, span)
             | Self::BooleanLiteral(_, span)
             | Self::IntegerLiteral(_, span)
+            | Self::LongLiteral(_, span)
             | Self::DecimalLiteral(_, span)
             | Self::NullLiteral(span)
             | Self::Assignment { span, .. }
@@ -620,6 +624,7 @@ pub enum UnaryOperator {
     Positive,
     Negate,
     Not,
+    BitwiseNot,
     PrefixIncrement,
     PrefixDecrement,
 }
@@ -643,8 +648,30 @@ pub enum BinaryOperator {
     GreaterEqual,
     Equal,
     NotEqual,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
     And,
     Or,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssignmentOperator {
+    Assign,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -670,6 +697,7 @@ pub enum TypeName {
     String,
     Boolean,
     Integer,
+    Long,
     Decimal,
     Date,
     Datetime,
@@ -712,6 +740,7 @@ impl TypeName {
             "string" => Some(Self::String),
             "boolean" => Some(Self::Boolean),
             "integer" => Some(Self::Integer),
+            "long" => Some(Self::Long),
             "decimal" => Some(Self::Decimal),
             "date" => Some(Self::Date),
             "datetime" => Some(Self::Datetime),
@@ -771,6 +800,7 @@ impl TypeName {
             Self::String => "String".to_owned(),
             Self::Boolean => "Boolean".to_owned(),
             Self::Integer => "Integer".to_owned(),
+            Self::Long => "Long".to_owned(),
             Self::Decimal => "Decimal".to_owned(),
             Self::Date => "Date".to_owned(),
             Self::Datetime => "Datetime".to_owned(),
