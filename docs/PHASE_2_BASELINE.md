@@ -95,20 +95,17 @@ evidence is treated as durable release evidence.
 
 ## Enterprise evidence review
 
-The North Star sources are intentionally not an SFDX execution project or a
-conformance suite. The milestone examples prove focused features, not
-enterprise representativeness. There is currently no:
+The North Star sources remain syntax indicators rather than an SFDX execution
+project or conformance suite. M22 closes the enterprise-evidence gap with
+user-approved Nebula Logger Core v4.18.4, an immutable 1,055-file candidate
+manifest, a Salesforce API 65.0 denominator of 1,159 ordinary passing tests,
+per-test source closures and stage rates, three deterministic reruns, and an
+impact-ordered blocker census. The first honest strict numerator is 0/1,159:
+two production parse blockers each affect the complete denominator, so no test
+closure reaches checking.
 
-- approved representative-project selection rubric;
-- immutable real-project candidate;
-- Salesforce-derived ordinary-test denominator;
-- per-stage compatibility funnel;
-- deterministic rerun evidence; or
-- measured local execution/outcome-agreement percentage.
-
-M22 first freezes and reports an honest baseline. M28 improves that same
-denominator to at least 60%, with 80% as the stretch target; M30 revalidates it
-as part of the final evidence gate.
+M28 improves that same unfiltered denominator to at least 60%, with 80% as the
+stretch target; M30 revalidates it as part of the final evidence gate.
 
 ## Metadata review
 

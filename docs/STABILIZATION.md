@@ -10,9 +10,9 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Next feature milestone:** M22 — representative enterprise baseline
-- **Feature policy:** M18 through M21 are complete. M22 is the next evidence
-  milestone and retains the additional architecture prerequisites below.
+- **Next feature milestone:** M23 — broader SOQL fidelity
+- **Feature policy:** M18 through M22 are complete. M23 is the next language
+  milestone and is prioritized by the frozen M22 impact census.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.

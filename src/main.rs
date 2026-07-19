@@ -1,5 +1,6 @@
 use apex_exec::{check, execute, parse, test_runner::TestOptions, tokenize};
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::{self, BufRead, BufReader, IsTerminal},
     path::{Path, PathBuf},
@@ -38,6 +39,7 @@ fn run() -> Result<ExitCode, String> {
             | "oracle"
             | "ci"
             | "hybrid"
+            | "enterprise"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
@@ -72,16 +74,12 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    if command == "oracle" {
-        return run_oracle(args);
-    }
-
-    if command == "ci" {
-        return run_ci(args);
-    }
-
-    if command == "hybrid" {
-        return run_hybrid(args);
+    match command.as_str() {
+        "oracle" => return run_oracle(args),
+        "ci" => return run_ci(args),
+        "hybrid" => return run_hybrid(args),
+        "enterprise" => return run_enterprise(args),
+        _ => {}
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -448,6 +446,215 @@ fn run_ci(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     }
 }
 
+fn run_enterprise(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let subcommand = args.next().ok_or_else(usage)?;
+    match subcommand.as_str() {
+        "manifest" => run_enterprise_manifest(args),
+        "capture" => run_enterprise_capture(args),
+        "run" => run_enterprise_measure(args),
+        _ => Err(format!(
+            "unknown enterprise subcommand `{subcommand}`\n\n{}",
+            usage()
+        )),
+    }
+}
+
+fn run_enterprise_manifest(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let project = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut values = BTreeMap::new();
+    let mut package_roots = Vec::new();
+    let mut test_roots = Vec::new();
+    while let Some(argument) = args.next() {
+        record_manifest_option(
+            &argument,
+            &mut args,
+            &mut values,
+            &mut package_roots,
+            &mut test_roots,
+        )?;
+    }
+    package_roots.sort();
+    test_roots.sort();
+    let mut required = |name: &str| {
+        values
+            .remove(name)
+            .ok_or_else(|| format!("`enterprise manifest` requires `{name}`"))
+    };
+    let candidate = apex_exec::enterprise::CandidateIdentity {
+        name: required("--name")?,
+        repository: required("--repository")?,
+        git_commit: required("--commit")?,
+        git_tag: required("--tag")?,
+        api_version: required("--api-version")?,
+    };
+    let output = PathBuf::from(required("--output")?);
+    let manifest = apex_exec::enterprise::EnterpriseManifest::generate(
+        project,
+        candidate,
+        package_roots,
+        test_roots,
+    )?;
+    manifest.write(&output)?;
+    println!(
+        "Wrote enterprise manifest {} ({} inputs)",
+        output.display(),
+        manifest.inputs.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn record_manifest_option(
+    argument: &str,
+    args: &mut impl Iterator<Item = String>,
+    values: &mut BTreeMap<String, String>,
+    package_roots: &mut Vec<PathBuf>,
+    test_roots: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !matches!(
+        argument,
+        "--package-root"
+            | "--test-root"
+            | "--name"
+            | "--repository"
+            | "--commit"
+            | "--tag"
+            | "--api-version"
+            | "--output"
+    ) {
+        return Err(unknown_enterprise_option("manifest", argument));
+    }
+    let value = required_value(args, argument)?;
+    match argument {
+        "--package-root" => package_roots.push(PathBuf::from(value)),
+        "--test-root" => test_roots.push(PathBuf::from(value)),
+        "--name" | "--repository" | "--commit" | "--tag" | "--api-version" | "--output" => {
+            if values.insert(argument.to_owned(), value).is_some() {
+                return Err(format!("`{argument}` was provided more than once"));
+            }
+        }
+        _ => unreachable!("enterprise manifest option was prevalidated"),
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct EnterpriseCaptureArgs {
+    target_org: Option<String>,
+    output: Option<String>,
+    salesforce_cli: Option<String>,
+    wait_minutes: Option<String>,
+}
+
+impl EnterpriseCaptureArgs {
+    fn record(
+        &mut self,
+        argument: &str,
+        args: &mut impl Iterator<Item = String>,
+    ) -> Result<(), String> {
+        match argument {
+            "--target-org" => set_option(&mut self.target_org, args, argument),
+            "--output" => set_option(&mut self.output, args, argument),
+            "--sf" => set_option(&mut self.salesforce_cli, args, argument),
+            "--wait" => set_option(&mut self.wait_minutes, args, argument),
+            _ => Err(unknown_enterprise_option("capture", argument)),
+        }
+    }
+}
+
+fn run_enterprise_capture(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut parsed = EnterpriseCaptureArgs::default();
+    while let Some(argument) = args.next() {
+        parsed.record(&argument, &mut args)?;
+    }
+    let wait_minutes = parsed.wait_minutes.map_or(Ok(60), |value| {
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|wait| *wait > 0)
+            .ok_or_else(|| "`--wait` requires a positive integer number of minutes".to_owned())
+    })?;
+    let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+    let options = apex_exec::enterprise::SalesforceCaptureOptions {
+        target_org: parsed
+            .target_org
+            .ok_or_else(|| "`enterprise capture` requires `--target-org`".to_owned())?,
+        wait_minutes,
+    };
+    let output = PathBuf::from(
+        parsed
+            .output
+            .ok_or_else(|| "`enterprise capture` requires `--output`".to_owned())?,
+    );
+    let cli = parsed.salesforce_cli.map_or_else(
+        apex_exec::enterprise::EnterpriseSalesforceCli::default,
+        apex_exec::enterprise::EnterpriseSalesforceCli::new,
+    );
+    let capture = cli.capture(&manifest, &options)?;
+    capture.write(&output)?;
+    println!(
+        "Wrote Salesforce RunLocalTests capture {} ({} tests: {} passed, {} failed)",
+        output.display(),
+        capture.tests.len(),
+        capture.passed(),
+        capture.failed()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_enterprise_measure(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut salesforce_path = None;
+    let mut output = None;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--salesforce" => set_option(&mut salesforce_path, &mut args, &argument)?,
+            "--output" => set_option(&mut output, &mut args, &argument)?,
+            _ => return Err(unknown_enterprise_option("run", &argument)),
+        }
+    }
+    let salesforce_path =
+        salesforce_path.ok_or_else(|| "`enterprise run` requires `--salesforce`".to_owned())?;
+    let output =
+        PathBuf::from(output.ok_or_else(|| "`enterprise run` requires `--output`".to_owned())?);
+    let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+    let capture = apex_exec::enterprise::SalesforceCapture::load(salesforce_path)?;
+    let report = apex_exec::enterprise::run(
+        &manifest,
+        &capture,
+        &apex_exec::enterprise::EnterpriseRunOptions::default(),
+    )?;
+    report.write(&output)?;
+    println!(
+        "Wrote enterprise baseline {} (strict compatibility: {}/{}; {} matching passes, {} matching failures)",
+        output.display(),
+        report.counts.strict_compatible.count,
+        report.raw_denominator,
+        report.counts.matching_passes,
+        report.counts.matching_failures
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn set_option(
+    target: &mut Option<String>,
+    args: &mut impl Iterator<Item = String>,
+    name: &str,
+) -> Result<(), String> {
+    set_once(
+        target,
+        required_value(args, name)?,
+        &format!("`{name}` was provided more than once"),
+    )
+}
+
+fn unknown_enterprise_option(command: &str, argument: &str) -> String {
+    format!(
+        "unknown enterprise {command} option `{argument}`\n\n{}",
+        usage()
+    )
+}
+
 fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
     let mut target_org = None;
@@ -755,6 +962,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec enterprise run <manifest.json> --salesforce <snapshot.json> --output <report.json>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

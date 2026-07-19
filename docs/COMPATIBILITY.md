@@ -585,6 +585,39 @@ check-only deployment and selected tests pass. The org baseline was restored
 and recaptured clean. This is release-readiness evidence, not an **Exact**
 language or Salesforce compatibility claim.
 
+## M22 representative enterprise baseline
+
+Nebula Logger Core v4.18.4 is the user-approved representative project, pinned
+as a Git submodule at commit
+`55ba832d1d51680dd5e291d67ffe2104fa48977f`. The M22 manifest records all
+1,055 files below the core package root by SHA-256 and binds the repository,
+tag, commit, test roots, API 65.0, and Apex Exec version. No source patch or
+test exclusion is applied.
+
+Salesforce `RunLocalTests`, using pinned `@salesforce/cli/2.134.1` in a
+disposable Enterprise scratch org, froze 1,159 method-qualified tests before
+the candidate was inspected locally. Salesforce passed all 1,159. The sealed
+snapshot records an allowlist of org/test identity and outcomes; it does not
+record access tokens, refresh tokens, auth URLs, instance URLs, passwords, or
+raw CLI responses.
+
+The local report includes every frozen test, its conservative required Apex
+source closure (including package triggers), separate discovery/parse/check/
+execution/agreement metrics, exact blocker locations, and three deterministic
+reruns. It discovers 1,159/1,159 methods but reports 0/1,159 at every later
+stage and in the strict compatibility numerator. Matching passes, matching
+failures, and outcome mismatches are all zero because no closure reaches
+execution.
+
+This zero is a deliberate compatibility result, not a pipeline failure. Two
+production parse blockers affect all 1,159 tests: a typed `switch when` arm in
+`LogEntryEventHandler.cls` and the `TODAY` SOQL date literal in
+`LogManagementDataSelector.cls`. The next blocker affects 953 tests at a
+`System.runAs` block, followed by `@IsTest(IsParallel=true)` sites. The full 43
+location census in `evidence/milestone22/report.json` orders future work by
+affected tests. These figures describe the frozen Nebula candidate only; they
+are not a runtime or general Salesforce compatibility percentage.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

@@ -283,6 +283,56 @@ pub fn compile(path: impl AsRef<Path>) -> Result<Compilation, ProjectError> {
     ProjectCompiler::new().compile(path)
 }
 
+/// Compiles an explicit source closure against an already imported schema.
+///
+/// Enterprise compatibility measurement uses this boundary to prove that each
+/// Salesforce test's required source closure checks independently, without
+/// copying or rewriting the pinned project.
+pub(crate) fn compile_source_subset(
+    root: PathBuf,
+    files: &[SourceFile],
+    schema: &SchemaCatalog,
+) -> Result<Compilation, ProjectError> {
+    if files.is_empty() {
+        return Err(ProjectError::message(
+            "an explicit source closure cannot be empty",
+        ));
+    }
+    let mut units = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let source_id = SourceId::new(index + 1);
+        let ast = crate::parse_with_source(&file.source, source_id).map_err(|diagnostic| {
+            ProjectError::diagnostic(Some(file.path.clone()), file.source.clone(), diagnostic)
+        })?;
+        validate_source_unit(&file.path, &ast)?;
+        units.insert(
+            file.path.clone(),
+            CachedUnit {
+                hash: source_hash(&file.source),
+                source_id,
+                source: file.source.clone(),
+                ast,
+            },
+        );
+    }
+    let (merged, source_map) = merge_units(files, &units);
+    let dependencies = build_dependency_graph(files, &units);
+    let program = crate::semantic::check_with_schema(&merged, schema)
+        .map_err(|diagnostic| source_map.project_error(diagnostic))?;
+    Ok(Compilation {
+        root,
+        program,
+        dependencies,
+        incremental: IncrementalReport {
+            parsed_files: files.iter().map(|file| file.path.clone()).collect(),
+            reused_files: Vec::new(),
+            invalidated_files: Vec::new(),
+        },
+        schema: schema.clone(),
+        source_map,
+    })
+}
+
 fn source_hash(source: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);

@@ -400,11 +400,25 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   (24,544/28,719) and **84.99%** across all 13 M21-changed production modules
   (9,233/10,863). The M21 Apex example executes through the CLI and prints the
   expected multi-declarator result and typed null.
+- M22 freezes user-approved Nebula Logger Core v4.18.4 at commit
+  `55ba832d1d51680dd5e291d67ffe2104fa48977f`. Its manifest binds 1,055
+  package files. Salesforce API 65.0 `RunLocalTests`, through pinned
+  `@salesforce/cli/2.134.1`, returned 1,159/1,159 passing methods before local
+  inspection. Three byte-identical local result reruns discover 1,159/1,159
+  tests and report 0/1,159 at parse, check, terminal execution, outcome
+  agreement, and strict compatibility. The 43-location blocker census keeps
+  every unsupported result in the raw denominator and ranks two production
+  parse blockers at 1,159 affected tests each. M22 verification passes 412
+  ordinary tests with no failures or ignored tests, formatting, Clippy with
+  warnings denied, documentation/link validation, and the pinned Lizard
+  complexity ratchet. LLVM source-line coverage measures **85.26%** overall
+  (26,206/30,738) and **78.81%** across the seven M22-changed production
+  modules (2,429/3,082).
 
 ## Immediate target
 
-M22 representative enterprise baseline is the next planned feature milestone. The
-package tracker is in
+M23 broader SOQL fidelity is the next planned feature milestone, prioritized by
+the M22 measured blocker census. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
@@ -429,8 +443,10 @@ comment-aware construct counts are recorded in
   baseline restoration for the same sealed candidate.
 - Fake-CLI tests remain the hermetic transport regression suite and are not
   counted as the live Salesforce evidence.
-- No representative enterprise project or frozen Salesforce test denominator
-  has been measured against the 60–80% vision target.
+- The M22 bundle pins Nebula Logger Core v4.18.4, freezes 1,159 Salesforce
+  passing methods, and measures an initial strict numerator of 0/1,159. This is
+  the project-specific baseline that M28 must raise to at least 60%; it is not a
+  general Salesforce compatibility percentage.
 - The M15 path classifier recognizes 28 static metadata types. Unknown
   unchanged metadata is omitted from drift accounting, and multi-part Custom
   Metadata full names are currently truncated.

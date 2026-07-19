@@ -31,6 +31,9 @@ Compatibility oracle ─► normalized local/Salesforce snapshots and measured d
     │
     ▼
 Hybrid readiness ─► affected validation, drift findings, and release decision
+    │
+    ▼
+Enterprise baseline ─► frozen Salesforce denominator and per-test impact census
 ```
 
 The public library entry points in `src/lib.rs` deliberately expose each phase:
@@ -164,6 +167,17 @@ age mismatches before readiness evaluation. The reviewed M17 bundle preserves
 the clean authenticated, exact replay, and controlled-drift blocker outcomes
 for one sealed candidate without adding org behavior to language phases.
 
+M22 adds a representative-project evidence layer above the same boundaries.
+An immutable third-party candidate manifest is captured before local
+compatibility inspection, and Salesforce `RunLocalTests` supplies the raw,
+method-qualified denominator. The enterprise runner computes bounded per-test
+Apex source closures, invokes the ordinary parser, semantic checker, and
+isolated test runner, then records separate stage rates and terminal-outcome
+agreement. It never moves org transport into the lexer, parser, checker, or
+runtime. Unsupported behavior stays in the denominator and is classified by
+the stage that rejected it. See
+`docs/specifications/enterprise-baseline.md` and ADR 0025.
+
 M16 adds dedicated conditional and runtime-type AST nodes without moving
 semantic state into parsed syntax. The checker records each expression's
 result type in the existing HIR side table, computes ternary joins from the
@@ -247,6 +261,7 @@ state between interpreters.
 | `oracle` | Versioned conformance manifests, local/Salesforce adapters, normalized snapshots, differential reports, and measured compatibility coverage |
 | `ci` | Hermetic input manifests, content-addressed result artifacts, impacted-test selection, deterministic sharding, standard reports, and policy gates |
 | `hybrid` | Metadata-component inventory, affected deployment selection, validation-org transport, schema/configuration drift, test differential, and release readiness |
+| `enterprise` | Frozen representative-project capture, per-test source closures, stage metrics, and impact-ordered blocker census |
 | `diagnostic` | User-facing source diagnostics |
 | `main` | CLI argument and filesystem handling |
 

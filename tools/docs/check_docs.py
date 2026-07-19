@@ -44,7 +44,17 @@ def discover_markdown(root: pathlib.Path) -> list[pathlib.Path]:
         path
         for path in root.rglob("*.md")
         if not any(part in EXCLUDED_DIRECTORIES for part in path.relative_to(root).parts)
+        and not _inside_nested_repository(path, root)
     )
+
+
+def _inside_nested_repository(path: pathlib.Path, root: pathlib.Path) -> bool:
+    for parent in path.parents:
+        if parent == root:
+            return False
+        if (parent / ".git").exists():
+            return True
+    return False
 
 
 def _github_anchors(text: str) -> set[str]:

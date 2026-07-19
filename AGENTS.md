@@ -40,6 +40,38 @@ While the Phase 2 stabilization gate is active, also read:
   approve S1 architecture ADRs, and approve the final stabilization merge to
   `main`.
 
+## Local Salesforce validation org
+
+- A disposable Salesforce Developer Edition is authenticated in the local
+  Salesforce CLI under alias `apex-exec-m17`. Despite earlier shorthand, this
+  is not a scratch org.
+- Its expected org ID is `00DdL000010oTXlUAM`. Before any deployment, deletion,
+  metadata mutation, or evidence capture, load the ignored root `.env` and
+  verify that `sf org display --target-org "$APEX_EXEC_SF_TARGET_ORG" --json`
+  reports that exact org ID. Do not use `--verbose` or print token-bearing
+  fields.
+- The root `.env` contains local-only connection and login values under the
+  `APEX_EXEC_SF_*` names. It is ignored by Git and must never be staged,
+  committed, copied into evidence, echoed, or included in command output.
+  Prefer the existing CLI alias and token store; use the login values only if
+  reauthentication is genuinely required.
+- The owner authorized this org as disposable Apex Exec validation
+  infrastructure: agents may deploy, mutate, and delete project fixtures as
+  needed after the org-ID guard passes. Keep mutations scoped to Apex Exec
+  fixtures, record the intended baseline, and restore it after controlled
+  blocker/drift scenarios.
+- M17 left the exact milestone-15 fixture baseline restored in the org. Its
+  reviewed evidence used API `65.0`; current work must bind evidence to the
+  API and Salesforce CLI versions it actually uses rather than assuming the
+  old versions remain current.
+- The prior task's permission to retrieve verification codes from email was
+  explicitly limited to that task. Future agents do not have that permission.
+  If CLI authorization is disconnected and interactive verification is
+  required, stop and ask the user for help.
+- The authenticated org supplies Salesforce transport and outcome evidence; it
+  does not by itself choose or approve the representative M22 enterprise
+  project or its raw test denominator.
+
 ## Working rules
 
 - Create an appropriately named `codex/` branch before making changes; never
