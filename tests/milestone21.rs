@@ -193,7 +193,7 @@ fn north_star_grammar_census_is_comment_aware_and_stable() {
 }
 
 #[test]
-fn annotations_switch_and_external_id_dml_are_lossless_checked_only_syntax() {
+fn annotations_switch_and_external_id_dml_preserve_lossless_syntax_and_phase_boundaries() {
     let annotation_source = "@AuraEnabled(cacheable=true label='Read') public class Service {}";
     let annotation_program = parse(annotation_source).unwrap();
     let annotation = &annotation_program.classes[0].annotations[0];
@@ -230,7 +230,12 @@ fn annotations_switch_and_external_id_dml_are_lossless_checked_only_syntax() {
     };
     assert_eq!(external_id.spelling, "External_Key__c");
     let dml_error = check(dml_source).unwrap_err();
-    assert!(dml_error.message.contains("external-ID DML"));
+    assert!(dml_error.message.contains("unknown variable `records`"));
+    assert!(
+        !dml_error
+            .message
+            .contains("external-ID DML is parsed but unsupported")
+    );
 }
 
 #[test]

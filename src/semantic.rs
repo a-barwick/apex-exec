@@ -9,8 +9,9 @@ use crate::{
     diagnostic::Diagnostic,
     hir::{
         self, CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
-        ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget,
-        PlatformConstructor, ReferenceTarget, TriggerContextVariable,
+        DatabaseDmlTarget, DmlErrorMethod, DmlResultMethod, ExpressionType, FieldId, MemberTarget,
+        NumericKind, ObjectTypeId, PlaceTarget, PlatformConstructor, ReferenceTarget,
+        TriggerContextVariable,
     },
     platform::{FieldType, SchemaCatalog},
     span::Span,
@@ -2148,8 +2149,11 @@ impl Checker {
                 }
             }
             Statement::Dml {
-                value, external_id, ..
-            } => self.check_dml_statement(value, external_id.as_ref()),
+                operation,
+                value,
+                external_id,
+                span,
+            } => self.check_dml_statement(*operation, value, external_id.as_ref(), *span),
             Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
         }
     }
@@ -2236,16 +2240,33 @@ impl Checker {
 
     fn check_dml_statement(
         &mut self,
+        operation: crate::ast::DmlOperation,
         value: &Expression,
         external_id: Option<&Identifier>,
+        span: Span,
     ) -> Result<(), Diagnostic> {
-        if let Some(external_id) = external_id {
-            return Err(Diagnostic::new(
-                "external-ID DML syntax is parsed but unsupported by the active compatibility profile",
-                external_id.span,
-            ));
-        }
-        self.check_dml_value(value)
+        let shape = self.check_dml_value(value)?;
+        let external_id = match external_id {
+            Some(field) if operation == crate::ast::DmlOperation::Upsert => {
+                Some(self.resolve_external_id_name(&shape, field)?)
+            }
+            Some(field) => {
+                return Err(Diagnostic::new(
+                    "an external ID field is valid only for upsert",
+                    field.span,
+                ));
+            }
+            None => None,
+        };
+        self.calls.insert(
+            span,
+            CallTarget::DatabaseDml(DatabaseDmlTarget {
+                operation,
+                external_id,
+                all_or_none_argument: None,
+            }),
+        );
+        Ok(())
     }
 
     fn iterable_element_type(&mut self, iterable: &Expression) -> Result<TypeName, Diagnostic> {
@@ -2897,6 +2918,26 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("statuscode" | "system.statuscode")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "StatusCode constants are read-only",
+                    name.span,
+                ));
+            }
+            let status =
+                crate::platform::DmlStatus::from_apex_name(&name.spelling).ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown StatusCode constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(span, MemberTarget::DmlStatus(status));
+            return Ok(ExpressionType::Value(TypeName::StatusCode));
+        }
         if let Some(result) = self.qualified_type_reference(receiver, name, span, for_write) {
             return result;
         }
@@ -3746,6 +3787,7 @@ impl Checker {
                 MemberTarget::SObjectRelationship { .. }
                 | MemberTarget::SObjectChildRelationship { .. }
                 | MemberTarget::TriggerContext(_)
+                | MemberTarget::DmlStatus(_)
                 | MemberTarget::EnumConstant { .. }
                 | MemberTarget::TypeReference { .. },
             )
@@ -3901,7 +3943,14 @@ impl Checker {
         if !is_database_receiver(receiver)
             || !matches!(
                 method.canonical.as_str(),
-                "query" | "countquery" | "getquerylocator"
+                "query"
+                    | "countquery"
+                    | "getquerylocator"
+                    | "insert"
+                    | "update"
+                    | "upsert"
+                    | "delete"
+                    | "undelete"
             )
         {
             return None;
@@ -4027,6 +4076,10 @@ impl Checker {
                 _ => Err(unknown_method(receiver_type, method)),
             };
         }
+        if let Some(result) = self.dml_instance_method_type(receiver_type, method, arguments, span)
+        {
+            return result;
+        }
         if receiver_type == &TypeName::AggregateResult {
             if method.canonical != "get" || arguments.len() != 1 {
                 return Err(unknown_method(receiver_type, method));
@@ -4061,10 +4114,18 @@ impl Checker {
             | TypeName::QueueableContext
             | TypeName::BatchableContext
             | TypeName::QueryLocator
+            | TypeName::StatusCode
             | TypeName::SchedulableContext
             | TypeName::SObjectType
             | TypeName::DescribeSObjectResult => {
                 self.platform_instance_method_type(receiver_type, method, arguments)?
+            }
+            TypeName::SaveResult
+            | TypeName::UpsertResult
+            | TypeName::DeleteResult
+            | TypeName::UndeleteResult
+            | TypeName::DatabaseError => {
+                unreachable!("DML result and error receivers were handled above")
             }
             ty if self.is_exception_type(ty) => {
                 self.exception_instance_method_type(receiver_type, method, arguments)?
@@ -4076,6 +4137,58 @@ impl Checker {
         };
         self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
         Ok(result)
+    }
+
+    fn dml_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let is_result = matches!(
+            receiver_type,
+            TypeName::SaveResult
+                | TypeName::UpsertResult
+                | TypeName::DeleteResult
+                | TypeName::UndeleteResult
+        );
+        if !is_result && receiver_type != &TypeName::DatabaseError {
+            return None;
+        }
+        if !arguments.is_empty() {
+            return Some(Err(unknown_method(receiver_type, method)));
+        }
+        let (target, result) = if is_result {
+            let target = match method.canonical.as_str() {
+                "issuccess" => DmlResultMethod::IsSuccess,
+                "getid" => DmlResultMethod::GetId,
+                "geterrors" => DmlResultMethod::GetErrors,
+                "iscreated" if receiver_type == &TypeName::UpsertResult => {
+                    DmlResultMethod::IsCreated
+                }
+                _ => return Some(Err(unknown_method(receiver_type, method))),
+            };
+            let result = match target {
+                DmlResultMethod::IsSuccess | DmlResultMethod::IsCreated => TypeName::Boolean,
+                DmlResultMethod::GetId => TypeName::Id,
+                DmlResultMethod::GetErrors => TypeName::List(Box::new(TypeName::DatabaseError)),
+            };
+            (CallTarget::DmlResultMethod(target), result)
+        } else {
+            let (target, result) = match method.canonical.as_str() {
+                "getstatuscode" => (DmlErrorMethod::GetStatusCode, TypeName::StatusCode),
+                "getmessage" => (DmlErrorMethod::GetMessage, TypeName::String),
+                "getfields" => (
+                    DmlErrorMethod::GetFields,
+                    TypeName::List(Box::new(TypeName::String)),
+                ),
+                _ => return Some(Err(unknown_method(receiver_type, method))),
+            };
+            (CallTarget::DmlErrorMethod(target), result)
+        };
+        self.calls.insert(span, target);
+        Some(Ok(ExpressionType::Value(result)))
     }
 
     fn custom_instance_method_type(
@@ -4573,7 +4686,9 @@ impl Checker {
             CallTarget::InstanceMethod(_)
             | CallTarget::SObjectGet
             | CallTarget::SObjectPut
-            | CallTarget::AggregateResultGet => true,
+            | CallTarget::AggregateResultGet
+            | CallTarget::DmlResultMethod(_)
+            | CallTarget::DmlErrorMethod(_) => true,
             CallTarget::Intrinsic(intrinsic) => !intrinsic.is_static(),
             CallTarget::TopLevelMethod(_)
             | CallTarget::StaticMethod(_)

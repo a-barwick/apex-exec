@@ -289,7 +289,7 @@ public class RepositoryDemo {
 }
 
 #[test]
-fn partial_dml_stays_explicit_while_undelete_uses_the_recycle_bin() {
+fn database_results_and_undelete_use_the_recycle_bin() {
     let source = r#"
 public class RepositoryDemo {
     public static void run() {
@@ -298,11 +298,8 @@ public class RepositoryDemo {
         invoice.Amount__c = 1;
         insert invoice;
 
-        try {
-            Database.update(invoice, false);
-        } catch (DmlException error) {
-            System.debug(error.getMessage());
-        }
+        Database.SaveResult result = Database.update(invoice, false);
+        System.debug(result.isSuccess());
 
         delete invoice;
         undelete invoice;
@@ -313,7 +310,7 @@ public class RepositoryDemo {
     let root = test_project(source);
     let compilation = project::compile(&root).unwrap();
     let output = compilation.invoke("RepositoryDemo.run").unwrap();
-    assert!(output[0].contains("allOrNone=false"));
+    assert_eq!(output[0], "true");
     assert_eq!(output[1], "1");
     fs::remove_dir_all(root).unwrap();
 }

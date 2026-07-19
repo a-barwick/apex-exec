@@ -365,8 +365,29 @@ ordered transaction timeline. This is deterministic local ordering, not a
 claim of Salesforce-exact order-of-execution automation. Multiple triggers for
 one object run in deterministic project source order; Salesforce does not
 guarantee an equivalent order. `addError`, merge, validation/workflow/flow
-automation, mixed-SObject bulk lists, and partial DML results remain
-unsupported.
+automation, and mixed-SObject bulk lists remain unsupported.
+
+## M24 partial DML result fidelity
+
+`Database.insert`, `update`, `upsert`, `delete`, and `undelete` accept scalar
+or typed List SObjects and return the corresponding scalar/List
+`Database.SaveResult`, `UpsertResult`, `DeleteResult`, or `UndeleteResult`.
+Results preserve input order and expose `isSuccess`, `getId`, `getErrors`, plus
+`isCreated` for upsert. `Database.Error` exposes typed `StatusCode`, message,
+and ordered fields.
+
+Omitted/true `allOrNone` and DML statements remain atomic. False
+`allOrNone` returns per-row failures, propagates generated Ids only to
+successful caller records, and retries the surviving subset at most twice
+after the first attempt. Trigger static side effects remain observable across
+attempts; query and callout governor counters reset to the pre-attempt
+baseline, and the source request consumes one DML statement. A third-attempt
+row failure raises the documented catchable retry `DmlException`.
+
+Statement and `Database.upsert` external-ID fields are resolved through typed
+schema identities. Text matching is case-insensitive; a single match updates,
+no match inserts, null keys and ambiguous matches return structured errors,
+and unique external-ID metadata rejects duplicate values.
 
 ## M10 curated platform compatibility
 
@@ -643,7 +664,7 @@ are not a runtime or general Salesforce compatibility percentage.
 | Salesforce-shaped IDs | Implemented (validation, checksum, deterministic generation) | M7 |
 | SQLite storage | Implemented (additive migration, CRUD, transactions, savepoints, fixtures/reset) | M7 |
 | DML | Implemented (simplified atomic scalar/bulk operations) | M8 |
-| Partial DML results | Planned (`allOrNone=false` and result/error objects) | M24 |
+| Partial DML results | Implemented (typed result/error/status values, ordered `allOrNone=false`, bounded subset retries, external-ID upsert) | M24 |
 | SOQL | Implemented (simplified checked static queries) | M8 |
 | Broader SOQL | Implemented (bounded child/parent relationships, `HAVING`, relative date literals, dynamic query/count/locator; explicit polymorphic rejection) | M23 |
 | SOSL | Implemented (simplified deterministic local search) | M8 |
@@ -700,9 +721,9 @@ are not a runtime or general Salesforce compatibility percentage.
   unsupported metadata types, invalid dynamic SObject access, invalid IDs, and
   incompatible SQLite migrations fail explicitly at their owning boundary.
 - Unknown query objects/fields/relationships, incompatible binds and
-  aggregates, invalid DML operands, cardinality failures, invalid trigger
-  contexts, recursion overflow, and unsupported partial DML semantics fail
-  explicitly.
+  aggregates, invalid DML operands/options/external-ID fields, cardinality
+  failures, invalid trigger contexts, recursion overflow, and third-attempt
+  partial-save failures fail explicitly.
 - Invalid REPL snippets do not commit; unsupported LSP/DAP requests return
   structured protocol errors, and breakpoints outside executable lines remain
   unverified.

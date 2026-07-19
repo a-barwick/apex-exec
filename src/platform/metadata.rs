@@ -276,8 +276,14 @@ fn parse_field(
     };
     let required =
         tag_text(xml, "required").is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let external_id =
+        tag_text(xml, "externalId").is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let unique = tag_text(xml, "unique").is_some_and(|value| value.eq_ignore_ascii_case("true"));
     let relationship_name = tag_text(xml, "relationshipName");
-    let field = FieldSchema::new(api_name, data_type, !required);
+    let mut field = FieldSchema::new(api_name, data_type, !required);
+    if external_id {
+        field = field.with_external_id(unique);
+    }
     Ok(match relationship_name {
         Some(name) => field.with_relationship_name(name),
         None => field,
@@ -357,6 +363,8 @@ mod tests {
             &FieldType::Integer
         );
         assert!(!invoice.field("Amount__c").unwrap().is_nullable());
+        assert!(invoice.field("Amount__c").unwrap().is_external_id());
+        assert!(invoice.field("Amount__c").unwrap().is_unique());
         assert_eq!(
             invoice.field("Account__c").unwrap().data_type(),
             &FieldType::Reference {
@@ -379,7 +387,7 @@ mod tests {
         .unwrap();
         fs::write(
             object.join("fields/Amount__c.field-meta.xml"),
-            r#"<CustomField><fullName>Amount__c</fullName><required>true</required><scale>0</scale><type>Number</type></CustomField>"#,
+            r#"<CustomField><fullName>Amount__c</fullName><externalId>true</externalId><required>true</required><scale>0</scale><type>Number</type><unique>true</unique></CustomField>"#,
         )
         .unwrap();
         fs::write(

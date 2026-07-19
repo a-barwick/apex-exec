@@ -1,16 +1,16 @@
 use crate::{
     ast::{
         AccessorKind, AssignmentOperator, AssignmentTarget, BinaryOperator, CatchClause,
-        ClassMember, CollectionInitializer, DmlOperation, Expression, Identifier, Modifier,
-        PostfixOperator, ReturnType, Statement, TypeName, UnaryOperator,
+        ClassMember, CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator,
+        ReturnType, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
         CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
-        ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program,
-        ReferenceTarget, TriggerContextVariable,
+        DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId,
+        PlaceTarget, Program, ReferenceTarget, TriggerContextVariable,
     },
-    platform::FieldType,
+    platform::{DmlError as PlatformDmlError, DmlRowOutcome, FieldType},
     span::Span,
 };
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
@@ -132,6 +132,12 @@ enum PlatformValue {
         job_id: String,
     },
     QueryLocator(CollectionId),
+    DmlResult {
+        ty: TypeName,
+        outcome: DmlRowOutcome,
+    },
+    DmlError(PlatformDmlError),
+    DmlStatus(crate::platform::DmlStatus),
 }
 
 impl PlatformValue {
@@ -147,6 +153,9 @@ impl PlatformValue {
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
             Self::AsyncContext { ty, .. } => ty.clone(),
             Self::QueryLocator(_) => TypeName::QueryLocator,
+            Self::DmlResult { ty, .. } => ty.clone(),
+            Self::DmlError(_) => TypeName::DatabaseError,
+            Self::DmlStatus(_) => TypeName::StatusCode,
         }
     }
 }
@@ -624,6 +633,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn rollback_transaction(&mut self, span: Span) -> Result<(), Diagnostic> {
+        self.host
+            .rollback_unit()
+            .map_err(|error| runtime_exception("DmlException", error.to_string(), span))
+    }
+
     fn image(&self) -> RuntimeImage<'program> {
         self.image
             .expect("execution always has an immutable runtime image")
@@ -949,22 +964,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn execute_dml_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
-        let Statement::Dml {
-            operation,
-            value,
-            external_id,
-            span,
-        } = statement
-        else {
+        let Statement::Dml { value, span, .. } = statement else {
             unreachable!("caller selects DML statements");
         };
-        if external_id.is_some() {
+        let Some(CallTarget::DatabaseDml(target)) = self.program().call_target(*span) else {
             return Err(Diagnostic::new(
-                "unsupported external-ID DML escaped semantic validation",
+                "DML statement is missing its checked target",
                 *span,
             ));
-        }
-        self.execute_dml(*operation, value, *span)?;
+        };
+        self.execute_dml(target, value, *span)?;
         Ok(Flow::Normal)
     }
 
@@ -1337,7 +1346,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::SObjectPut
                     | CallTarget::DatabaseDml(_)
                     | CallTarget::DatabaseQuery { .. }
-                    | CallTarget::AggregateResultGet => Err(Diagnostic::new(
+                    | CallTarget::AggregateResultGet
+                    | CallTarget::DmlResultMethod(_)
+                    | CallTarget::DmlErrorMethod(_) => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -1494,8 +1505,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Some(CallTarget::SObjectPut) => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
             }
-            Some(CallTarget::DatabaseDml(operation)) => {
-                self.evaluate_database_dml_call(operation, arguments, span)
+            Some(CallTarget::DatabaseDml(target)) => {
+                self.evaluate_database_dml_call(target, arguments, span)
             }
             Some(CallTarget::DatabaseQuery {
                 kind,
@@ -1503,6 +1514,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }) => self.evaluate_database_query_call(kind, expected_object_id, arguments, span),
             Some(CallTarget::AggregateResultGet) => {
                 self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(target @ (CallTarget::DmlResultMethod(_) | CallTarget::DmlErrorMethod(_))) => {
+                self.evaluate_dml_support_call(target, receiver, evaluated_receiver, span)
             }
             Some(target @ CallTarget::EnumMethod { .. }) => self.evaluate_checked_enum_call(
                 target,
@@ -1517,14 +1531,29 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 | CallTarget::CustomExceptionConstructor { .. }
                 | CallTarget::SObjectConstructor { .. }
                 | CallTarget::PlatformConstructor(_),
-            ) => Err(Diagnostic::new(
-                "invalid checked target for member call",
-                span,
-            )),
-            None => Err(Diagnostic::new(
+            ) => invalid_member_call("invalid checked target for member call", span),
+            None => invalid_member_call(
                 "unresolved method call escaped semantic validation",
                 method.span,
-            )),
+            ),
+        }
+    }
+
+    fn evaluate_dml_support_call(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            CallTarget::DmlResultMethod(target) => {
+                self.evaluate_dml_result_method(target, receiver, evaluated_receiver, span)
+            }
+            CallTarget::DmlErrorMethod(target) => {
+                self.evaluate_dml_error_method(target, receiver, evaluated_receiver, span)
+            }
+            _ => unreachable!("caller selects Database DML support calls"),
         }
     }
 
@@ -1656,7 +1685,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
     fn evaluate_database_dml_call(
         &mut self,
-        operation: DmlOperation,
+        target: DatabaseDmlTarget,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
@@ -1664,17 +1693,31 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid checked Database DML call", span));
         };
         let value = self.evaluate(value)?;
-        if let Some(all_or_none) = arguments.get(1)
-            && self.evaluate(all_or_none)? == Value::Boolean(false)
-        {
-            return Err(runtime_exception(
-                "DmlException",
-                "Database allOrNone=false partial results are not supported",
-                span,
-            ));
-        }
-        self.execute_dml_value(operation, value, span)?;
-        Ok(Value::Void)
+        let all_or_none = match target.all_or_none_argument {
+            Some(index) => match self.evaluate(&arguments[index])? {
+                Value::Boolean(value) => value,
+                Value::Null(_) => {
+                    return Err(runtime_exception(
+                        "NullPointerException",
+                        "Database allOrNone argument is null",
+                        arguments[index].span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(arguments[index].span())),
+            },
+            None => true,
+        };
+        let outcomes = self.execute_dml_value(target, value, all_or_none, span)?;
+        let result_type = match self.program().expression_type(span) {
+            Some(ExpressionType::Value(ty)) => ty.clone(),
+            _ => {
+                return Err(Diagnostic::new(
+                    "Database DML call is missing its checked result type",
+                    span,
+                ));
+            }
+        };
+        self.dml_outcomes_value(outcomes, &result_type, span)
     }
 
     fn null_short_circuit_value(&self, span: Span) -> Value {
@@ -1751,9 +1794,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ),
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
-            MemberTarget::EnumConstant { class_id, ordinal } => {
-                Ok(Value::Enum { class_id, ordinal })
-            }
+            MemberTarget::DmlStatus(status) => Ok(self.dml_status_value(status)),
+            MemberTarget::EnumConstant { class_id, ordinal } => Ok(enum_value(class_id, ordinal)),
             MemberTarget::TypeReference { class_id } => Ok(Value::TypeLiteral(TypeName::Custom(
                 crate::ast::NamedType::new(
                     self.classes()[class_id.index()]
@@ -1778,6 +1820,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let present = !matches!(value, Value::Null(_));
         self.record_branch(receiver.span(), present);
         Ok(present.then_some(Some(value)))
+    }
+
+    fn dml_status_value(&mut self, status: crate::platform::DmlStatus) -> Value {
+        self.store
+            .allocate_platform(PlatformValue::DmlStatus(status))
     }
 
     fn evaluate_sobject_relationship(
@@ -3978,6 +4025,14 @@ fn unknown_variable(identifier: &Identifier) -> Diagnostic {
         format!("unknown variable `{}`", identifier.spelling),
         identifier.span,
     )
+}
+
+fn enum_value(class_id: ClassId, ordinal: usize) -> Value {
+    Value::Enum { class_id, ordinal }
+}
+
+fn invalid_member_call(message: &str, span: Span) -> Result<Value, Diagnostic> {
+    Err(Diagnostic::new(message, span))
 }
 
 fn invalid_runtime_operands(span: Span) -> Diagnostic {

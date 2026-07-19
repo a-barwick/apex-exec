@@ -23,6 +23,8 @@ pub struct FieldSchema {
     api_name: String,
     data_type: FieldType,
     nullable: bool,
+    external_id: bool,
+    unique: bool,
     relationship_name: Option<String>,
 }
 
@@ -32,8 +34,16 @@ impl FieldSchema {
             api_name: api_name.into(),
             data_type,
             nullable,
+            external_id: false,
+            unique: false,
             relationship_name: None,
         }
+    }
+
+    pub fn with_external_id(mut self, unique: bool) -> Self {
+        self.external_id = true;
+        self.unique = unique;
+        self
     }
 
     pub fn with_relationship_name(mut self, relationship_name: impl Into<String>) -> Self {
@@ -51,6 +61,14 @@ impl FieldSchema {
 
     pub fn is_nullable(&self) -> bool {
         self.nullable
+    }
+
+    pub fn is_external_id(&self) -> bool {
+        self.external_id
+    }
+
+    pub fn is_unique(&self) -> bool {
+        self.unique
     }
 
     pub fn relationship_name(&self) -> Option<&str> {
