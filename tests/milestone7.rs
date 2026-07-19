@@ -197,7 +197,7 @@ fn test_project(class_source: &str, amount_type: &str) -> PathBuf {
     fs::create_dir_all(object.join("fields")).unwrap();
     fs::write(
         root.join("sfdx-project.json"),
-        r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+        r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
     )
     .unwrap();
     fs::write(class_path(&root), class_source).unwrap();

@@ -262,9 +262,12 @@ selected. Parent traversal is bounded to five levels, nested child subqueries
 are rejected, and `Database.QueryLocator` is an opaque checked record snapshot
 consumed by the deterministic batch pipeline.
 
-The current profile is `m10-common`. API-version differences and
-sharing/security behavior are not scattered through expression evaluation;
-M25 and M27 introduce explicit profiles at the compiler/host boundary.
+Every source executes under its exact typed `salesforce-api-X.0` profile.
+M25 models API 31.0 and the current API 60.0–66.0 family, including the
+reviewed null-`instanceof` difference. Null-aware syntax and the curated M10
+platform surface require a current profile. Unmodeled versions fail during
+project discovery, and profile selection remains outside expression syntax.
+M27 adds the separate sharing/security context at the compiler/host boundary.
 
 ## Transactions
 

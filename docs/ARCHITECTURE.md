@@ -114,7 +114,9 @@ identity. The host supplies deterministic clock, pseudo-random, user, limits,
 and callout services. A default host never performs network I/O: tests enqueue
 responses and can inspect captured requests. Unknown platform calls fail during
 checking with the active `m10-common` profile rather than reaching dynamic
-runtime lookup.
+runtime lookup. M25 replaces that former string label with an exact typed
+`CompatibilityProfile`; current curated APIs are available only to the modeled
+API 60.0–66.0 family.
 
 M11 adds checked async interface contracts and future annotations to HIR. The
 interpreter owns a bounded FIFO because it already owns serializable Apex value
@@ -469,8 +471,12 @@ Recorded matches can support a narrowly documented **Exact** claim only for the
 fixture cases and environment actually observed; no unmeasured surface is
 promoted implicitly.
 
-API-version, sharing, limits, and security behavior should eventually be
-explicit runtime profiles. They must not appear as scattered conditionals.
+M25 makes API-version behavior an explicit runtime profile. Project discovery
+resolves the project default and class/trigger sidecars into canonical
+per-source profiles. Semantic HIR and execution consume those profiles through
+typed boundaries; checked/cache/oracle/hybrid layers serialize exact effective
+identities. Sharing, limits, and security behavior still require later
+profiles and must not appear as scattered conditionals.
 
 ## Enterprise CI architecture
 
@@ -520,11 +526,12 @@ output, retrieves the scoped metadata into isolated project-local
 Each retrieve directory is precreated with `main/default` so both legacy and
 current Salesforce CLI output contracts have a valid conversion target, then
 removed after inventory capture. It never creates an org, authenticates
-interactively, requests an auth URL, or persists credentials. M17 records the
-resulting observations in strict schema-version-2 evidence. Live capture
+interactively, requests an auth URL, or persists credentials. M25 records the
+resulting observations in strict schema-version-3 evidence. Live capture
 requires a cacheable M14 result, pins the project API version on both retrieves
-and deployment, and compares two independently retrieved normalized
-inventories. The bound request retains method-qualified selected tests, while
+and deployment, binds the canonical effective profile for every Apex source,
+and compares two independently retrieved normalized inventories. The bound
+request retains method-qualified selected tests, while
 the Metadata API transport deduplicates them to test-class flags; differential
 evaluation remains limited to the exact bound methods even if Salesforce
 reports additional class methods. Offline replay asserts the expected alias

@@ -670,7 +670,7 @@ differential fixtures.
 
 ### M25 — API-version compatibility profiles
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 
@@ -689,6 +689,35 @@ At least two supported API-version profiles demonstrate a reviewed behavioral
 difference locally and against Salesforce. A mixed-version project proves
 project-default and sidecar precedence, and every checked unit, cached result,
 or replayed result is bound to its effective profile.
+
+#### Completion evidence
+
+- Project discovery requires an explicit `sourceApiVersion`, applies valid
+  class/trigger sidecars before the project default, and carries one typed
+  exact profile per source through semantic HIR, runtime execution, hosts,
+  CI/cache identity, oracle snapshots/reports, and hybrid evidence.
+- `salesforce-api-31.0` and the current `salesforce-api-60.0` through
+  `salesforce-api-66.0` family are the only modeled profiles. Unmodeled
+  versions, malformed sidecars, legacy null-aware syntax, and legacy use of
+  the curated platform surface fail explicitly instead of approximating.
+- The reviewed API 31.0/API 65.0 mixed class/trigger fixture proves the
+  pre-API-32 versus current null-`instanceof` difference. Guarded Salesforce
+  capture with CLI 2.143.6 matches compile, effective profiles, and tests
+  (3/3 dimensions), and credential-free replay reproduces the report byte for
+  byte. The fixture metadata was removed afterward.
+- Profile-only sidecar changes reuse the unchanged parsed AST but invalidate
+  semantic/runtime results and change the CI cache key. Hybrid snapshot schema
+  3 seals the canonical per-source profile list; earlier schema-2 artifacts
+  remain historical records but cannot be replayed as current evidence.
+- Verification passes 432 Rust tests with no failures or ignored tests,
+  formatting, Clippy with warnings denied, documentation validation, and the
+  pinned maintainability ratchet. LLVM source-line coverage is 28,904/34,035
+  (**84.92%**) overall and 14,288/16,879 (**84.65%**) across the 16
+  instrumented M25-changed production modules; the test-only
+  `src/semantic/tests.rs` is excluded from the changed-module figure.
+- North Star remains 7/7 lexer and 7/7 parser indicators, 14/14 total, a
+  change of zero from the pre-M25 baseline. These are syntax indicators, not
+  runtime or Salesforce compatibility percentages.
 
 ### M26 — Metadata inventory and org-configuration breadth
 

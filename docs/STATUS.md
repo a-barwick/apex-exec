@@ -11,6 +11,9 @@ The pre-open-source audit and execution strategy are now captured in
 correctness criteria have passed. M18 — null-aware expressions, M19 — bitwise,
 shift, `Long`, and compound operators, M20 — nested declarations, enums, and
 type literals, and M21 — North Star grammar closure are complete.
+M22 through M25 are also complete: the enterprise denominator is frozen,
+query and partial-DML fidelity are expanded, and effective Salesforce API
+profiles now bind every project source and downstream result.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -437,11 +440,21 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   Clippy, documentation validation, and the Lizard ratchet. LLVM source-line
   coverage measures **84.86%** overall (28,410/33,480) and **83.79%** across
   the 12 instrumented M24-changed production modules (12,388/14,785).
+- M25 adds strict typed `salesforce-api-31.0` and
+  `salesforce-api-60.0`–`salesforce-api-66.0` profiles, project-default and
+  class/trigger-sidecar precedence, version-gated null-aware syntax, curated
+  platform APIs, diagnostics, and null-`instanceof` execution. Exact profiles
+  are present in checked HIR/runtime context, cache identity, CI results,
+  oracle observations/reports, and schema-3 hybrid evidence. The guarded API
+  31.0/API 65.0 Salesforce fixture matches 3/3 selected dimensions and replays
+  byte-identically. Verification passes 432 tests with no failures or ignored
+  tests; coverage is **84.92%** overall (28,904/34,035) and **84.65%** across
+  16 changed production modules (14,288/16,879).
 
 ## Immediate target
 
-M24 partial DML results and bulk failure fidelity is complete. M25 API-version
-compatibility profiles are the next planned feature milestone. The package
+M25 API-version compatibility profiles are complete. M26 complete metadata
+accounting and org-configuration breadth is the next planned milestone. The package
 tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
 evidence baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
@@ -506,11 +519,11 @@ comment-aware construct counts are recorded in
   supported subtype widening, Integer-to-Decimal promotion, and `Object` as the
   common carrier for otherwise unrelated supported values. It does not add
   broader Apex conversion rules.
-- `instanceof` uses the current compatibility profile: null is false, invariant
-  generic collection identity is preserved, and statically always-true or
-  impossible tests fail during checking. Historical pre-API-32 null behavior,
-  String-to-Id quirks, and unsupported platform generic interfaces await
-  versioned profiles and broader type support.
+- `instanceof` uses the effective source profile: null is true for API 31.0
+  and false for API 60.0–66.0, invariant generic collection identity is
+  preserved, and statically always-true or impossible tests fail during
+  checking. API 32.0–59.0, API 67.0 and later, String-to-Id quirks, and
+  unsupported platform generic interfaces fail or remain unmodeled.
 - The core exception subset supports construction, catching, rethrowing,
   messages, type names, and deterministic stack text. Custom exception classes,
   causes, and Salesforce-exact stack formatting require later compatibility and

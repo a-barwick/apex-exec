@@ -7,6 +7,7 @@
 
 use crate::{
     ci::{self, CiManifest, CiRunOptions, SelectionMode},
+    compatibility::{CompatibilityProfile, EffectiveProfile},
     project::{self, Compilation},
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -23,7 +24,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-pub const HYBRID_SCHEMA_VERSION: u32 = 2;
+pub const HYBRID_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_MAX_EVIDENCE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const REQUIRED_RETRIEVALS: usize = 2;
 const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
@@ -314,6 +315,7 @@ pub struct ValidationEvidence {
     pub target: String,
     pub org_id: String,
     pub api_version: String,
+    pub profiles: Vec<EffectiveProfile>,
     pub apex_exec_version: String,
     pub salesforce_cli_version: String,
     pub captured_at: String,
@@ -332,11 +334,7 @@ impl ValidationEvidence {
         if self.request.sha256()? != self.request_sha256 {
             return Err("validation request digest does not match its contents".to_owned());
         }
-        if self.target.trim().is_empty() {
-            return Err("validation evidence target cannot be empty".to_owned());
-        }
-        validate_org_id(&self.org_id)?;
-        validate_api_version(&self.api_version)?;
+        self.validate_environment_identity()?;
         if self.apex_exec_version.trim().is_empty() {
             return Err("validation evidence Apex Exec version cannot be empty".to_owned());
         }
@@ -357,6 +355,15 @@ impl ValidationEvidence {
             ));
         }
         Ok(())
+    }
+
+    fn validate_environment_identity(&self) -> Result<(), String> {
+        if self.target.trim().is_empty() {
+            return Err("validation evidence target cannot be empty".to_owned());
+        }
+        validate_org_id(&self.org_id)?;
+        validate_api_version(&self.api_version)?;
+        validate_effective_profiles(&self.profiles)
     }
 }
 
@@ -707,11 +714,7 @@ pub fn run_with_cli_at(
     let affected = select_affected_components(manifest, &compilation, &local_inventory);
     let ci_result = ci::run(manifest, &options.ci)?;
     let affected_tests = ci_result.selected_tests.clone();
-    let candidate = CandidateEvidence {
-        manifest_sha256: manifest.sha256()?,
-        ci_cache_key: ci_result.cache_key.clone(),
-        ci_result_sha256: ci::result_sha256(&ci_result)?,
-    };
+    let candidate = candidate_evidence(manifest, &ci_result)?;
     let request = validation_request(manifest, &affected, &affected_tests)?;
     let validation_snapshot = match source {
         ValidationSource::TargetOrg(target) => {
@@ -733,6 +736,7 @@ pub fn run_with_cli_at(
                     target: capture.target,
                     org_id: capture.org_id,
                     api_version,
+                    profiles: compilation.profiles.clone(),
                     apex_exec_version: env!("CARGO_PKG_VERSION").to_owned(),
                     salesforce_cli_version,
                     captured_at: format_capture_time(now),
@@ -747,7 +751,7 @@ pub fn run_with_cli_at(
         ValidationSource::Snapshot(_) => {
             let snapshot = replayed_snapshot
                 .expect("snapshot sources load evidence before candidate evaluation");
-            validate_candidate_binding(&snapshot, &candidate, &request)?;
+            validate_candidate_binding(&snapshot, &candidate, &request, &compilation.profiles)?;
             snapshot
         }
     };
@@ -822,6 +826,17 @@ pub fn run_with_cli_at(
             blockers,
         },
         validation_snapshot,
+    })
+}
+
+fn candidate_evidence(
+    manifest: &CiManifest,
+    result: &ci::CiRunResult,
+) -> Result<CandidateEvidence, String> {
+    Ok(CandidateEvidence {
+        manifest_sha256: manifest.sha256()?,
+        ci_cache_key: result.cache_key.clone(),
+        ci_result_sha256: ci::result_sha256(result)?,
     })
 }
 
@@ -1001,6 +1016,7 @@ fn validate_candidate_binding(
     snapshot: &ValidationSnapshot,
     candidate: &CandidateEvidence,
     request: &ValidationRequest,
+    profiles: &[EffectiveProfile],
 ) -> Result<(), String> {
     let recorded = &snapshot.evidence.candidate;
     if recorded.manifest_sha256 != candidate.manifest_sha256 {
@@ -1011,6 +1027,12 @@ fn validate_candidate_binding(
     }
     if recorded.ci_result_sha256 != candidate.ci_result_sha256 {
         return Err("validation evidence does not match the exact M14 CI result".to_owned());
+    }
+    if snapshot.evidence.profiles != profiles {
+        return Err(
+            "validation evidence effective compatibility profiles do not match the current candidate"
+                .to_owned(),
+        );
     }
     let recorded = &snapshot.evidence.request;
     if recorded.changed_paths != request.changed_paths {
@@ -1658,6 +1680,43 @@ fn validate_api_version(version: &str) -> Result<(), String> {
         return Err(format!(
             "Salesforce API version `{version}` must use `<major>.<minor>` format"
         ));
+    }
+    Ok(())
+}
+
+fn validate_effective_profiles(profiles: &[EffectiveProfile]) -> Result<(), String> {
+    if profiles.is_empty() {
+        return Err(
+            "validation evidence must bind every Apex unit to an effective compatibility profile"
+                .to_owned(),
+        );
+    }
+    let mut sources = BTreeSet::new();
+    for profile in profiles {
+        if profile.source.trim().is_empty() {
+            return Err("effective profile source cannot be empty".to_owned());
+        }
+        if !sources.insert(profile.source.to_ascii_lowercase()) {
+            return Err(format!(
+                "validation evidence records effective profile `{}` more than once",
+                profile.source
+            ));
+        }
+        let modeled = CompatibilityProfile::for_api_version(profile.api_version)?;
+        if modeled.behavior() != profile.behavior {
+            return Err(format!(
+                "effective profile `{}` records behavior `{}` that does not match API {}",
+                profile.source,
+                profile.behavior.label(),
+                profile.api_version
+            ));
+        }
+    }
+    if !profiles
+        .windows(2)
+        .all(|pair| pair[0].source.to_ascii_lowercase() < pair[1].source.to_ascii_lowercase())
+    {
+        return Err("effective profiles must use canonical source order".to_owned());
     }
     Ok(())
 }
@@ -2360,26 +2419,27 @@ mod tests {
         let snapshot = valid_snapshot();
         let candidate = snapshot.evidence.candidate.clone();
         let request = snapshot.evidence.request.clone();
-        validate_candidate_binding(&snapshot, &candidate, &request).unwrap();
+        let profiles = snapshot.evidence.profiles.clone();
+        validate_candidate_binding(&snapshot, &candidate, &request, &profiles).unwrap();
 
         let mut mismatch = candidate.clone();
         mismatch.manifest_sha256 = "d".repeat(64);
         assert!(
-            validate_candidate_binding(&snapshot, &mismatch, &request)
+            validate_candidate_binding(&snapshot, &mismatch, &request, &profiles)
                 .unwrap_err()
                 .contains("M14 manifest")
         );
         let mut mismatch = candidate.clone();
         mismatch.ci_result_sha256 = "d".repeat(64);
         assert!(
-            validate_candidate_binding(&snapshot, &mismatch, &request)
+            validate_candidate_binding(&snapshot, &mismatch, &request, &profiles)
                 .unwrap_err()
                 .contains("exact M14 CI result")
         );
         let mut mismatch = candidate.clone();
         mismatch.ci_cache_key = "d".repeat(64);
         assert!(
-            validate_candidate_binding(&snapshot, &mismatch, &request)
+            validate_candidate_binding(&snapshot, &mismatch, &request, &profiles)
                 .unwrap_err()
                 .contains("M14 CI cache key")
         );
@@ -2387,7 +2447,7 @@ mod tests {
         let mut mismatch = request.clone();
         mismatch.changed_paths = vec![PathBuf::from("force-app/changed.cls")];
         assert!(
-            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+            validate_candidate_binding(&snapshot, &candidate, &mismatch, &profiles)
                 .unwrap_err()
                 .contains("changed paths")
         );
@@ -2397,7 +2457,7 @@ mod tests {
             sha256: "e".repeat(64),
         }];
         assert!(
-            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+            validate_candidate_binding(&snapshot, &candidate, &mismatch, &profiles)
                 .unwrap_err()
                 .contains("selectors or digests")
         );
@@ -2405,21 +2465,21 @@ mod tests {
         let mut mismatch = snapshot.evidence.request.clone();
         mismatch.component_selection = ComponentSelectionMode::Impacted;
         assert!(
-            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+            validate_candidate_binding(&snapshot, &candidate, &mismatch, &profiles)
                 .unwrap_err()
                 .contains("component-selection mode")
         );
         let mut mismatch = snapshot.evidence.request.clone();
         mismatch.selected_tests = vec!["DemoTest.passes".to_owned()];
         assert!(
-            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+            validate_candidate_binding(&snapshot, &candidate, &mismatch, &profiles)
                 .unwrap_err()
                 .contains("selected tests")
         );
         let mut mismatch = snapshot.evidence.request.clone();
         mismatch.test_level = DeploymentTestLevel::RunSpecifiedTests;
         assert!(
-            validate_candidate_binding(&snapshot, &candidate, &mismatch)
+            validate_candidate_binding(&snapshot, &candidate, &mismatch, &profiles)
                 .unwrap_err()
                 .contains("test level")
         );
@@ -2526,6 +2586,14 @@ mod tests {
                 target: "staging".to_owned(),
                 org_id: "00D000000000001".to_owned(),
                 api_version: "65.0".to_owned(),
+                profiles: vec![EffectiveProfile::new(
+                    "force-app/main/default/classes/Demo.cls".to_owned(),
+                    CompatibilityProfile::for_api_version(
+                        "65.0".parse().expect("valid API version"),
+                    )
+                    .expect("modeled API version"),
+                    crate::compatibility::ProfileOrigin::ProjectDefault,
+                )],
                 apex_exec_version: env!("CARGO_PKG_VERSION").to_owned(),
                 salesforce_cli_version: "2.30.8".to_owned(),
                 captured_at: "2026-07-18T12:00:00Z".to_owned(),

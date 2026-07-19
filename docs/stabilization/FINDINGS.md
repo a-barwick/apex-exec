@@ -351,8 +351,9 @@ checking generic arguments plus process-safe hierarchy traversal.
   rather than a namespace-aware XML parser.
 - `Value` has a wide match surface; adding `Long` without central numeric
   operations will create cross-runtime churn.
-- Compatibility profile names such as `m10-common` are embedded as strings in
-  semantic and runtime code rather than carried as a typed context.
+- M25 replaced embedded compatibility-profile strings with a typed
+  per-source context across semantic/runtime/host and evidence boundaries.
+  The broader intrinsic descriptor and handler catalog remains S1-05 work.
 
 ## Open-source release findings
 

@@ -322,7 +322,7 @@ fn compile_failures_receive_phase_categories_before_comparison() {
     fs::create_dir_all(&classes).unwrap();
     fs::write(
         project.join("sfdx-project.json"),
-        r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+        r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
     )
     .unwrap();
     fs::write(

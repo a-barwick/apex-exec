@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "api-version-profile-difference",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M25CurrentProfile.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M25LegacyProfile.cls",
+          "apiVersion": "31.0",
+          "behavior": "legacyApi31",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M25ProfileDifferenceTest.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/triggers/M25LegacyProfileTrigger.trigger",
+          "apiVersion": "31.0",
+          "behavior": "legacyApi31",
+          "origin": "sidecar"
+        }
+      ],
+      "tests": [
+        {
+          "name": "M25ProfileDifferenceTest.mixedProfilesMatchSalesforce",
+          "outcome": "pass"
+        }
+      ]
+    }
+  ]
+}

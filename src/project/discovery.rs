@@ -1,4 +1,6 @@
 use super::ProjectError;
+use crate::compatibility::{ApiVersion, CompatibilityProfile, EffectiveProfile, ProfileOrigin};
+use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -8,6 +10,8 @@ use std::{
 pub struct SourceFile {
     pub path: PathBuf,
     pub source: String,
+    pub profile: CompatibilityProfile,
+    pub profile_origin: ProfileOrigin,
 }
 
 #[derive(Clone, Debug)]
@@ -15,6 +19,7 @@ pub struct DiscoveredProject {
     pub root: PathBuf,
     pub source_roots: Vec<PathBuf>,
     pub files: Vec<SourceFile>,
+    pub project_profile: CompatibilityProfile,
 }
 
 pub fn discover(path: impl AsRef<Path>) -> Result<DiscoveredProject, ProjectError> {
@@ -24,6 +29,7 @@ pub fn discover(path: impl AsRef<Path>) -> Result<DiscoveredProject, ProjectErro
     let config = fs::read_to_string(&config_path)
         .map_err(|error| ProjectError::io(&config_path, "read", error))?;
     let package_paths = extract_package_paths(&config)?;
+    let project_profile = extract_project_profile(&config, &config_path)?;
     let mut source_roots = package_paths
         .into_iter()
         .map(|path| root.join(path))
@@ -47,14 +53,127 @@ pub fn discover(path: impl AsRef<Path>) -> Result<DiscoveredProject, ProjectErro
         .map(|path| {
             let source = fs::read_to_string(&path)
                 .map_err(|error| ProjectError::io(&path, "read", error))?;
-            Ok(SourceFile { path, source })
+            let (profile, profile_origin) = source_profile(&path, project_profile)?;
+            Ok(SourceFile {
+                path,
+                source,
+                profile,
+                profile_origin,
+            })
         })
         .collect::<Result<Vec<_>, ProjectError>>()?;
     Ok(DiscoveredProject {
         root,
         source_roots,
         files,
+        project_profile,
     })
+}
+
+impl DiscoveredProject {
+    pub fn effective_profiles(&self) -> Vec<EffectiveProfile> {
+        let mut profiles = self
+            .files
+            .iter()
+            .map(|file| {
+                let source = file
+                    .path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&file.path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                EffectiveProfile::new(source, file.profile, file.profile_origin)
+            })
+            .collect::<Vec<_>>();
+        profiles.sort();
+        profiles
+    }
+}
+
+fn extract_project_profile(
+    config: &str,
+    config_path: &Path,
+) -> Result<CompatibilityProfile, ProjectError> {
+    let json = serde_json::from_str::<Value>(config).map_err(|error| {
+        ProjectError::message(format!(
+            "invalid Salesforce project configuration `{}`: {error}",
+            config_path.display()
+        ))
+    })?;
+    let version = json
+        .get("sourceApiVersion")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ProjectError::message(format!(
+                "Salesforce project configuration `{}` must declare `sourceApiVersion`",
+                config_path.display()
+            ))
+        })?;
+    parse_profile(version, &format!("project `{}`", config_path.display()))
+}
+
+fn source_profile(
+    source_path: &Path,
+    project_profile: CompatibilityProfile,
+) -> Result<(CompatibilityProfile, ProfileOrigin), ProjectError> {
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ProjectError::message(format!(
+                "Apex source path `{}` has no UTF-8 filename",
+                source_path.display()
+            ))
+        })?;
+    let sidecar = source_path.with_file_name(format!("{file_name}-meta.xml"));
+    if !sidecar.is_file() {
+        return Ok((project_profile, ProfileOrigin::ProjectDefault));
+    }
+    let metadata =
+        fs::read_to_string(&sidecar).map_err(|error| ProjectError::io(&sidecar, "read", error))?;
+    let version = one_xml_text(&metadata, "apiVersion").map_err(|message| {
+        ProjectError::message(format!(
+            "invalid Apex metadata sidecar `{}`: {message}",
+            sidecar.display()
+        ))
+    })?;
+    Ok((
+        parse_profile(&version, &format!("sidecar `{}`", sidecar.display()))?,
+        ProfileOrigin::Sidecar,
+    ))
+}
+
+fn parse_profile(value: &str, source: &str) -> Result<CompatibilityProfile, ProjectError> {
+    let version = value
+        .parse::<ApiVersion>()
+        .map_err(|message| ProjectError::message(format!("{source}: {message}")))?;
+    CompatibilityProfile::for_api_version(version)
+        .map_err(|message| ProjectError::message(format!("{source}: {message}")))
+}
+
+fn one_xml_text(source: &str, tag: &str) -> Result<String, String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut matches = source.match_indices(&open);
+    let Some((start, _)) = matches.next() else {
+        return Err(format!("missing `<{tag}>`"));
+    };
+    if matches.next().is_some() {
+        return Err(format!("contains more than one `<{tag}>`"));
+    }
+    let value_start = start + open.len();
+    let value_end = source[value_start..]
+        .find(&close)
+        .map(|offset| value_start + offset)
+        .ok_or_else(|| format!("missing `</{tag}>`"))?;
+    if source[value_end + close.len()..].contains(&close) {
+        return Err(format!("contains more than one `</{tag}>`"));
+    }
+    let value = source[value_start..value_end].trim();
+    if value.is_empty() {
+        return Err(format!("`<{tag}>` cannot be empty"));
+    }
+    Ok(value.to_owned())
 }
 
 fn find_project_root(requested: &Path) -> Result<PathBuf, ProjectError> {

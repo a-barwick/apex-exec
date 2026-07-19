@@ -124,7 +124,7 @@ fn unsupported_platform_apis_name_the_profile() {
     let error = check("Date value = Date.parse('tomorrow');").unwrap_err();
     assert_eq!(
         error.message,
-        "unsupported API `Date.parse` in compatibility profile `m10-common`"
+        "unsupported API `Date.parse` in compatibility profile `salesforce-api-66.0`"
     );
 }
 
@@ -205,7 +205,7 @@ fn platform_object_accessors_and_unconfigured_callouts_are_explicit() {
     )
     .unwrap_err();
     assert_eq!(error.exception_type.as_deref(), Some("CalloutException"));
-    assert!(error.message.contains("m10-common"));
+    assert!(error.message.contains("salesforce-api-66.0"));
     assert!(error.message.contains("no configured mock"));
 }
 
@@ -235,7 +235,7 @@ fn unsupported_instance_apis_name_the_owner_and_profile() {
         check("Datetime value = Datetime.now(); String zone = value.formatGmt('z');").unwrap_err();
     assert_eq!(
         error.message,
-        "unsupported API `Datetime.formatGmt` in compatibility profile `m10-common`"
+        "unsupported API `Datetime.formatGmt` in compatibility profile `salesforce-api-66.0`"
     );
 }
 

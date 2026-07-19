@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod ci;
+pub mod compatibility;
 pub mod dap;
 pub mod debugger;
 pub mod diagnostic;

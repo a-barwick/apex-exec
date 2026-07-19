@@ -5,6 +5,7 @@
 //! which can be recorded in source control and compared without org access.
 
 use crate::{
+    compatibility::EffectiveProfile,
     diagnostic::Diagnostic,
     platform::DmlOperation,
     project::{self, Compilation, ProjectErrorKind},
@@ -70,6 +71,7 @@ pub enum FixtureEntrypoint {
 #[serde(rename_all = "camelCase")]
 pub enum ComparisonScope {
     Compile,
+    Profiles,
     Values,
     Output,
     Exceptions,
@@ -100,6 +102,8 @@ pub enum OracleProvider {
 pub struct FixtureObservation {
     pub name: String,
     pub compile: CompileObservation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<EffectiveProfile>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -486,6 +490,7 @@ fn observe_local(fixture: &ConformanceFixture) -> FixtureObservation {
         }
     };
     observation.compile.success = true;
+    observation.profiles = compilation.profiles.clone();
     match &fixture.entrypoint {
         FixtureEntrypoint::Compile => {}
         FixtureEntrypoint::Invoke { target } => {
@@ -701,6 +706,7 @@ impl SalesforceCli {
     ) -> Result<FixtureObservation, String> {
         let discovered = project::discover(&fixture.project)
             .map_err(|error| format!("fixture `{}`: {}", fixture.name, error.render()))?;
+        let profiles = discovered.effective_profiles();
         let mut deploy_args = vec![
             OsString::from("project"),
             OsString::from("deploy"),
@@ -717,6 +723,7 @@ impl SalesforceCli {
         }
         let deploy = self.command_json(&discovered.root, &deploy_args, None)?;
         let mut observation = parse_salesforce_deploy(&fixture.name, &deploy);
+        observation.profiles = profiles;
         if !observation.compile.success {
             return Ok(observation);
         }
@@ -1040,6 +1047,10 @@ fn compare_scope(
                 "diagnosticCategory": salesforce.compile.diagnostic_category,
             }),
         ),
+        ComparisonScope::Profiles => (
+            serde_json::to_value(&local.profiles).expect("profiles serialize"),
+            serde_json::to_value(&salesforce.profiles).expect("profiles serialize"),
+        ),
         ComparisonScope::Values => (
             serde_json::to_value(&local.values).expect("values serialize"),
             serde_json::to_value(&salesforce.values).expect("values serialize"),
@@ -1153,9 +1164,13 @@ fn validate_scopes(
             "fixture `{name}` must always compare compile behavior"
         ));
     }
-    if matches!(entrypoint, FixtureEntrypoint::Compile) && scopes.len() != 1 {
+    if matches!(entrypoint, FixtureEntrypoint::Compile)
+        && scopes
+            .iter()
+            .any(|scope| !matches!(scope, ComparisonScope::Compile | ComparisonScope::Profiles))
+    {
         return Err(format!(
-            "compile-only fixture `{name}` can compare only the compile scope"
+            "compile-only fixture `{name}` can compare only compile and profiles"
         ));
     }
     Ok(())
