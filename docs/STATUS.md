@@ -14,7 +14,7 @@ the bounded S0 process-safety and correctness criteria pass.
 Initial S0 work may begin in three disjoint packages:
 
 - S0-01 — frontend process safety and correctness (in Review on
-  `codex/stab-frontend-safety` at `e42bb2a`)
+  `codex/stab-frontend-safety` at `c7d4ac7`)
 - S0-02 — opt-in runtime instrumentation
 - S0-05 — CI, maintainability ratchet, and release-document gates
 
@@ -242,8 +242,8 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   frames, scopes, variables, stepping, continue, terminate, and disconnect for
   both anonymous scripts and project `Class.method` entry points
 - Checked project symbol indexing for class/member go-to-definition,
-  references, case-insensitive rename edits, and source-mapped inline
-  diagnostics
+  hierarchy generic-argument definitions, references, case-insensitive rename
+  edits, and source-mapped inline diagnostics
 - Per-executable-line coverage data and an LSP `apex/coverage` request that
   preserves covered/uncovered state rather than aggregate counts alone
 - A stdio Language Server Protocol server covering initialization,
@@ -339,7 +339,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 319 ordinary tests pass with no failures (14 separate North Star goal tests
+- 320 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
