@@ -70,7 +70,7 @@ package.
 | S0-04 | Execution context and lazy class initialization | Complete (`ed830f2`; setup-mode evidence `53585f8`; reviews approved at `ad08c4c`; merged as `c847fb2`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Complete (reviewed candidate `8a360ac`; merged to `main` as `556d485`) | S0-01–S0-05 complete | Nothing |
-| S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
+| S1-01 | Compiler/runtime substrate ADRs | Active (`codex/milestone-19-bitwise-long-compound`, owner: `/root`) | S0-GATE | M18 implementation |
 | S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
 | S1-04 | `Place` and centralized numeric operations | Blocked | S1-02 | Disjoint docs/tooling work |

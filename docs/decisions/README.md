@@ -52,3 +52,4 @@ history.
 - [0020 — Check runtime-type expressions before execution](0020-check-runtime-type-expressions-before-execution.md)
 - [0021 — Bind live validation to sealed candidate evidence](0021-bind-live-validation-to-candidate-evidence.md)
 - [0022 — Gate Phase 2 through a stabilization program](0022-gate-phase-2-through-stabilization.md)
+- [0023 — Stage typed compiler and runtime substrate before M19](0023-stage-typed-compiler-runtime-substrate.md)
