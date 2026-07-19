@@ -11,20 +11,22 @@ The pre-open-source audit and execution strategy are now captured in
 remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
-Initial S0 work may begin in three disjoint packages:
-
-- S0-01 — frontend process safety and correctness
-- S0-02 — opt-in runtime instrumentation
-- S0-05 — CI, maintainability ratchet, and release-document gates
-
-Runtime graph safety (S0-03) follows instrumentation, and execution context/
-lazy class initialization (S0-04) follows both. Package status, dependencies,
-acceptance criteria, branch rules, and the coordinator prompt live under
-`docs/stabilization/`.
+S0-02 runtime instrumentation and S0-05 release gates are integrated. S0-01
+frontend safety is in final Review. S0-03 runtime graph safety is active while
+a review blocker is corrected; S0-04 execution context/lazy class
+initialization remains blocked until S0-03 integrates. Package status,
+dependencies, acceptance criteria, branch rules, and the coordinator prompt
+live under `docs/stabilization/`.
 
 ## Completed
 
 - Rust binary and library crate
+- Required GitHub Actions layers for Rust, website, dependency, editor,
+  documentation, whitespace, and maintainability verification, aggregated by
+  the stable `Required CI gate` check
+- Pinned per-function Lizard debt caps, RustSec/Cargo Deny/npm advisory
+  policies, offline documentation checks, and contribution/security/release
+  scaffolding without selecting the pending owner license or public API policy
 - Separate lexer, parser, AST, semantic-analysis, diagnostic, and runtime modules
 - `String`, `Boolean`, simplified `Integer`, and `null` values
 - Explicit initialization, right-associative assignment, and variable references

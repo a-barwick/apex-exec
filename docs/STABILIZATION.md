@@ -64,11 +64,11 @@ package.
 | ID | Work package | Status | Depends on | May run with |
 |---|---|---|---|---|
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
-| S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
+| S0-01 | Frontend process safety and correctness | Review (`c7d4ac7`; `codex/stab-frontend-safety`; final review pending) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; `s0_03_graph_safety`) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
-| S0-05 | CI, complexity ratchet, and release-document gates | Review (`codex/stab-release-gates`; `a2fea18`, `0aaac4a`, `522e44f`, `767d6a7`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
+| S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
 | S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
@@ -81,7 +81,7 @@ package.
 | S2-03 | LSP/DAP/protocol correctness | Blocked | S1-06 | S2-02 |
 | S2-04 | Open-source release gate | Blocked | S0-05, owner license decision | Disjoint implementation work |
 
-Only S0-01, S0-02, and S0-05 should start in the first parallel wave.
+The first parallel wave was limited to S0-01, S0-02, and S0-05.
 
 ## Integrated package evidence
 
@@ -101,6 +101,34 @@ Only S0-01, S0-02, and S0-05 should start in the first parallel wave.
   `execute_statement` CCN from 17 to 16, held the runtime warning count at
   five, and reported no threshold warnings in the extracted bounded
   instrumentation module.
+
+### S0-05 — CI, complexity ratchet, and release-document gates
+
+- Implementation checkpoints `a2fea18`, `0aaac4a`, `522e44f`, and `767d6a7`;
+  Review handoff `51eacc4`; committed-range correction `9c08b87`;
+  required-check documentation correction `3471e45`; and integration merge
+  `da1945f`.
+- Fresh read-only review by `review_s0_05_final`: **Approve** after the
+  documented required-check context was corrected to the emitted job name,
+  `Required CI gate`. The reviewer found no remaining blocking workflow,
+  dependency-policy, complexity-ratchet, or release-document defect.
+- Integrated Rust verification passed: `cargo fmt --check`; `cargo test
+  --locked` (302 passed, 14 ignored North Star indicators); explicit North Star
+  reporting; and `cargo clippy --locked --all-targets -- -D warnings`.
+- Integrated non-Rust verification passed: website clean install/build/test
+  (2 passed)/lint; editor clean install/smoke test/audit (zero findings);
+  Actionlint 1.7.12; 19 tooling tests; 54 Markdown files and 97 local links;
+  committed-whitespace range `4b70048..da1945f`; and the pinned Lizard ratchet
+  (73 current violations against 73 recorded debt caps).
+- `cargo audit --deny warnings` found no issues across 99 locked dependencies.
+  Cargo Deny passed advisories, bans, and sources with only the documented
+  duplicate-`hashbrown` warning. The npm policy accepted exactly one documented
+  advisory across four dependency paths; the raw production audit still
+  reports two moderate PostCSS records and its allowance expires 2026-08-18.
+- GitHub rules remain an external activation step: `main` and
+  `codex/stabilization` must require `Required CI gate`, require current
+  branches, and prohibit bypass. No branch was pushed and no rule, release, or
+  deployment was created.
 
 ## Roadmap gates
 
