@@ -4,6 +4,7 @@ pub mod dap;
 pub mod debugger;
 pub mod diagnostic;
 pub mod editor;
+pub mod enterprise;
 pub mod hir;
 pub mod hybrid;
 pub mod lexer;

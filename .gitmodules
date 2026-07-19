@@ -1,0 +1,3 @@
+[submodule "benchmarks/milestone22/nebula-logger"]
+	path = benchmarks/milestone22/nebula-logger
+	url = https://github.com/jongpie/NebulaLogger.git

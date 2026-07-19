@@ -38,6 +38,7 @@ fn run() -> Result<ExitCode, String> {
             | "oracle"
             | "ci"
             | "hybrid"
+            | "enterprise"
     ) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
@@ -82,6 +83,10 @@ fn run() -> Result<ExitCode, String> {
 
     if command == "hybrid" {
         return run_hybrid(args);
+    }
+
+    if command == "enterprise" {
+        return run_enterprise(args);
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -448,6 +453,170 @@ fn run_ci(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     }
 }
 
+fn run_enterprise(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let subcommand = args.next().ok_or_else(usage)?;
+    match subcommand.as_str() {
+        "manifest" => {
+            let project = PathBuf::from(args.next().ok_or_else(usage)?);
+            let mut name = None;
+            let mut repository = None;
+            let mut commit = None;
+            let mut tag = None;
+            let mut api_version = None;
+            let mut output = None;
+            let mut package_roots = Vec::new();
+            let mut test_roots = Vec::new();
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--name" => set_once(
+                        &mut name,
+                        required_value(&mut args, "--name")?,
+                        "`--name` was provided more than once",
+                    )?,
+                    "--repository" => set_once(
+                        &mut repository,
+                        required_value(&mut args, "--repository")?,
+                        "`--repository` was provided more than once",
+                    )?,
+                    "--commit" => set_once(
+                        &mut commit,
+                        required_value(&mut args, "--commit")?,
+                        "`--commit` was provided more than once",
+                    )?,
+                    "--tag" => set_once(
+                        &mut tag,
+                        required_value(&mut args, "--tag")?,
+                        "`--tag` was provided more than once",
+                    )?,
+                    "--api-version" => set_once(
+                        &mut api_version,
+                        required_value(&mut args, "--api-version")?,
+                        "`--api-version` was provided more than once",
+                    )?,
+                    "--package-root" => {
+                        package_roots
+                            .push(PathBuf::from(required_value(&mut args, "--package-root")?));
+                    }
+                    "--test-root" => {
+                        test_roots.push(PathBuf::from(required_value(&mut args, "--test-root")?));
+                    }
+                    "--output" => set_once(
+                        &mut output,
+                        PathBuf::from(required_value(&mut args, "--output")?),
+                        "`--output` was provided more than once",
+                    )?,
+                    _ => {
+                        return Err(format!(
+                            "unknown enterprise manifest option `{argument}`\n\n{}",
+                            usage()
+                        ));
+                    }
+                }
+            }
+            package_roots.sort();
+            test_roots.sort();
+            let candidate = apex_exec::enterprise::CandidateIdentity {
+                name: name.ok_or_else(|| "`enterprise manifest` requires `--name`".to_owned())?,
+                repository: repository
+                    .ok_or_else(|| "`enterprise manifest` requires `--repository`".to_owned())?,
+                git_commit: commit
+                    .ok_or_else(|| "`enterprise manifest` requires `--commit`".to_owned())?,
+                git_tag: tag.ok_or_else(|| "`enterprise manifest` requires `--tag`".to_owned())?,
+                api_version: api_version
+                    .ok_or_else(|| "`enterprise manifest` requires `--api-version`".to_owned())?,
+            };
+            let output =
+                output.ok_or_else(|| "`enterprise manifest` requires `--output`".to_owned())?;
+            let manifest = apex_exec::enterprise::EnterpriseManifest::generate(
+                project,
+                candidate,
+                package_roots,
+                test_roots,
+            )?;
+            manifest.write(&output)?;
+            println!(
+                "Wrote enterprise manifest {} ({} inputs)",
+                output.display(),
+                manifest.inputs.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        "capture" => {
+            let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+            let mut target_org = None;
+            let mut output = None;
+            let mut salesforce_cli = None;
+            let mut wait_minutes = 60_u32;
+            let mut wait_set = false;
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--target-org" => set_once(
+                        &mut target_org,
+                        required_value(&mut args, "--target-org")?,
+                        "`--target-org` was provided more than once",
+                    )?,
+                    "--output" => set_once(
+                        &mut output,
+                        PathBuf::from(required_value(&mut args, "--output")?),
+                        "`--output` was provided more than once",
+                    )?,
+                    "--sf" => set_once(
+                        &mut salesforce_cli,
+                        required_value(&mut args, "--sf")?,
+                        "`--sf` was provided more than once",
+                    )?,
+                    "--wait" => {
+                        if wait_set {
+                            return Err("`--wait` was provided more than once".to_owned());
+                        }
+                        let value = required_value(&mut args, "--wait")?;
+                        wait_minutes = value
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|wait| *wait > 0)
+                            .ok_or_else(|| {
+                                "`--wait` requires a positive integer number of minutes".to_owned()
+                            })?;
+                        wait_set = true;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unknown enterprise capture option `{argument}`\n\n{}",
+                            usage()
+                        ));
+                    }
+                }
+            }
+            let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+            let options = apex_exec::enterprise::SalesforceCaptureOptions {
+                target_org: target_org
+                    .ok_or_else(|| "`enterprise capture` requires `--target-org`".to_owned())?,
+                wait_minutes,
+            };
+            let output =
+                output.ok_or_else(|| "`enterprise capture` requires `--output`".to_owned())?;
+            let cli = salesforce_cli.map_or_else(
+                apex_exec::enterprise::EnterpriseSalesforceCli::default,
+                apex_exec::enterprise::EnterpriseSalesforceCli::new,
+            );
+            let capture = cli.capture(&manifest, &options)?;
+            capture.write(&output)?;
+            println!(
+                "Wrote Salesforce RunLocalTests capture {} ({} tests: {} passed, {} failed)",
+                output.display(),
+                capture.tests.len(),
+                capture.passed(),
+                capture.failed()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err(format!(
+            "unknown enterprise subcommand `{subcommand}`\n\n{}",
+            usage()
+        )),
+    }
+}
+
 fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
     let mut target_org = None;
@@ -755,6 +924,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }
