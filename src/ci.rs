@@ -7,6 +7,7 @@
 
 use crate::{
     ast::ClassMember,
+    compatibility::EffectiveProfile,
     project::{self, Compilation, ProjectError},
     test_runner::{self, TestOptions, TestReport},
 };
@@ -21,7 +22,7 @@ use std::{
 };
 
 pub const CI_SCHEMA_VERSION: u32 = 1;
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -331,6 +332,8 @@ pub struct CiRunResult {
     pub shard: CiShard,
     pub selected_tests: Vec<String>,
     pub selection: SelectionMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<EffectiveProfile>,
     pub compile_success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compile_diagnostic: Option<CiDiagnostic>,
@@ -370,6 +373,12 @@ impl CiRunResult {
             self.selected_tests.len(),
             self.selection.label()
         ));
+        if !self.profiles.is_empty() {
+            lines.push(format!(
+                "Profiles: {} effective source bindings",
+                self.profiles.len()
+            ));
+        }
         if let Some(report) = &self.tests {
             lines.push(report.render_console());
         }
@@ -473,6 +482,7 @@ pub fn run(manifest: &CiManifest, options: &CiRunOptions) -> Result<CiRunResult,
             } else {
                 SelectionMode::ConservativeAll
             },
+            profiles: Vec::new(),
             compile_success: false,
             compile_diagnostic: Some(ci_diagnostic(manifest, &error)),
             tests: None,
@@ -519,6 +529,7 @@ fn execute_tests(
         shard,
         selected_tests: selected,
         selection,
+        profiles: compilation.profiles.clone(),
         compile_success: true,
         compile_diagnostic: None,
         tests: Some(tests),
@@ -827,7 +838,10 @@ fn cache_key(manifest: &CiManifest, shard: CiShard) -> Result<String, String> {
     identity.shard = shard;
     identity.source_path = PathBuf::new();
     identity.project_root = PathBuf::new();
-    let bytes = serde_json::to_vec(&identity)
+    let profiles = project::discover(&manifest.project_root)
+        .map_err(|error| error.render())?
+        .effective_profiles();
+    let bytes = serde_json::to_vec(&(identity, profiles))
         .map_err(|error| format!("failed to serialize CI cache identity: {error}"))?;
     Ok(sha256(&bytes))
 }
@@ -1232,7 +1246,7 @@ mod tests {
         fs::write(
             root.join("sfdx-project.json"),
             format!(
-                r#"{{"packageDirectories":[{{"path":"../{}"}}]}}"#,
+                r#"{{"packageDirectories":[{{"path":"../{}"}}],"sourceApiVersion":"66.0"}}"#,
                 outside.file_name().unwrap().to_string_lossy()
             ),
         )
@@ -1258,6 +1272,7 @@ mod tests {
             shard: CiShard::default(),
             selected_tests: vec!["DemoTest.fails".to_owned()],
             selection: SelectionMode::All,
+            profiles: Vec::new(),
             compile_success: true,
             compile_diagnostic: None,
             tests: Some(TestReport {
@@ -1312,6 +1327,7 @@ mod tests {
             shard: CiShard::default(),
             selected_tests: Vec::new(),
             selection: SelectionMode::All,
+            profiles: Vec::new(),
             compile_success: true,
             compile_diagnostic: None,
             tests: None,
@@ -1375,7 +1391,7 @@ mod tests {
         fs::create_dir_all(&classes).unwrap();
         fs::write(
             root.join("sfdx-project.json"),
-            r#"{"packageDirectories":[{"path":"force-app"}]}"#,
+            r#"{"packageDirectories":[{"path":"force-app"}],"sourceApiVersion":"66.0"}"#,
         )
         .unwrap();
         fs::write(classes.join("Demo.cls"), "public class Demo {}").unwrap();

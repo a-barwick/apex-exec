@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "api-version-profile-difference",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "M25ProfileDifferenceTest.mixedProfilesMatchSalesforce"
+      },
+      "compare": [
+        "compile",
+        "profiles",
+        "tests"
+      ]
+    }
+  ]
+}

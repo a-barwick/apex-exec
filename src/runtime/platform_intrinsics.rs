@@ -589,7 +589,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let PlatformValue::HttpRequest(request) = self.store.platform(request_id) else {
                     return Err(invalid_runtime_operands(request.span));
                 };
-                let response = self.host.send_http(request).map_err(|message| {
+                let profile = self.execution_context.compatibility_profile();
+                let response = self.host.send_http(request, profile).map_err(|message| {
                     runtime_exception("CalloutException", message, request_span(arguments, span))
                 })?;
                 Ok(self
@@ -973,8 +974,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 _ => {
                     return Err(platform_error(
                         format!(
-                            "{} is not supported by JSON.serialize in compatibility profile `m10-common`",
-                            self.store.platform(*id).ty().apex_name()
+                            "{} is not supported by JSON.serialize in compatibility profile `{}`",
+                            self.store.platform(*id).ty().apex_name(),
+                            self.execution_context.compatibility_profile().identity()
                         ),
                         span,
                     ));

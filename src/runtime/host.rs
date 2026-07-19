@@ -1,10 +1,12 @@
-use crate::platform::{
-    DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow, DmlRowOutcome,
-    LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog, SoqlRequest, SoslRequest,
+use crate::{
+    compatibility::CompatibilityProfile,
+    platform::{
+        DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow, DmlRowOutcome,
+        LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog, SoqlRequest, SoslRequest,
+    },
 };
 use std::collections::{BTreeMap, VecDeque};
 
-pub const M10_COMPATIBILITY_PROFILE: &str = "m10-common";
 pub const M11_ASYNC_PROFILE: &str = "m11-deterministic-async";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -245,9 +247,14 @@ pub trait PlatformHost {
         UserContext::default()
     }
 
-    fn send_http(&mut self, _request: &HttpRequestData) -> Result<HttpResponseData, String> {
+    fn send_http(
+        &mut self,
+        _request: &HttpRequestData,
+        profile: CompatibilityProfile,
+    ) -> Result<HttpResponseData, String> {
         Err(format!(
-            "HTTP callout has no configured mock in compatibility profile `{M10_COMPATIBILITY_PROFILE}`"
+            "HTTP callout has no configured mock in compatibility profile `{}`",
+            profile.identity()
         ))
     }
 
@@ -354,8 +361,12 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).user_context()
     }
 
-    fn send_http(&mut self, request: &HttpRequestData) -> Result<HttpResponseData, String> {
-        (**self).send_http(request)
+    fn send_http(
+        &mut self,
+        request: &HttpRequestData,
+        profile: CompatibilityProfile,
+    ) -> Result<HttpResponseData, String> {
+        (**self).send_http(request, profile)
     }
 
     fn limit_usage(&self) -> LimitUsage {
@@ -673,12 +684,17 @@ impl PlatformHost for RecordingHost {
         self.user.clone()
     }
 
-    fn send_http(&mut self, request: &HttpRequestData) -> Result<HttpResponseData, String> {
+    fn send_http(
+        &mut self,
+        request: &HttpRequestData,
+        profile: CompatibilityProfile,
+    ) -> Result<HttpResponseData, String> {
         self.callouts += 1;
         self.callout_requests.push(request.clone());
         self.http_responses.pop_front().ok_or_else(|| {
             format!(
-                "HTTP callout has no configured mock in compatibility profile `{M10_COMPATIBILITY_PROFILE}`"
+                "HTTP callout has no configured mock in compatibility profile `{}`",
+                profile.identity()
             )
         })
     }

@@ -37,9 +37,8 @@ use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DE
 use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
-    LimitUsage, M10_COMPATIBILITY_PROFILE, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind,
-    RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
-    TriggerStage, UserContext,
+    LimitUsage, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind, RecordingHost,
+    TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 pub(crate) use instrumentation::{BranchHits, ExecutionTrace};
@@ -1262,6 +1261,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn evaluate(&mut self, expression: &Expression) -> Result<Value, Diagnostic> {
+        let profile = self.program().compatibility_profile(expression.span());
+        self.execution_context = self.execution_context.with_compatibility_profile(profile);
         match expression {
             Expression::StringLiteral(value, _) => Ok(Value::String(value.clone())),
             Expression::BooleanLiteral(value, _) => Ok(Value::Boolean(*value)),
@@ -1383,11 +1384,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     self.evaluate(right)
                 }
             }
-            Expression::Instanceof { value, target, .. } => {
+            Expression::Instanceof {
+                value,
+                target,
+                operator_span,
+                ..
+            } => {
+                let profile = self.program().compatibility_profile(*operator_span);
                 let value = self.evaluate(value)?;
-                Ok(Value::Boolean(
-                    !matches!(value, Value::Null(_)) && self.value_has_type(&value, target),
-                ))
+                Ok(Value::Boolean(if matches!(value, Value::Null(_)) {
+                    profile.null_instanceof_result()
+                } else {
+                    self.value_has_type(&value, target)
+                }))
             }
             Expression::Index {
                 collection,

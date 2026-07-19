@@ -1,3 +1,5 @@
+use crate::compatibility::CompatibilityProfile;
+
 /// Runtime modes that affect observable Apex behavior.
 ///
 /// Instrumentation remains a separate policy: debug mode describes the entry
@@ -6,27 +8,31 @@
 pub(super) struct ExecutionContext {
     test: bool,
     debug: bool,
+    profile: CompatibilityProfile,
 }
 
 impl ExecutionContext {
-    pub(super) const fn ordinary() -> Self {
+    pub(super) fn ordinary() -> Self {
         Self {
             test: false,
             debug: false,
+            profile: CompatibilityProfile::default(),
         }
     }
 
-    pub(super) const fn test() -> Self {
+    pub(super) fn test() -> Self {
         Self {
             test: true,
             debug: false,
+            profile: CompatibilityProfile::default(),
         }
     }
 
-    pub(super) const fn debugger() -> Self {
+    pub(super) fn debugger() -> Self {
         Self {
             test: false,
             debug: true,
+            profile: CompatibilityProfile::default(),
         }
     }
 
@@ -36,6 +42,14 @@ impl ExecutionContext {
 
     pub(super) const fn is_debug(self) -> bool {
         self.debug
+    }
+
+    pub(super) const fn compatibility_profile(self) -> CompatibilityProfile {
+        self.profile
+    }
+
+    pub(super) const fn with_compatibility_profile(self, profile: CompatibilityProfile) -> Self {
+        Self { profile, ..self }
     }
 
     /// Deterministic queued work inherits the mode active at submission.

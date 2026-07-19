@@ -462,7 +462,7 @@ fn interface_method_collection_tracks_visited_nodes_even_for_cyclic_raw_ast_edge
         .interfaces
         .push(crate::ast::NamedType::new("A".to_owned(), a_span));
 
-    let mut checker = Checker::new(SchemaCatalog::new());
+    let mut checker = Checker::new(SchemaCatalog::new(), SourceProfiles::default());
     checker.collect_classes(&program).unwrap();
     let mut required = Vec::new();
     let mut visited = vec![false; checker.classes.len()];
@@ -484,7 +484,7 @@ fn hierarchy_cycle_validation_examines_each_acyclic_edge_once() {
     }
     source.push_str(" public class Implementation implements I255 {}");
     let program = crate::parse(&source).unwrap();
-    let mut checker = Checker::new(SchemaCatalog::new());
+    let mut checker = Checker::new(SchemaCatalog::new(), SourceProfiles::default());
     checker.collect_classes(&program).unwrap();
     let mut graph = HierarchyGraph::new(checker.classes.len());
     for (class_id, class) in checker.classes.iter().enumerate() {
@@ -511,7 +511,7 @@ fn subtype_traversal_is_iterative_and_bounded_by_the_reachable_hierarchy() {
          public interface Unrelated {}",
     );
     let program = crate::parse(&source).unwrap();
-    let mut checker = Checker::new(SchemaCatalog::new());
+    let mut checker = Checker::new(SchemaCatalog::new(), SourceProfiles::default());
     checker.collect_classes(&program).unwrap();
     checker.validate_class_hierarchy().unwrap();
 
@@ -548,7 +548,7 @@ fn subtype_traversal_is_iterative_and_bounded_by_the_reachable_hierarchy() {
     cyclic.classes[1]
         .interfaces
         .push(crate::ast::NamedType::new("A".to_owned(), a_span));
-    let mut checker = Checker::new(SchemaCatalog::new());
+    let mut checker = Checker::new(SchemaCatalog::new(), SourceProfiles::default());
     checker.collect_classes(&cyclic).unwrap();
     let traversal =
         checker.class_inheritance_traversal(checker.class_ids["a"], checker.class_ids["c"]);

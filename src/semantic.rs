@@ -6,6 +6,7 @@ use crate::{
         Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement,
         TriggerDeclaration, TypeName, UnaryOperator,
     },
+    compatibility::{CompatibilityProfile, SourceProfiles},
     diagnostic::Diagnostic,
     hir::{
         self, CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
@@ -27,14 +28,22 @@ use flow::statement_definitely_returns_or_throws;
 use intrinsics::{require_arity, unknown_method};
 
 pub fn check(program: &Program) -> Result<hir::Program, Diagnostic> {
-    Checker::new(SchemaCatalog::new()).check_program(program)
+    Checker::new(SchemaCatalog::new(), SourceProfiles::default()).check_program(program)
 }
 
 pub fn check_with_schema(
     program: &Program,
     schema: &SchemaCatalog,
 ) -> Result<hir::Program, Diagnostic> {
-    Checker::new(schema.clone()).check_program(program)
+    Checker::new(schema.clone(), SourceProfiles::default()).check_program(program)
+}
+
+pub(crate) fn check_with_schema_and_profiles(
+    program: &Program,
+    schema: &SchemaCatalog,
+    profiles: SourceProfiles,
+) -> Result<hir::Program, Diagnostic> {
+    Checker::new(schema.clone(), profiles).check_program(program)
 }
 
 pub(crate) fn check_dynamic_soql(
@@ -43,7 +52,7 @@ pub(crate) fn check_dynamic_soql(
     expected: Option<&TypeName>,
     bindings: HashMap<String, TypeName>,
 ) -> Result<hir::CheckedSoqlQuery, Diagnostic> {
-    let mut checker = Checker::new(schema.clone());
+    let mut checker = Checker::new(schema.clone(), SourceProfiles::default());
     checker.scopes[0] = bindings;
     checker.dynamic_query = true;
     checker.soql_type(query, expected)?;
@@ -199,10 +208,11 @@ struct Checker {
     current_trigger_object: Option<usize>,
     schema: SchemaCatalog,
     dynamic_query: bool,
+    profiles: SourceProfiles,
 }
 
 impl Checker {
-    fn new(schema: SchemaCatalog) -> Self {
+    fn new(schema: SchemaCatalog, profiles: SourceProfiles) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             loop_depth: 0,
@@ -226,6 +236,7 @@ impl Checker {
             current_trigger_object: None,
             schema,
             dynamic_query: false,
+            profiles,
         }
     }
 
@@ -259,6 +270,7 @@ impl Checker {
                 async_contracts: self.async_contracts,
             },
             self.schema,
+            self.profiles,
         ))
     }
 
@@ -2402,6 +2414,7 @@ impl Checker {
             ..
         } = expression
         {
+            self.require_current_syntax("null coalescing", *operator_span)?;
             let left_type = self.expression_type_for_expected(left, expected)?;
             let right_type = self.expression_type_for_expected(right, expected)?;
             if matches!(left.as_ref(), Expression::Soql(_)) {
@@ -2465,6 +2478,19 @@ impl Checker {
                 arguments,
                 span,
             } => self.function_call_type(name, arguments, *span),
+            Expression::MethodCall {
+                safe_navigation: true,
+                navigation_span,
+                ..
+            }
+            | Expression::MemberAccess {
+                safe_navigation: true,
+                navigation_span,
+                ..
+            } => {
+                self.require_current_syntax("safe navigation", *navigation_span)?;
+                self.navigation_expression_type(expression)
+            }
             Expression::MethodCall { .. } | Expression::MemberAccess { .. } => {
                 self.navigation_expression_type(expression)
             }
@@ -2476,7 +2502,10 @@ impl Checker {
                 question_span,
                 ..
             } => self.conditional_type(condition, when_true, when_false, *question_span),
-            Expression::NullCoalesce { .. } => self.null_coalescing_expression_type(expression),
+            Expression::NullCoalesce { operator_span, .. } => {
+                self.require_current_syntax("null coalescing", *operator_span)?;
+                self.null_coalescing_expression_type(expression)
+            }
             Expression::Instanceof {
                 value,
                 target,
@@ -2593,6 +2622,7 @@ impl Checker {
         else {
             unreachable!("null-coalescing helper requires a null-coalescing expression");
         };
+        self.require_current_syntax("null coalescing", *operator_span)?;
         self.null_coalescing_type(left, right, *operator_span)
     }
 
@@ -2690,6 +2720,7 @@ impl Checker {
             _ => None,
         };
         if let Some(constructor) = platform_constructor {
+            self.require_curated_platform("platform object construction", span)?;
             for argument in arguments {
                 self.expression_type(argument)?;
             }
@@ -3925,12 +3956,21 @@ impl Checker {
             }
         };
 
-        result.map_err(|mut error| {
+        let result = result.map_err(|mut error| {
             if error.span == Span::new(0, 0) {
                 error.span = method.span;
             }
             error
-        })
+        })?;
+        if let Some(CallTarget::Intrinsic(intrinsic)) = self.calls.get(&span).copied()
+            && intrinsic.requires_curated_platform_profile()
+        {
+            self.require_curated_platform(
+                &format!("API `{}.{}`", receiver_name(receiver), method.spelling),
+                method.span,
+            )?;
+        }
+        Ok(result)
     }
 
     fn dynamic_database_method_call(
@@ -4947,6 +4987,52 @@ impl Checker {
         self.loop_depth -= 1;
         result
     }
+
+    fn profile(&self, span: Span) -> CompatibilityProfile {
+        self.profiles.for_span(span)
+    }
+
+    fn require_current_syntax(&self, feature: &str, span: Span) -> Result<(), Diagnostic> {
+        let profile = self.profile(span);
+        if profile.supports_current_syntax() {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "{feature} is not supported by compatibility profile `{}`",
+                    profile.identity()
+                ),
+                span,
+            ))
+        }
+    }
+
+    fn require_curated_platform(&self, behavior: &str, span: Span) -> Result<(), Diagnostic> {
+        let profile = self.profile(span);
+        if profile.supports_curated_platform() {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "{behavior} is not modeled by compatibility profile `{}`",
+                    profile.identity()
+                ),
+                span,
+            ))
+        }
+    }
+
+    fn unsupported_platform_api(&self, owner: &str, method: &Identifier) -> Diagnostic {
+        Diagnostic::new(
+            format!(
+                "unsupported API `{}.{}` in compatibility profile `{}`",
+                owner,
+                method.spelling,
+                self.profile(method.span).identity()
+            ),
+            method.span,
+        )
+    }
 }
 
 fn validate_modifier_set(
@@ -5121,6 +5207,10 @@ fn qualified_expression_name(expression: &Expression) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+fn receiver_name(expression: &Expression) -> String {
+    qualified_expression_name(expression).unwrap_or_else(|| "value".to_owned())
 }
 
 fn is_database_receiver(expression: &Expression) -> bool {

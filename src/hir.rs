@@ -1,5 +1,6 @@
 use crate::{
     ast,
+    compatibility::{CompatibilityProfile, SourceProfiles},
     platform::{DataValue, FieldType, SchemaCatalog},
     span::Span,
 };
@@ -36,10 +37,16 @@ pub struct Program {
     async_contracts: HashMap<usize, AsyncClassContract>,
     class_metadata: Vec<ClassRuntimeMetadata>,
     schema: SchemaCatalog,
+    profiles: SourceProfiles,
 }
 
 impl Program {
-    pub(crate) fn new(ast: ast::Program, facts: ProgramFacts, schema: SchemaCatalog) -> Self {
+    pub(crate) fn new(
+        ast: ast::Program,
+        facts: ProgramFacts,
+        schema: SchemaCatalog,
+        profiles: SourceProfiles,
+    ) -> Self {
         let ProgramFacts {
             expression_types,
             calls,
@@ -69,6 +76,7 @@ impl Program {
             async_contracts,
             class_metadata,
             schema,
+            profiles,
         }
     }
 
@@ -126,6 +134,10 @@ impl Program {
 
     pub fn schema(&self) -> &SchemaCatalog {
         &self.schema
+    }
+
+    pub fn compatibility_profile(&self, span: Span) -> CompatibilityProfile {
+        self.profiles.for_span(span)
     }
 }
 

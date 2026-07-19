@@ -25,6 +25,26 @@ impl IntrinsicId {
             Self::StaticString(_) | Self::Math(_) | Self::System(_)
         ) || matches!(self, Self::Platform(intrinsic) if intrinsic.is_static())
     }
+
+    /// Whether this intrinsic belongs to the curated platform surface whose
+    /// behavior is currently modeled only by the current API profile family.
+    pub const fn requires_curated_platform_profile(self) -> bool {
+        match self {
+            Self::Platform(_) => true,
+            Self::Math(MathIntrinsic::Random) => true,
+            Self::System(
+                SystemIntrinsic::Now | SystemIntrinsic::Today | SystemIntrinsic::CurrentTimeMillis,
+            ) => true,
+            Self::StaticString(_)
+            | Self::Math(_)
+            | Self::System(_)
+            | Self::String(_)
+            | Self::Exception(_)
+            | Self::List(_)
+            | Self::Set(_)
+            | Self::Map(_) => false,
+        }
+    }
 }
 
 /// Constructors for platform objects whose state is owned by the execution

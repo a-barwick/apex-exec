@@ -211,7 +211,7 @@ fn validation_snapshots_are_portable_and_strictly_versioned() {
     assert!(snapshot.authenticated);
     assert_eq!(snapshot.evidence.target, TARGET);
     let mut json = serde_json::to_value(snapshot).unwrap();
-    json["schemaVersion"] = serde_json::json!(3);
+    json["schemaVersion"] = serde_json::json!(4);
     fs::write(&fixture.snapshot, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
     assert!(
         ValidationSnapshot::load(&fixture.snapshot)

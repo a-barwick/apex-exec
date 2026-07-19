@@ -860,7 +860,7 @@ impl Checker {
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
             ("eventbus", "publish") => P::EventBusPublish,
-            _ => return Err(unsupported_platform_api(owner, method)),
+            _ => return Err(self.unsupported_platform_api(owner, method)),
         };
         let result = match intrinsic {
             P::DateNewInstance => {
@@ -1138,7 +1138,9 @@ impl Checker {
                 P::AsyncContextGetJobId
             }
             (TypeName::SchedulableContext, "gettriggerid") => P::SchedulableContextGetTriggerId,
-            _ => return Err(unsupported_platform_api(&receiver_type.apex_name(), method)),
+            _ => {
+                return Err(self.unsupported_platform_api(&receiver_type.apex_name(), method));
+            }
         };
         let owner = receiver_type.apex_name();
         let result = match intrinsic {
@@ -1646,16 +1648,6 @@ pub(super) fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> D
 fn unknown_static_method(owner: &str, method: &Identifier) -> Diagnostic {
     Diagnostic::new(
         format!("unknown static method `{}` on {}", method.spelling, owner),
-        method.span,
-    )
-}
-
-fn unsupported_platform_api(owner: &str, method: &Identifier) -> Diagnostic {
-    Diagnostic::new(
-        format!(
-            "unsupported API `{}.{}` in compatibility profile `m10-common`",
-            owner, method.spelling
-        ),
         method.span,
     )
 }

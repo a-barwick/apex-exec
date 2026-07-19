@@ -195,7 +195,7 @@ fn discovers_compiles_invokes_and_incrementally_rechecks_an_sfdx_project() {
     fs::create_dir_all(&classes).unwrap();
     fs::write(
         root.join("sfdx-project.json"),
-        r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+        r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
     )
     .unwrap();
     fs::write(
@@ -283,7 +283,7 @@ fn invocation_errors_render_each_stack_frame_against_its_source_file() {
     fs::create_dir_all(&classes).unwrap();
     fs::write(
         root.join("sfdx-project.json"),
-        r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+        r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
     )
     .unwrap();
     let entry = classes.join("Entry.cls");

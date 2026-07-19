@@ -1,5 +1,6 @@
 use crate::{
     ast::Program as AstProgram,
+    compatibility::{CompatibilityProfile, EffectiveProfile, SourceProfiles},
     diagnostic::Diagnostic,
     hir,
     platform::{SchemaCatalog, import_metadata},
@@ -35,6 +36,7 @@ pub struct Compilation {
     pub dependencies: DependencyGraph,
     pub incremental: IncrementalReport,
     pub schema: SchemaCatalog,
+    pub profiles: Vec<EffectiveProfile>,
     source_map: SourceMap,
 }
 
@@ -64,6 +66,10 @@ impl Compilation {
     /// Returns the source text and path assigned to a compiler source identity.
     pub fn source_text(&self, source_id: SourceId) -> Option<(&Path, &str)> {
         self.source_map.source(source_id)
+    }
+
+    pub fn effective_profiles(&self) -> &[EffectiveProfile] {
+        &self.profiles
     }
 }
 
@@ -109,7 +115,7 @@ impl ProjectCompiler {
         let fingerprints = project
             .files
             .iter()
-            .map(|file| (file.path.clone(), source_hash(&file.source)))
+            .map(|file| (file.path.clone(), source_fingerprint(file)))
             .collect::<BTreeMap<_, _>>();
 
         if fingerprints == self.last_fingerprints
@@ -134,7 +140,7 @@ impl ProjectCompiler {
         let mut parsed_files = Vec::new();
         let mut reused_files = Vec::new();
         for file in &project.files {
-            let hash = fingerprints[&file.path];
+            let hash = source_hash(&file.source);
             if self
                 .units
                 .get(&file.path)
@@ -171,17 +177,21 @@ impl ProjectCompiler {
         self.units.retain(|path, _| fingerprints.contains_key(path));
 
         let (merged, source_map) = merge_units(&project.files, &self.units);
+        let source_profiles = source_profiles(&project.files, &self.units, project.project_profile);
         let dependencies = build_dependency_graph(&project.files, &self.units);
-        let changed = parsed_files
+        let changed = fingerprints
             .iter()
-            .chain(&removed)
-            .cloned()
+            .filter(|(path, fingerprint)| self.last_fingerprints.get(*path) != Some(*fingerprint))
+            .map(|(path, _)| path.clone())
+            .chain(removed)
             .collect::<BTreeSet<_>>();
         let mut invalidated = dependent_closure(&changed, &self.last_dependencies);
         invalidated.extend(dependent_closure(&changed, &dependencies));
 
-        let program = crate::semantic::check_with_schema(&merged, &schema)
-            .map_err(|diagnostic| source_map.project_error(diagnostic))?;
+        let program =
+            crate::semantic::check_with_schema_and_profiles(&merged, &schema, source_profiles)
+                .map_err(|diagnostic| source_map.project_error(diagnostic))?;
+        let profiles = project.effective_profiles();
         let compilation = Compilation {
             root: project.root,
             program,
@@ -192,6 +202,7 @@ impl ProjectCompiler {
                 invalidated_files: invalidated.into_iter().collect(),
             },
             schema,
+            profiles,
             source_map,
         };
         self.last_fingerprints = fingerprints;
@@ -317,8 +328,26 @@ pub(crate) fn compile_source_subset(
     }
     let (merged, source_map) = merge_units(files, &units);
     let dependencies = build_dependency_graph(files, &units);
-    let program = crate::semantic::check_with_schema(&merged, schema)
-        .map_err(|diagnostic| source_map.project_error(diagnostic))?;
+    let default_profile = files.first().map(|file| file.profile).unwrap_or_default();
+    let program = crate::semantic::check_with_schema_and_profiles(
+        &merged,
+        schema,
+        source_profiles(files, &units, default_profile),
+    )
+    .map_err(|diagnostic| source_map.project_error(diagnostic))?;
+    let mut profiles = files
+        .iter()
+        .map(|file| {
+            let source = file
+                .path
+                .strip_prefix(&root)
+                .unwrap_or(&file.path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            EffectiveProfile::new(source, file.profile, file.profile_origin)
+        })
+        .collect::<Vec<_>>();
+    profiles.sort();
     Ok(Compilation {
         root,
         program,
@@ -329,6 +358,7 @@ pub(crate) fn compile_source_subset(
             invalidated_files: Vec::new(),
         },
         schema: schema.clone(),
+        profiles,
         source_map,
     })
 }
@@ -337,6 +367,25 @@ fn source_hash(source: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
     hasher.finish()
+}
+
+fn source_fingerprint(file: &SourceFile) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    file.source.hash(&mut hasher);
+    file.profile.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn source_profiles(
+    files: &[SourceFile],
+    units: &HashMap<PathBuf, CachedUnit>,
+    default: CompatibilityProfile,
+) -> SourceProfiles {
+    let mut profiles = SourceProfiles::new(default);
+    for file in files {
+        profiles.insert(units[&file.path].source_id, file.profile);
+    }
+    profiles
 }
 
 fn merge_units(
@@ -382,10 +431,14 @@ mod tests {
             SourceFile {
                 path: able_path.clone(),
                 source: able_source.clone(),
+                profile: CompatibilityProfile::default(),
+                profile_origin: crate::compatibility::ProfileOrigin::ProjectDefault,
             },
             SourceFile {
                 path: beta_path.clone(),
                 source: beta_source.clone(),
+                profile: CompatibilityProfile::default(),
+                profile_origin: crate::compatibility::ProfileOrigin::ProjectDefault,
             },
         ];
         let units = HashMap::from([
@@ -448,7 +501,7 @@ mod tests {
         fs::create_dir_all(&classes).unwrap();
         fs::write(
             root.join("sfdx-project.json"),
-            r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+            r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
         )
         .unwrap();
         let able_path = classes.join("Able.cls");

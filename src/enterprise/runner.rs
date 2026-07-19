@@ -1,5 +1,6 @@
 use super::{EnterpriseManifest, SalesforceCapture};
 use crate::{
+    compatibility::{ApiVersion, CompatibilityProfile, ProfileOrigin},
     platform,
     project::{Compilation, SourceFile, compile_source_subset},
     test_runner::{self, TestOptions},
@@ -263,6 +264,8 @@ impl Inventory {
 }
 
 fn load_sources(manifest: &EnterpriseManifest) -> Result<(SourceInventory, OwnerIndex), String> {
+    let api_version = manifest.candidate.api_version.parse::<ApiVersion>()?;
+    let profile = CompatibilityProfile::for_api_version(api_version)?;
     let mut sources = BTreeMap::new();
     let mut owners = BTreeMap::new();
     for input in &manifest.inputs {
@@ -297,6 +300,8 @@ fn load_sources(manifest: &EnterpriseManifest) -> Result<(SourceInventory, Owner
             SourceFile {
                 path: absolute,
                 source,
+                profile,
+                profile_origin: ProfileOrigin::ProjectDefault,
             },
         );
     }
@@ -887,7 +892,7 @@ mod tests {
         fs::create_dir_all(&classes).unwrap();
         fs::write(
             root.join("sfdx-project.json"),
-            r#"{"packageDirectories":[{"path":"force-app","default":true}]}"#,
+            r#"{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"66.0"}"#,
         )
         .unwrap();
         fs::write(
