@@ -393,6 +393,13 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   **84.81%** across the M20-changed production modules. The checked-in M20
   Apex project passed 2/2 Apex tests and reported 12/12 production lines
   covered.
+- M21 implementation candidate `f91bf62` passes 403 ordinary tests with no
+  failures or ignored tests, formatting, Clippy with warnings denied,
+  documentation/link validation, and the pinned Lizard complexity ratchet.
+  LLVM source-line coverage measures **85.46%** overall
+  (24,544/28,719) and **84.99%** across all 13 M21-changed production modules
+  (9,233/10,863). The M21 Apex example executes through the CLI and prints the
+  expected multi-declarator result and typed null.
 
 ## Immediate target
 
