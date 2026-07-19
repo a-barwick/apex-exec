@@ -340,40 +340,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             true,
             false,
         )?;
-        let elements = match start_result {
-            Value::Collection(id) => match self.store.collection(id) {
-                Collection::List { elements, .. } => elements.clone(),
-                _ => {
-                    return Err(async_exception("Batchable.start must return a List", span));
-                }
-            },
-            Value::Platform(id) => {
-                let PlatformValue::QueryLocator(collection) = self.store.platform(id) else {
-                    return Err(async_exception(
-                        "Batchable.start returned a non-QueryLocator platform value",
-                        span,
-                    ));
-                };
-                match self.store.collection(*collection) {
-                    Collection::List { elements, .. } => elements.clone(),
-                    _ => {
-                        return Err(async_exception(
-                            "Batchable.start QueryLocator must contain records",
-                            span,
-                        ));
-                    }
-                }
-            }
-            Value::Null(_) => {
-                return Err(async_exception("Batchable.start returned null", span));
-            }
-            _ => {
-                return Err(async_exception(
-                    "Batchable.start returned a non-List value",
-                    span,
-                ));
-            }
-        };
+        let elements = self.batch_start_elements(start_result, span)?;
 
         for chunk in elements.chunks(scope_size) {
             let scope = self.store.allocate_collection(Collection::List {
@@ -408,6 +375,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             false,
         )?;
         Ok(())
+    }
+
+    fn batch_start_elements(
+        &self,
+        start_result: Value,
+        span: Span,
+    ) -> Result<Vec<Value>, Diagnostic> {
+        match start_result {
+            Value::Collection(id) => match self.store.collection(id) {
+                Collection::List { elements, .. } => Ok(elements.clone()),
+                _ => Err(async_exception("Batchable.start must return a List", span)),
+            },
+            Value::Platform(id) => {
+                let PlatformValue::QueryLocator(collection) = self.store.platform(id) else {
+                    return Err(async_exception(
+                        "Batchable.start returned a non-QueryLocator platform value",
+                        span,
+                    ));
+                };
+                match self.store.collection(*collection) {
+                    Collection::List { elements, .. } => Ok(elements.clone()),
+                    _ => Err(async_exception(
+                        "Batchable.start QueryLocator must contain records",
+                        span,
+                    )),
+                }
+            }
+            Value::Null(_) => Err(async_exception("Batchable.start returned null", span)),
+            _ => Err(async_exception(
+                "Batchable.start returned a non-List value",
+                span,
+            )),
+        }
     }
 
     fn deliver_platform_events(
@@ -572,51 +572,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Value::Object(snapshot))
             }
-            Value::SObject(source) => {
-                if let Some(snapshot) = memo.sobjects.get(&source) {
-                    return Ok(Value::SObject(*snapshot));
-                }
-                let instance = self.store.sobject(source).clone();
-                let Value::SObject(snapshot) = self.store.allocate_sobject(instance.object_id)
-                else {
-                    unreachable!()
-                };
-                memo.sobjects.insert(source, snapshot);
-                let fields = instance
-                    .fields
-                    .into_iter()
-                    .map(|(field, value)| Ok((field, self.clone_async_value(value, span, memo)?)))
-                    .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
-                let relationships = instance
-                    .relationships
-                    .into_iter()
-                    .map(|(field, related)| {
-                        let Value::SObject(related) =
-                            self.clone_async_value(Value::SObject(related), span, memo)?
-                        else {
-                            unreachable!()
-                        };
-                        Ok((field, related))
-                    })
-                    .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
-                let children = instance
-                    .children
-                    .into_iter()
-                    .map(|(relationship, collection)| {
-                        let Value::Collection(collection) =
-                            self.clone_async_value(Value::Collection(collection), span, memo)?
-                        else {
-                            unreachable!()
-                        };
-                        Ok((relationship, collection))
-                    })
-                    .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
-                let snapshot_instance = self.store.sobject_mut(snapshot);
-                snapshot_instance.fields = fields;
-                snapshot_instance.relationships = relationships;
-                snapshot_instance.children = children;
-                Ok(Value::SObject(snapshot))
-            }
+            Value::SObject(source) => self.clone_async_sobject(source, span, memo),
             Value::Platform(source) => match self.store.platform(source).clone() {
                 PlatformValue::Blob(bytes) => {
                     Ok(self.store.allocate_platform(PlatformValue::Blob(bytes)))
@@ -631,6 +587,56 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             )),
         }
+    }
+
+    fn clone_async_sobject(
+        &mut self,
+        source: SObjectId,
+        span: Span,
+        memo: &mut CloneMemo,
+    ) -> Result<Value, Diagnostic> {
+        if let Some(snapshot) = memo.sobjects.get(&source) {
+            return Ok(Value::SObject(*snapshot));
+        }
+        let instance = self.store.sobject(source).clone();
+        let Value::SObject(snapshot) = self.store.allocate_sobject(instance.object_id) else {
+            unreachable!()
+        };
+        memo.sobjects.insert(source, snapshot);
+        let fields = instance
+            .fields
+            .into_iter()
+            .map(|(field, value)| Ok((field, self.clone_async_value(value, span, memo)?)))
+            .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
+        let relationships = instance
+            .relationships
+            .into_iter()
+            .map(|(field, related)| {
+                let Value::SObject(related) =
+                    self.clone_async_value(Value::SObject(related), span, memo)?
+                else {
+                    unreachable!()
+                };
+                Ok((field, related))
+            })
+            .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
+        let children = instance
+            .children
+            .into_iter()
+            .map(|(relationship, collection)| {
+                let Value::Collection(collection) =
+                    self.clone_async_value(Value::Collection(collection), span, memo)?
+                else {
+                    unreachable!()
+                };
+                Ok((relationship, collection))
+            })
+            .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
+        let target = self.store.sobject_mut(snapshot);
+        target.fields = fields;
+        target.relationships = relationships;
+        target.children = children;
+        Ok(Value::SObject(snapshot))
     }
 }
 

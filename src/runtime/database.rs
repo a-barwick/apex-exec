@@ -32,12 +32,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let argument = self.evaluate(&arguments[0])?;
-        if kind == DatabaseQueryKind::QueryLocator {
-            if let Value::Collection(collection) = argument {
-                return Ok(self
-                    .store
-                    .allocate_platform(PlatformValue::QueryLocator(collection)));
-            }
+        if let Some(locator) = self.static_query_locator(kind, &argument) {
+            return Ok(locator);
         }
         let Value::String(source) = argument else {
             return Err(runtime_exception(
@@ -46,30 +42,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         };
-        let parsed = crate::parse_dynamic_soql(&source).map_err(|error| {
+        let checked = self.check_dynamic_query(&source, expected_object_id, kind, span)?;
+        let request = self.soql_request(&checked, span)?;
+        let schema = self.program().schema().clone();
+        let outcome = self
+            .host
+            .soql(&schema, &request)
+            .map_err(|error| runtime_exception("QueryException", error.to_string(), span))?;
+        let value = self.query_outcome_value(outcome, checked.result, span)?;
+        self.finish_dynamic_query_value(kind, expected_object_id, value, span)
+    }
+
+    fn static_query_locator(&mut self, kind: DatabaseQueryKind, argument: &Value) -> Option<Value> {
+        if kind != DatabaseQueryKind::QueryLocator {
+            return None;
+        }
+        let Value::Collection(collection) = argument else {
+            return None;
+        };
+        Some(
+            self.store
+                .allocate_platform(PlatformValue::QueryLocator(*collection)),
+        )
+    }
+
+    fn check_dynamic_query(
+        &self,
+        source: &str,
+        expected_object_id: Option<usize>,
+        kind: DatabaseQueryKind,
+        span: Span,
+    ) -> Result<CheckedSoqlQuery, Diagnostic> {
+        let parsed = crate::parse_dynamic_soql(source).map_err(|error| {
             runtime_exception(
                 "QueryException",
                 format!("invalid dynamic SOQL: {}", error.message),
                 span,
             )
         })?;
-        let mut bindings = std::collections::HashMap::new();
-        for scope in &self.scopes {
-            for (name, slot) in scope {
-                bindings.insert(name.clone(), slot.ty.clone());
-            }
-        }
-        let expected_type = expected_object_id.map(|object_id| {
-            let object = self
-                .program()
-                .schema()
-                .object_at(object_id)
-                .expect("checked dynamic query object is valid");
-            TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
-                object.api_name().to_owned(),
-                span,
-            ))))
-        });
+        let bindings = self.visible_query_binding_types();
+        let expected_type = self.dynamic_query_expected_type(expected_object_id, span);
         let checked = crate::semantic::check_dynamic_soql(
             &parsed,
             self.program().schema(),
@@ -83,12 +95,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             )
         })?;
-        let valid_result = match kind {
-            DatabaseQueryKind::Query => checked.result == QueryResultKind::Records,
-            DatabaseQueryKind::Count => checked.result == QueryResultKind::Count,
-            DatabaseQueryKind::QueryLocator => checked.result == QueryResultKind::Records,
-        };
-        if !valid_result {
+        if !dynamic_query_result_is_valid(kind, checked.result) {
             return Err(runtime_exception(
                 "QueryException",
                 match kind {
@@ -103,34 +110,48 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         }
-        let request = self.soql_request(&checked, span)?;
-        let schema = self.program().schema().clone();
-        let outcome = self
-            .host
-            .soql(&schema, &request)
-            .map_err(|error| runtime_exception("QueryException", error.to_string(), span))?;
-        let value = self.query_outcome_value(outcome, checked.result, span)?;
+        Ok(checked)
+    }
+
+    fn visible_query_binding_types(&self) -> std::collections::HashMap<String, TypeName> {
+        let mut bindings = std::collections::HashMap::new();
+        for scope in &self.scopes {
+            for (name, slot) in scope {
+                bindings.insert(name.clone(), slot.ty.clone());
+            }
+        }
+        bindings
+    }
+
+    fn dynamic_query_expected_type(
+        &self,
+        expected_object_id: Option<usize>,
+        span: Span,
+    ) -> Option<TypeName> {
+        expected_object_id.map(|object_id| {
+            let object = self
+                .program()
+                .schema()
+                .object_at(object_id)
+                .expect("checked dynamic query object is valid");
+            TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+                object.api_name().to_owned(),
+                span,
+            ))))
+        })
+    }
+
+    fn finish_dynamic_query_value(
+        &mut self,
+        kind: DatabaseQueryKind,
+        expected_object_id: Option<usize>,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
         match kind {
             DatabaseQueryKind::Count => Ok(value),
             DatabaseQueryKind::Query => {
-                if let (Some(object_id), Value::Collection(collection)) =
-                    (expected_object_id, &value)
-                {
-                    let object = self
-                        .program()
-                        .schema()
-                        .object_at(object_id)
-                        .expect("checked expected object is valid");
-                    let Collection::List { element_type, .. } =
-                        self.store.collection_mut(*collection)
-                    else {
-                        unreachable!("record query allocates a List")
-                    };
-                    *element_type = TypeName::Custom(crate::ast::NamedType::new(
-                        object.api_name().to_owned(),
-                        span,
-                    ));
-                }
+                self.retag_dynamic_record_list(expected_object_id, &value, span);
                 Ok(value)
             }
             DatabaseQueryKind::QueryLocator => {
@@ -142,6 +163,30 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .allocate_platform(PlatformValue::QueryLocator(collection)))
             }
         }
+    }
+
+    fn retag_dynamic_record_list(
+        &mut self,
+        expected_object_id: Option<usize>,
+        value: &Value,
+        span: Span,
+    ) {
+        let (Some(object_id), Value::Collection(collection)) = (expected_object_id, value) else {
+            return;
+        };
+        let object = self
+            .program()
+            .schema()
+            .object_at(object_id)
+            .expect("checked expected object is valid");
+        let ty = TypeName::Custom(crate::ast::NamedType::new(
+            object.api_name().to_owned(),
+            span,
+        ));
+        let Collection::List { element_type, .. } = self.store.collection_mut(*collection) else {
+            unreachable!("record query allocates a List")
+        };
+        *element_type = ty;
     }
 
     pub(super) fn evaluate_soql(&mut self, span: Span) -> Result<Value, Diagnostic> {
@@ -826,19 +871,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     relationships: Vec::new(),
                     field: alias.clone(),
                 },
-                operator: match operator {
-                    crate::ast::SoqlComparisonOperator::Equal => QueryComparison::Equal,
-                    crate::ast::SoqlComparisonOperator::NotEqual => QueryComparison::NotEqual,
-                    crate::ast::SoqlComparisonOperator::Less => QueryComparison::Less,
-                    crate::ast::SoqlComparisonOperator::LessEqual => QueryComparison::LessEqual,
-                    crate::ast::SoqlComparisonOperator::Greater => QueryComparison::Greater,
-                    crate::ast::SoqlComparisonOperator::GreaterEqual => {
-                        QueryComparison::GreaterEqual
-                    }
-                    crate::ast::SoqlComparisonOperator::Like => {
-                        unreachable!("checker rejects aggregate LIKE")
-                    }
-                },
+                operator: query_comparison(*operator),
                 right: self.query_value(right, span)?,
             },
             CheckedCondition::Comparison {
@@ -847,17 +880,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 right,
             } => QueryCondition::Comparison {
                 left: self.query_field(left),
-                operator: match operator {
-                    crate::ast::SoqlComparisonOperator::Equal => QueryComparison::Equal,
-                    crate::ast::SoqlComparisonOperator::NotEqual => QueryComparison::NotEqual,
-                    crate::ast::SoqlComparisonOperator::Less => QueryComparison::Less,
-                    crate::ast::SoqlComparisonOperator::LessEqual => QueryComparison::LessEqual,
-                    crate::ast::SoqlComparisonOperator::Greater => QueryComparison::Greater,
-                    crate::ast::SoqlComparisonOperator::GreaterEqual => {
-                        QueryComparison::GreaterEqual
-                    }
-                    crate::ast::SoqlComparisonOperator::Like => QueryComparison::Like,
-                },
+                operator: query_comparison(*operator),
                 right: self.query_value(right, span)?,
             },
             CheckedCondition::In {
@@ -867,62 +890,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             } => QueryCondition::In {
                 field: self.query_field(field),
                 negated: *negated,
-                values: QueryInValues::Values(match values {
-                    CheckedInValues::Values(values) => values
-                        .iter()
-                        .map(|value| self.query_value(value, span))
-                        .collect::<Result<Vec<_>, _>>()?,
-                    CheckedInValues::Bind(expression) => {
-                        let value = self.evaluate(expression)?;
-                        let Value::Collection(id) = value else {
-                            return Err(runtime_exception(
-                                "QueryException",
-                                "SOQL `IN` bind must evaluate to a collection",
-                                span,
-                            ));
-                        };
-                        let elements = match self.store.collection(id) {
-                            Collection::List { elements, .. }
-                            | Collection::Set { elements, .. } => elements.clone(),
-                            Collection::Map { .. } => unreachable!("checker rejected Map bind"),
-                        };
-                        elements
-                            .iter()
-                            .map(|value| self.value_to_data(value, span).map(QueryValue::Data))
-                            .collect::<Result<Vec<_>, _>>()?
-                    }
-                    CheckedInValues::DynamicBind(name) => {
-                        let value = self
-                            .lookup_canonical(name)
-                            .ok_or_else(|| {
-                                runtime_exception(
-                                    "QueryException",
-                                    format!("dynamic SOQL bind `{name}` is unavailable"),
-                                    span,
-                                )
-                            })?
-                            .value
-                            .clone();
-                        let Value::Collection(id) = value else {
-                            return Err(runtime_exception(
-                                "QueryException",
-                                "dynamic SOQL `IN` bind must evaluate to a collection",
-                                span,
-                            ));
-                        };
-                        let elements = match self.store.collection(id) {
-                            Collection::List { elements, .. }
-                            | Collection::Set { elements, .. } => elements,
-                            Collection::Map { .. } => {
-                                unreachable!("checker rejected dynamic Map bind")
-                            }
-                        };
-                        elements
-                            .iter()
-                            .map(|value| self.value_to_data(value, span).map(QueryValue::Data))
-                            .collect::<Result<Vec<_>, _>>()?
-                    }
-                }),
+                values: QueryInValues::Values(self.query_in_values(values, span)?),
             },
             CheckedCondition::Not(condition) => {
                 QueryCondition::Not(Box::new(self.query_condition(condition, span)?))
@@ -940,6 +908,60 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 right: Box::new(self.query_condition(right, span)?),
             },
         })
+    }
+
+    fn query_in_values(
+        &mut self,
+        values: &CheckedInValues,
+        span: Span,
+    ) -> Result<Vec<QueryValue>, Diagnostic> {
+        match values {
+            CheckedInValues::Values(values) => values
+                .iter()
+                .map(|value| self.query_value(value, span))
+                .collect(),
+            CheckedInValues::Bind(expression) => {
+                let value = self.evaluate(expression)?;
+                self.query_collection_values(value, "SOQL", span)
+            }
+            CheckedInValues::DynamicBind(name) => {
+                let value = self
+                    .lookup_canonical(name)
+                    .ok_or_else(|| {
+                        runtime_exception(
+                            "QueryException",
+                            format!("dynamic SOQL bind `{name}` is unavailable"),
+                            span,
+                        )
+                    })?
+                    .value
+                    .clone();
+                self.query_collection_values(value, "dynamic SOQL", span)
+            }
+        }
+    }
+
+    fn query_collection_values(
+        &self,
+        value: Value,
+        subject: &str,
+        span: Span,
+    ) -> Result<Vec<QueryValue>, Diagnostic> {
+        let Value::Collection(id) = value else {
+            return Err(runtime_exception(
+                "QueryException",
+                format!("{subject} `IN` bind must evaluate to a collection"),
+                span,
+            ));
+        };
+        let elements = match self.store.collection(id) {
+            Collection::List { elements, .. } | Collection::Set { elements, .. } => elements,
+            Collection::Map { .. } => unreachable!("checker rejected Map bind"),
+        };
+        elements
+            .iter()
+            .map(|value| self.value_to_data(value, span).map(QueryValue::Data))
+            .collect()
     }
 
     fn query_order(&self, order: &CheckedOrderBy) -> QueryOrder {
@@ -1367,4 +1389,25 @@ fn date_to_epoch_days(value: NaiveDate, span: Span) -> Result<i32, Diagnostic> {
             span,
         )
     })
+}
+
+fn dynamic_query_result_is_valid(kind: DatabaseQueryKind, result: QueryResultKind) -> bool {
+    match kind {
+        DatabaseQueryKind::Query | DatabaseQueryKind::QueryLocator => {
+            result == QueryResultKind::Records
+        }
+        DatabaseQueryKind::Count => result == QueryResultKind::Count,
+    }
+}
+
+fn query_comparison(operator: crate::ast::SoqlComparisonOperator) -> QueryComparison {
+    match operator {
+        crate::ast::SoqlComparisonOperator::Equal => QueryComparison::Equal,
+        crate::ast::SoqlComparisonOperator::NotEqual => QueryComparison::NotEqual,
+        crate::ast::SoqlComparisonOperator::Less => QueryComparison::Less,
+        crate::ast::SoqlComparisonOperator::LessEqual => QueryComparison::LessEqual,
+        crate::ast::SoqlComparisonOperator::Greater => QueryComparison::Greater,
+        crate::ast::SoqlComparisonOperator::GreaterEqual => QueryComparison::GreaterEqual,
+        crate::ast::SoqlComparisonOperator::Like => QueryComparison::Like,
+    }
 }

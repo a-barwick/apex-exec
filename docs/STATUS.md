@@ -414,11 +414,23 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   complexity ratchet. LLVM source-line coverage measures **85.26%** overall
   (26,206/30,738) and **78.81%** across the seven M22-changed production
   modules (2,429/3,082).
+- M23 adds correlated custom child queries, parent relationship paths through
+  five levels, aggregate `HAVING`, UTC relative date literals, and dynamic
+  `Database.query`, `countQuery`, and `getQueryLocator`. Static and dynamic
+  forms lower through the same checked query plan and platform executor; child
+  hydration is batched and emits deterministic object-scan facts. The guarded
+  Salesforce API 65.0 fixture and credential-free replay both report 2/2
+  selected outcomes matching. Verification passes 416 ordinary tests with no
+  failures or ignored tests, formatting, Clippy with warnings denied,
+  documentation validation, and the pinned Lizard complexity ratchet. LLVM
+  source-line coverage measures **84.82%** overall (27,363/32,259) and
+  **84.16%** across the 20 instrumented M23-changed production modules
+  (13,580/16,135).
 
 ## Immediate target
 
-M23 broader SOQL fidelity is the next planned feature milestone, prioritized by
-the M22 measured blocker census. The package tracker is in
+M23 broader SOQL fidelity is complete. M24 partial DML results and bulk failure
+fidelity is the next planned feature milestone. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
@@ -510,9 +522,12 @@ comment-aware construct counts are recorded in
   compilation. Id and relationship fields still appear as `String` in SObject
   execution for backwards compatibility, while standalone `Id` values validate
   15/18-character IDs. Full field-level `Id` integration remains future work.
-- Static SOQL supports direct fields and one custom parent `__r` relationship
-  level. Child subqueries, `HAVING`, `TYPEOF`, polymorphic relationships, date
-  literals, and the broader SOQL grammar remain unsupported.
+- Static SOQL supports direct fields, custom parent `__r` paths through five
+  relationships, correlated custom child subqueries, aggregate `HAVING`, and
+  UTC relative date literals. Dynamic `Database.query`, `countQuery`, and
+  `getQueryLocator` reparse and recheck into the same plan. Nested child
+  subqueries, `TYPEOF`, polymorphic relationships, absolute date/datetime
+  literals, and the broader SOQL grammar remain explicitly unsupported.
 - Aggregate queries support grouped direct fields plus `COUNT`, `SUM`, `MIN`,
   and `MAX` over the current scalar types. `AggregateResult` exposes only
   `get(String)`.

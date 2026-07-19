@@ -2959,114 +2959,8 @@ impl Checker {
                 .insert(span, MemberTarget::TriggerContext(variable));
             return Ok(ExpressionType::Value(ty));
         }
-        let potential_sobject = match receiver {
-            Expression::Variable(identifier)
-                if self.lookup(&identifier.canonical).is_some()
-                    || self.current_class.is_some_and(|class_id| {
-                        self.class_value_member(class_id, &identifier.canonical)
-                            .is_some()
-                    }) =>
-            {
-                match self.expression_type(receiver)? {
-                    ExpressionType::Value(ty) => Some(ty),
-                    ExpressionType::Null | ExpressionType::Void => None,
-                }
-            }
-            Expression::Variable(_) => None,
-            _ => match self.expression_type(receiver)? {
-                ExpressionType::Value(ty) => Some(ty),
-                ExpressionType::Null | ExpressionType::Void => None,
-            },
-        };
-        if let Some(receiver_type) = potential_sobject
-            && (self.is_sobject_type(&receiver_type)
-                || self.is_dynamic_sobject_type(&receiver_type))
-        {
-            let Some(object_id) = self.sobject_object_id(&receiver_type) else {
-                return Err(Diagnostic::new(
-                    "dynamic SObject fields require get/put access",
-                    name.span,
-                ));
-            };
-            let object = self
-                .schema
-                .object_at(object_id)
-                .expect("schema object index is valid");
-            let Some(field_id) = object.field_index(&name.spelling) else {
-                if let Some((reference_field_id, target_object_id)) =
-                    self.sobject_relationship_target(object_id, &name.spelling)
-                {
-                    if for_write {
-                        return Err(Diagnostic::new(
-                            "parent relationship fields are read-only",
-                            name.span,
-                        ));
-                    }
-                    self.members.insert(
-                        span,
-                        MemberTarget::SObjectRelationship {
-                            object_id,
-                            reference_field_id,
-                            target_object_id,
-                        },
-                    );
-                    let target = self
-                        .schema
-                        .object_at(target_object_id)
-                        .expect("relationship target object index is valid");
-                    return Ok(ExpressionType::Value(TypeName::Custom(
-                        crate::ast::NamedType::new(target.api_name().to_owned(), name.span),
-                    )));
-                }
-                if let Some((child_object_id, _reference_field_id)) =
-                    self.schema.child_relationship(object_id, &name.spelling)
-                {
-                    if for_write {
-                        return Err(Diagnostic::new(
-                            "child relationship collections are read-only",
-                            name.span,
-                        ));
-                    }
-                    self.members.insert(
-                        span,
-                        MemberTarget::SObjectChildRelationship {
-                            object_id,
-                            child_object_id,
-                            relationship: name.canonical.clone(),
-                        },
-                    );
-                    let child = self
-                        .schema
-                        .object_at(child_object_id)
-                        .expect("child relationship object index is valid");
-                    return Ok(ExpressionType::Value(TypeName::List(Box::new(
-                        TypeName::Custom(crate::ast::NamedType::new(
-                            child.api_name().to_owned(),
-                            name.span,
-                        )),
-                    ))));
-                }
-                return Err(Diagnostic::new(
-                    format!(
-                        "unknown field `{}` on SObject `{}`",
-                        name.spelling,
-                        object.api_name()
-                    ),
-                    name.span,
-                ));
-            };
-            let field = object
-                .field_at(field_id)
-                .expect("schema field index is valid");
-            let field_type = apex_field_type(field.data_type());
-            self.members.insert(
-                span,
-                MemberTarget::SObjectField {
-                    object_id,
-                    field_id,
-                },
-            );
-            return Ok(ExpressionType::Value(field_type));
+        if let Some(result) = self.sobject_member_access_type(receiver, name, span, for_write) {
+            return result;
         }
         let (class_id, static_access) = self.member_receiver_class(receiver, name)?;
         if let Some(result) =
@@ -3129,6 +3023,166 @@ impl Checker {
             },
         );
         Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn sobject_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let receiver_type = match receiver {
+            Expression::Variable(identifier)
+                if self.lookup(&identifier.canonical).is_none()
+                    && self.current_class.is_none_or(|class_id| {
+                        self.class_value_member(class_id, &identifier.canonical)
+                            .is_none()
+                    }) =>
+            {
+                return None;
+            }
+            _ => match self.expression_type(receiver) {
+                Ok(ExpressionType::Value(ty)) => ty,
+                Ok(ExpressionType::Null | ExpressionType::Void) => return None,
+                Err(error) => return Some(Err(error)),
+            },
+        };
+        if !self.is_sobject_type(&receiver_type) && !self.is_dynamic_sobject_type(&receiver_type) {
+            return None;
+        }
+        Some(self.typed_sobject_member_access(&receiver_type, name, span, for_write))
+    }
+
+    fn typed_sobject_member_access(
+        &mut self,
+        receiver_type: &TypeName,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Some(object_id) = self.sobject_object_id(receiver_type) else {
+            return Err(Diagnostic::new(
+                "dynamic SObject fields require get/put access",
+                name.span,
+            ));
+        };
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("schema object index is valid");
+        if let Some(field_id) = object.field_index(&name.spelling) {
+            let field = object
+                .field_at(field_id)
+                .expect("schema field index is valid");
+            let field_type = apex_field_type(field.data_type());
+            self.members.insert(
+                span,
+                MemberTarget::SObjectField {
+                    object_id,
+                    field_id,
+                },
+            );
+            return Ok(ExpressionType::Value(field_type));
+        }
+        if let Some((reference_field_id, target_object_id)) =
+            self.sobject_relationship_target(object_id, &name.spelling)
+        {
+            return self.parent_relationship_member_type(
+                object_id,
+                reference_field_id,
+                target_object_id,
+                name,
+                span,
+                for_write,
+            );
+        }
+        if let Some((child_object_id, _)) =
+            self.schema.child_relationship(object_id, &name.spelling)
+        {
+            return self.child_relationship_member_type(
+                object_id,
+                child_object_id,
+                name,
+                span,
+                for_write,
+            );
+        }
+        Err(Diagnostic::new(
+            format!(
+                "unknown field `{}` on SObject `{}`",
+                name.spelling,
+                object.api_name()
+            ),
+            name.span,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parent_relationship_member_type(
+        &mut self,
+        object_id: usize,
+        reference_field_id: usize,
+        target_object_id: usize,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "parent relationship fields are read-only",
+                name.span,
+            ));
+        }
+        self.members.insert(
+            span,
+            MemberTarget::SObjectRelationship {
+                object_id,
+                reference_field_id,
+                target_object_id,
+            },
+        );
+        let target = self
+            .schema
+            .object_at(target_object_id)
+            .expect("relationship target object index is valid");
+        Ok(ExpressionType::Value(TypeName::Custom(
+            crate::ast::NamedType::new(target.api_name().to_owned(), name.span),
+        )))
+    }
+
+    fn child_relationship_member_type(
+        &mut self,
+        object_id: usize,
+        child_object_id: usize,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "child relationship collections are read-only",
+                name.span,
+            ));
+        }
+        self.members.insert(
+            span,
+            MemberTarget::SObjectChildRelationship {
+                object_id,
+                child_object_id,
+                relationship: name.canonical.clone(),
+            },
+        );
+        let child = self
+            .schema
+            .object_at(child_object_id)
+            .expect("child relationship object index is valid");
+        Ok(ExpressionType::Value(TypeName::List(Box::new(
+            TypeName::Custom(crate::ast::NamedType::new(
+                child.api_name().to_owned(),
+                name.span,
+            )),
+        ))))
     }
 
     fn qualified_type_reference(
@@ -3724,13 +3778,8 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
-        if is_database_receiver(receiver)
-            && matches!(
-                method.canonical.as_str(),
-                "query" | "countquery" | "getquerylocator"
-            )
-        {
-            return self.database_method_type(method, arguments, span, None);
+        if let Some(result) = self.dynamic_database_method_call(receiver, method, arguments, span) {
+            return result;
         }
         if let Some(result) = self.qualified_type_method_call(receiver, method, arguments, span) {
             return result;
@@ -3840,6 +3889,24 @@ impl Checker {
             }
             error
         })
+    }
+
+    fn dynamic_database_method_call(
+        &mut self,
+        receiver: &Expression,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if !is_database_receiver(receiver)
+            || !matches!(
+                method.canonical.as_str(),
+                "query" | "countquery" | "getquerylocator"
+            )
+        {
+            return None;
+        }
+        Some(self.database_method_type(method, arguments, span, None))
     }
 
     fn qualified_type_method_call(

@@ -70,7 +70,7 @@ private class M23QueryFidelityTest {
         );
 
         Test.startTest();
-        Database.executeBatch(new M23InvoiceBatch(), 1);
+        Database.executeBatch(new M23InvoiceBatch(), 200);
         Test.stopTest();
         System.assertEquals(
             2,

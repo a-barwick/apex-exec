@@ -1,6 +1,6 @@
 use super::{
-    DataValue, FieldSchema, FieldType, Record, RecordId, SchemaCatalog, SchemaError, Storage,
-    StorageTransaction,
+    DataValue, FieldSchema, FieldType, ObjectSchema, Record, RecordId, SchemaCatalog, SchemaError,
+    Storage, StorageTransaction,
 };
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use rusqlite::{
@@ -377,6 +377,15 @@ fn configure(connection: &Connection) -> Result<(), SqliteError> {
 
 fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), SqliteError> {
     let transaction = connection.transaction().map_err(SqliteError::database)?;
+    create_schema_registry(&transaction)?;
+    ensure_relationship_registry_column(&transaction)?;
+    for object in schema.objects() {
+        migrate_object(&transaction, object)?;
+    }
+    transaction.commit().map_err(SqliteError::database)
+}
+
+fn create_schema_registry(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
     transaction
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS _apex_objects (
@@ -393,20 +402,22 @@ fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), Sq
                 PRIMARY KEY (object_name, api_name)
              );",
         )
+        .map_err(SqliteError::database)
+}
+
+fn ensure_relationship_registry_column(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
+    let mut statement = transaction
+        .prepare("PRAGMA table_info('_apex_fields')")
         .map_err(SqliteError::database)?;
-    let has_relationship_name = {
-        let mut statement = transaction
-            .prepare("PRAGMA table_info('_apex_fields')")
-            .map_err(SqliteError::database)?;
-        statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(SqliteError::database)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(SqliteError::database)?
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case("relationship_name"))
-    };
-    if !has_relationship_name {
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(SqliteError::database)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(SqliteError::database)?;
+    if !columns
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("relationship_name"))
+    {
         transaction
             .execute(
                 "ALTER TABLE _apex_fields ADD COLUMN relationship_name TEXT",
@@ -414,105 +425,122 @@ fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), Sq
             )
             .map_err(SqliteError::database)?;
     }
+    Ok(())
+}
 
-    for object in schema.objects() {
-        let existing_prefix = transaction
-            .query_row(
-                "SELECT key_prefix FROM _apex_objects WHERE api_name = ?1",
-                [object.api_name()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(SqliteError::database)?;
-        if let Some(existing) = existing_prefix {
-            if existing != object.key_prefix() {
-                return Err(SqliteError::IncompatibleMigration {
-                    object: object.api_name().to_owned(),
-                    field: "Id".to_owned(),
-                    existing,
-                    requested: object.key_prefix().to_owned(),
-                });
-            }
-        } else {
-            transaction
-                .execute(
-                    "INSERT INTO _apex_objects (api_name, key_prefix) VALUES (?1, ?2)",
-                    params![object.api_name(), object.key_prefix()],
-                )
-                .map_err(SqliteError::database)?;
+fn migrate_object(transaction: &Transaction<'_>, object: &ObjectSchema) -> Result<(), SqliteError> {
+    validate_or_insert_object_registry(transaction, object)?;
+    transaction
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {} ({} TEXT PRIMARY KEY NOT NULL)",
+                quote(object.api_name()),
+                quote("Id")
+            ),
+            [],
+        )
+        .map_err(SqliteError::database)?;
+    for field in object.fields() {
+        migrate_field(transaction, object, field)?;
+    }
+    Ok(())
+}
+
+fn validate_or_insert_object_registry(
+    transaction: &Transaction<'_>,
+    object: &ObjectSchema,
+) -> Result<(), SqliteError> {
+    let existing = transaction
+        .query_row(
+            "SELECT key_prefix FROM _apex_objects WHERE api_name = ?1",
+            [object.api_name()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(SqliteError::database)?;
+    if let Some(existing) = existing {
+        if existing != object.key_prefix() {
+            return Err(SqliteError::IncompatibleMigration {
+                object: object.api_name().to_owned(),
+                field: "Id".to_owned(),
+                existing,
+                requested: object.key_prefix().to_owned(),
+            });
         }
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "INSERT INTO _apex_objects (api_name, key_prefix) VALUES (?1, ?2)",
+            params![object.api_name(), object.key_prefix()],
+        )
+        .map_err(SqliteError::database)?;
+    Ok(())
+}
+
+fn migrate_field(
+    transaction: &Transaction<'_>,
+    object: &ObjectSchema,
+    field: &FieldSchema,
+) -> Result<(), SqliteError> {
+    let spec = field_spec(field);
+    let existing = transaction
+        .query_row(
+            "SELECT field_type, nullable, COALESCE(target_object, ''),
+                    COALESCE(relationship_name, '')
+             FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
+            params![object.api_name(), field.api_name()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(SqliteError::database)?;
+    if let Some(existing) = existing {
+        if existing != spec {
+            return Err(SqliteError::IncompatibleMigration {
+                object: object.api_name().to_owned(),
+                field: field.api_name().to_owned(),
+                existing: format_field_spec(&existing),
+                requested: format_field_spec(&spec),
+            });
+        }
+        return Ok(());
+    }
+    if !is_id(field) {
         transaction
             .execute(
                 &format!(
-                    "CREATE TABLE IF NOT EXISTS {} ({} TEXT PRIMARY KEY NOT NULL)",
+                    "ALTER TABLE {} ADD COLUMN {} {}",
                     quote(object.api_name()),
-                    quote("Id")
+                    quote(field.api_name()),
+                    sqlite_type(field.data_type())
                 ),
                 [],
             )
             .map_err(SqliteError::database)?;
-
-        for field in object.fields() {
-            let spec = field_spec(field);
-            let existing = transaction
-                .query_row(
-                    "SELECT field_type, nullable, COALESCE(target_object, ''),
-                            COALESCE(relationship_name, '')
-                     FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
-                    params![object.api_name(), field.api_name()],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, bool>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(SqliteError::database)?;
-            if let Some(existing) = existing {
-                if existing != spec {
-                    return Err(SqliteError::IncompatibleMigration {
-                        object: object.api_name().to_owned(),
-                        field: field.api_name().to_owned(),
-                        existing: format_field_spec(&existing),
-                        requested: format_field_spec(&spec),
-                    });
-                }
-                continue;
-            }
-            if !is_id(field) {
-                transaction
-                    .execute(
-                        &format!(
-                            "ALTER TABLE {} ADD COLUMN {} {}",
-                            quote(object.api_name()),
-                            quote(field.api_name()),
-                            sqlite_type(field.data_type())
-                        ),
-                        [],
-                    )
-                    .map_err(SqliteError::database)?;
-            }
-            transaction
-                .execute(
-                    "INSERT INTO _apex_fields
-                     (object_name, api_name, field_type, nullable, target_object, relationship_name)
-                     VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''))",
-                    params![
-                        object.api_name(),
-                        field.api_name(),
-                        spec.0,
-                        spec.1,
-                        spec.2,
-                        spec.3
-                    ],
-                )
-                .map_err(SqliteError::database)?;
-        }
     }
-    transaction.commit().map_err(SqliteError::database)
+    transaction
+        .execute(
+            "INSERT INTO _apex_fields
+             (object_name, api_name, field_type, nullable, target_object, relationship_name)
+             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''))",
+            params![
+                object.api_name(),
+                field.api_name(),
+                spec.0,
+                spec.1,
+                spec.2,
+                spec.3
+            ],
+        )
+        .map_err(SqliteError::database)?;
+    Ok(())
 }
 
 fn validate_data_value(

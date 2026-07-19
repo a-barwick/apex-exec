@@ -347,6 +347,26 @@ mod tests {
     fn imports_decomposed_custom_objects_fields_and_relationships() {
         let root = temp_directory();
         let object = root.join("main/default/objects/Invoice__c");
+        write_decomposed_invoice(&object);
+
+        let schema = import_metadata([&root]).unwrap();
+        let invoice = schema.object("invoice__C").unwrap();
+        assert_eq!(invoice.fields().len(), 6);
+        assert_eq!(
+            invoice.field("Amount__c").unwrap().data_type(),
+            &FieldType::Integer
+        );
+        assert!(!invoice.field("Amount__c").unwrap().is_nullable());
+        assert_eq!(
+            invoice.field("Account__c").unwrap().data_type(),
+            &FieldType::Reference {
+                target_object: "Account".to_owned()
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_decomposed_invoice(object: &Path) {
         fs::create_dir_all(object.join("fields")).unwrap();
         fs::write(
             object.join("Invoice__c.object-meta.xml"),
@@ -367,22 +387,6 @@ mod tests {
             r#"<CustomField><fullName>Account__c</fullName><referenceTo>Account</referenceTo><type>Lookup</type></CustomField>"#,
         )
         .unwrap();
-
-        let schema = import_metadata([&root]).unwrap();
-        let invoice = schema.object("invoice__C").unwrap();
-        assert_eq!(invoice.fields().len(), 6);
-        assert_eq!(
-            invoice.field("Amount__c").unwrap().data_type(),
-            &FieldType::Integer
-        );
-        assert!(!invoice.field("Amount__c").unwrap().is_nullable());
-        assert_eq!(
-            invoice.field("Account__c").unwrap().data_type(),
-            &FieldType::Reference {
-                target_object: "Account".to_owned()
-            }
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

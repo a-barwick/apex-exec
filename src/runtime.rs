@@ -1456,16 +1456,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         safe_navigation: bool,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let evaluated_receiver = if safe_navigation {
-            let receiver_value = self.evaluate(receiver)?;
-            let present = !matches!(receiver_value, Value::Null(_));
-            self.record_branch(receiver.span(), present);
-            if !present {
-                return Ok(self.null_short_circuit_value(span));
-            }
-            Some(receiver_value)
-        } else {
-            None
+        let Some(evaluated_receiver) =
+            self.evaluate_optional_safe_receiver(receiver, safe_navigation)?
+        else {
+            return Ok(self.null_short_circuit_value(span));
         };
 
         let target = self.program().call_target(span);
@@ -1700,16 +1694,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let target = self.program().member_target(span).ok_or_else(|| {
             Diagnostic::new("unresolved member escaped semantic validation", span)
         })?;
-        let evaluated_receiver = if safe_navigation {
-            let receiver_value = self.evaluate(receiver)?;
-            let present = !matches!(receiver_value, Value::Null(_));
-            self.record_branch(receiver.span(), present);
-            if !present {
-                return Ok(self.null_short_circuit_value(span));
-            }
-            Some(receiver_value)
-        } else {
-            None
+        let Some(evaluated_receiver) =
+            self.evaluate_optional_safe_receiver(receiver, safe_navigation)?
+        else {
+            return Ok(self.null_short_circuit_value(span));
         };
         match target {
             MemberTarget::Static(target) => self.read_class_member(target, None, span),
@@ -1776,6 +1764,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 ),
             ))),
         }
+    }
+
+    fn evaluate_optional_safe_receiver(
+        &mut self,
+        receiver: &Expression,
+        safe_navigation: bool,
+    ) -> Result<Option<Option<Value>>, Diagnostic> {
+        if !safe_navigation {
+            return Ok(Some(None));
+        }
+        let value = self.evaluate(receiver)?;
+        let present = !matches!(value, Value::Null(_));
+        self.record_branch(receiver.span(), present);
+        Ok(present.then_some(Some(value)))
     }
 
     fn evaluate_sobject_relationship(

@@ -887,57 +887,61 @@ fn date_literal_range(literal: QueryDateLiteral, now_millis: i64) -> Option<(i64
         }
         QueryDateLiteralKind::ThisWeek
         | QueryDateLiteralKind::LastWeek
-        | QueryDateLiteralKind::NextWeek => {
-            let since_sunday = match today.weekday() {
-                Weekday::Sun => 0,
-                weekday => i64::from(weekday.num_days_from_sunday()),
-            };
-            let this_week = today - Duration::days(since_sunday);
-            match literal.kind {
-                QueryDateLiteralKind::ThisWeek => (this_week, this_week + Duration::days(7)),
-                QueryDateLiteralKind::LastWeek => (this_week - Duration::days(7), this_week),
-                QueryDateLiteralKind::NextWeek => (
-                    this_week + Duration::days(7),
-                    this_week + Duration::days(14),
-                ),
-                _ => unreachable!(),
-            }
-        }
+        | QueryDateLiteralKind::NextWeek => week_literal_range(literal.kind, today),
         QueryDateLiteralKind::ThisMonth
         | QueryDateLiteralKind::LastMonth
-        | QueryDateLiteralKind::NextMonth => {
-            let this_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
-            match literal.kind {
-                QueryDateLiteralKind::ThisMonth => (this_month, shift_month(this_month, 1)?),
-                QueryDateLiteralKind::LastMonth => (shift_month(this_month, -1)?, this_month),
-                QueryDateLiteralKind::NextMonth => {
-                    (shift_month(this_month, 1)?, shift_month(this_month, 2)?)
-                }
-                _ => unreachable!(),
-            }
-        }
+        | QueryDateLiteralKind::NextMonth => month_literal_range(literal.kind, today)?,
         QueryDateLiteralKind::ThisYear
         | QueryDateLiteralKind::LastYear
-        | QueryDateLiteralKind::NextYear => {
-            let this_year = NaiveDate::from_ymd_opt(today.year(), 1, 1)?;
-            match literal.kind {
-                QueryDateLiteralKind::ThisYear => (
-                    this_year,
-                    NaiveDate::from_ymd_opt(today.year().checked_add(1)?, 1, 1)?,
-                ),
-                QueryDateLiteralKind::LastYear => (
-                    NaiveDate::from_ymd_opt(today.year().checked_sub(1)?, 1, 1)?,
-                    this_year,
-                ),
-                QueryDateLiteralKind::NextYear => (
-                    NaiveDate::from_ymd_opt(today.year().checked_add(1)?, 1, 1)?,
-                    NaiveDate::from_ymd_opt(today.year().checked_add(2)?, 1, 1)?,
-                ),
-                _ => unreachable!(),
-            }
-        }
+        | QueryDateLiteralKind::NextYear => year_literal_range(literal.kind, today)?,
     };
     Some((date_millis(start)?, date_millis(end)?))
+}
+
+fn week_literal_range(kind: QueryDateLiteralKind, today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let since_sunday = match today.weekday() {
+        Weekday::Sun => 0,
+        weekday => i64::from(weekday.num_days_from_sunday()),
+    };
+    let this_week = today - Duration::days(since_sunday);
+    match kind {
+        QueryDateLiteralKind::ThisWeek => (this_week, this_week + Duration::days(7)),
+        QueryDateLiteralKind::LastWeek => (this_week - Duration::days(7), this_week),
+        QueryDateLiteralKind::NextWeek => (
+            this_week + Duration::days(7),
+            this_week + Duration::days(14),
+        ),
+        _ => unreachable!("week helper receives a week literal"),
+    }
+}
+
+fn month_literal_range(
+    kind: QueryDateLiteralKind,
+    today: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let this_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
+    match kind {
+        QueryDateLiteralKind::ThisMonth => Some((this_month, shift_month(this_month, 1)?)),
+        QueryDateLiteralKind::LastMonth => Some((shift_month(this_month, -1)?, this_month)),
+        QueryDateLiteralKind::NextMonth => {
+            Some((shift_month(this_month, 1)?, shift_month(this_month, 2)?))
+        }
+        _ => unreachable!("month helper receives a month literal"),
+    }
+}
+
+fn year_literal_range(
+    kind: QueryDateLiteralKind,
+    today: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let this_year = NaiveDate::from_ymd_opt(today.year(), 1, 1)?;
+    let year_start = |delta: i32| NaiveDate::from_ymd_opt(today.year().checked_add(delta)?, 1, 1);
+    match kind {
+        QueryDateLiteralKind::ThisYear => Some((this_year, year_start(1)?)),
+        QueryDateLiteralKind::LastYear => Some((year_start(-1)?, this_year)),
+        QueryDateLiteralKind::NextYear => Some((year_start(1)?, year_start(2)?)),
+        _ => unreachable!("year helper receives a year literal"),
+    }
 }
 
 fn shift_month(date: NaiveDate, delta: i32) -> Option<NaiveDate> {

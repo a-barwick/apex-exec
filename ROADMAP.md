@@ -580,7 +580,7 @@ local evidence is checked in under `benchmarks/milestone22/` and
 
 ### M23 — Broader SOQL fidelity
 
-**Status:** Active on `codex/milestone-23-soql-fidelity`
+**Status:** Complete on `codex/milestone-23-soql-fidelity`
 
 #### Scope
 
@@ -600,6 +600,26 @@ local evidence is checked in under `benchmarks/milestone22/` and
 The prioritized enterprise query slice checks and executes without source
 changes, has reviewed differential evidence, and introduces no string-parsing
 shortcut in the interpreter.
+
+#### Completion evidence
+
+- Static and dynamic queries share the dedicated query parser, semantic
+  checker, schema-indexed HIR plan, platform executor, and structured trace.
+  The interpreter only evaluates the query-text expression and bind values.
+- Correlated custom child queries, parent paths through five relationships,
+  aggregate `HAVING`, UTC relative date literals, `Database.query`,
+  `Database.countQuery`, and `Database.getQueryLocator` execute through the
+  checked query boundary. Child hydration batches one child-object scan per
+  selected child query.
+- The unchanged M23 conformance project passes locally and against the guarded
+  disposable Salesforce org. The sanitized API 65.0 evidence bundle records
+  2/2 selected outcomes matching and credential-free byte-identical replay.
+- The representative M22 source contains no `TYPEOF`, so polymorphic query
+  behavior was not approximated; it remains an explicit parser rejection.
+- Verification passes 416 Rust tests with no failures or ignored tests,
+  formatting, Clippy with warnings denied, documentation validation, and the
+  pinned maintainability ratchet. North Star remains 7/7 lexer and 7/7 parser
+  indicators; those are syntax indicators, not compatibility percentages.
 
 ### M24 — Partial DML results and bulk failure fidelity
 
