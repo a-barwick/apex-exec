@@ -610,6 +610,51 @@ fn run_enterprise(mut args: impl Iterator<Item = String>) -> Result<ExitCode, St
             );
             Ok(ExitCode::SUCCESS)
         }
+        "run" => {
+            let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+            let mut salesforce_path = None;
+            let mut output = None;
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--salesforce" => set_once(
+                        &mut salesforce_path,
+                        PathBuf::from(required_value(&mut args, "--salesforce")?),
+                        "`--salesforce` was provided more than once",
+                    )?,
+                    "--output" => set_once(
+                        &mut output,
+                        PathBuf::from(required_value(&mut args, "--output")?),
+                        "`--output` was provided more than once",
+                    )?,
+                    _ => {
+                        return Err(format!(
+                            "unknown enterprise run option `{argument}`\n\n{}",
+                            usage()
+                        ));
+                    }
+                }
+            }
+            let salesforce_path = salesforce_path
+                .ok_or_else(|| "`enterprise run` requires `--salesforce`".to_owned())?;
+            let output = output.ok_or_else(|| "`enterprise run` requires `--output`".to_owned())?;
+            let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+            let capture = apex_exec::enterprise::SalesforceCapture::load(salesforce_path)?;
+            let report = apex_exec::enterprise::run(
+                &manifest,
+                &capture,
+                &apex_exec::enterprise::EnterpriseRunOptions::default(),
+            )?;
+            report.write(&output)?;
+            println!(
+                "Wrote enterprise baseline {} (strict compatibility: {}/{}; {} matching passes, {} matching failures)",
+                output.display(),
+                report.counts.strict_compatible.count,
+                report.raw_denominator,
+                report.counts.matching_passes,
+                report.counts.matching_failures
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         _ => Err(format!(
             "unknown enterprise subcommand `{subcommand}`\n\n{}",
             usage()
@@ -924,6 +969,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec enterprise run <manifest.json> --salesforce <snapshot.json> --output <report.json>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

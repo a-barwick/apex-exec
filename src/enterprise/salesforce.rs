@@ -47,7 +47,6 @@ pub struct SalesforceCapture {
     pub manifest_sha256: String,
     pub target_org: String,
     pub org_id: String,
-    pub instance_url: String,
     pub api_version: String,
     pub salesforce_cli_version: String,
     pub captured_at: String,
@@ -112,6 +111,29 @@ impl SalesforceCapture {
         self.tests.len() - self.passed()
     }
 
+    #[cfg(test)]
+    pub(super) fn fixture(
+        manifest_sha256: String,
+        source_test_classes: Vec<String>,
+        tests: Vec<SalesforceTestOutcome>,
+    ) -> Self {
+        let mut capture = Self {
+            schema_version: SALESFORCE_CAPTURE_SCHEMA_VERSION,
+            manifest_sha256,
+            target_org: "fixture-org".to_owned(),
+            org_id: "00D000000000001AAA".to_owned(),
+            api_version: "65.0".to_owned(),
+            salesforce_cli_version: "@salesforce/cli/2.134.1".to_owned(),
+            captured_at: "2026-07-19T00:00:00Z".to_owned(),
+            test_level: "RunLocalTests".to_owned(),
+            source_test_classes,
+            tests,
+            snapshot_sha256: String::new(),
+        };
+        capture.seal().expect("fixture capture should serialize");
+        capture
+    }
+
     fn seal(&mut self) -> Result<(), String> {
         self.snapshot_sha256.clear();
         let bytes = serde_json::to_vec(self)
@@ -129,10 +151,7 @@ impl SalesforceCapture {
         }
         validate_sha256(&self.manifest_sha256, "manifest")?;
         validate_sha256(&self.snapshot_sha256, "snapshot")?;
-        if self.target_org.trim().is_empty()
-            || self.instance_url.trim().is_empty()
-            || self.salesforce_cli_version.trim().is_empty()
-        {
+        if self.target_org.trim().is_empty() || self.salesforce_cli_version.trim().is_empty() {
             return Err("enterprise Salesforce identity fields cannot be empty".to_owned());
         }
         if self.org_id.len() != 18
@@ -195,9 +214,16 @@ impl Default for EnterpriseSalesforceCli {
 
 impl EnterpriseSalesforceCli {
     pub fn new(executable: impl Into<OsString>) -> Self {
-        Self {
-            executable: executable.into(),
-        }
+        let executable = executable.into();
+        let path = Path::new(&executable);
+        let executable = if path.is_relative() && path.components().count() > 1 {
+            std::env::current_dir()
+                .map(|current| current.join(path).into_os_string())
+                .unwrap_or(executable)
+        } else {
+            executable
+        };
+        Self { executable }
     }
 
     pub fn capture(
@@ -213,12 +239,11 @@ impl EnterpriseSalesforceCli {
             return Err("enterprise Salesforce wait must be at least one minute".to_owned());
         }
         let source_test_classes = source_test_classes(manifest)?;
-        let version = self.command_json(
-            manifest.project_root(),
-            &[OsString::from("--version"), OsString::from("--json")],
-        )?;
-        let salesforce_cli_version = find_string(&version, "cliVersion")
-            .or_else(|| find_string(&version, "version"))
+        let version = self.command_text(manifest.project_root(), &[OsString::from("--version")])?;
+        let salesforce_cli_version = version
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty())
             .ok_or_else(|| "Salesforce CLI version response omitted its version".to_owned())?
             .to_owned();
         let org = self.command_json(
@@ -237,11 +262,9 @@ impl EnterpriseSalesforceCli {
         let org_id = find_string(&org, "id")
             .ok_or_else(|| "Salesforce org display omitted the org ID".to_owned())?
             .to_owned();
-        let instance_url = find_string(&org, "instanceUrl")
-            .ok_or_else(|| "Salesforce org display omitted the instance URL".to_owned())?
-            .to_owned();
-        let status = find_string(&org, "connectedStatus").unwrap_or_default();
-        if !status.eq_ignore_ascii_case("connected") {
+        if let Some(status) = find_string(&org, "connectedStatus")
+            && !status.eq_ignore_ascii_case("connected")
+        {
             return Err(format!(
                 "Salesforce target org is not connected (status `{status}`)"
             ));
@@ -297,7 +320,6 @@ impl EnterpriseSalesforceCli {
             manifest_sha256: manifest.sha256()?,
             target_org: options.target_org.clone(),
             org_id,
-            instance_url,
             api_version: manifest.candidate.api_version.clone(),
             salesforce_cli_version,
             captured_at,
@@ -334,6 +356,31 @@ impl EnterpriseSalesforceCli {
                 stderr.trim()
             )
         })
+    }
+
+    fn command_text(&self, current_dir: &Path, arguments: &[OsString]) -> Result<String, String> {
+        let output = Command::new(&self.executable)
+            .args(arguments)
+            .current_dir(current_dir)
+            .env("SF_DISABLE_LOG_FILE", "true")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                format!(
+                    "failed to start Salesforce CLI `{}`: {error}",
+                    Path::new(&self.executable).display()
+                )
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "Salesforce CLI version command failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|error| format!("Salesforce CLI version output was not UTF-8: {error}"))
     }
 }
 
@@ -538,7 +585,9 @@ mod tests {
             &response,
             &serde_json::json!({"status": 0, "result": {"tests": tests}}).to_string(),
         );
-        let capture = EnterpriseSalesforceCli::new(fake_sf(&root, &response))
+        let sf = fake_sf(&root, &response);
+        let relative_sf = sf.strip_prefix(std::env::current_dir().unwrap()).unwrap();
+        let capture = EnterpriseSalesforceCli::new(relative_sf)
             .capture(
                 &manifest,
                 &SalesforceCaptureOptions {
@@ -553,6 +602,10 @@ mod tests {
         assert_eq!(capture.org_id, "00D000000000001AAA");
         let output = root.join("capture.json");
         capture.write(&output).unwrap();
+        let serialized = fs::read_to_string(&output).unwrap();
+        assert!(!serialized.contains("accessToken"));
+        assert!(!serialized.contains("never-serialize"));
+        assert!(!serialized.contains("instanceUrl"));
         assert_eq!(SalesforceCapture::load(&output).unwrap(), capture);
         fs::remove_dir_all(root).unwrap();
     }
@@ -615,9 +668,9 @@ mod tests {
             &format!(
                 "#!/bin/sh\n\
                  if [ \"$1\" = \"--version\" ]; then\n\
-                   printf '%s' '{{\"status\":0,\"result\":{{\"cliVersion\":\"2.134.1\"}}}}'\n\
+                   printf '%s' '@salesforce/cli/2.134.1 test-platform node-v22.0.0'\n\
                  elif [ \"$1\" = \"org\" ]; then\n\
-                   printf '%s' '{{\"status\":0,\"result\":{{\"id\":\"00D000000000001AAA\",\"instanceUrl\":\"https://example.my.salesforce.com\",\"connectedStatus\":\"Connected\",\"accessToken\":\"never-serialize\"}}}}'\n\
+                   printf '%s' '{{\"status\":0,\"result\":{{\"id\":\"00D000000000001AAA\",\"instanceUrl\":\"https://example.my.salesforce.com\",\"accessToken\":\"never-serialize\"}}}}'\n\
                  else\n\
                    exec cat '{}'\n\
                  fi\n",
@@ -631,14 +684,17 @@ mod tests {
     }
 
     fn fixture_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "apex-exec-enterprise-salesforce-{label}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "apex-exec-enterprise-salesforce-{label}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
     }
 
     fn write(path: &Path, contents: &str) {

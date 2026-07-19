@@ -5,10 +5,15 @@
 //! compatibility result is inspected.
 
 mod manifest;
+mod runner;
 mod salesforce;
 
 pub use manifest::{
     CandidateIdentity, ENTERPRISE_SCHEMA_VERSION, EnterpriseInput, EnterpriseManifest,
+};
+pub use runner::{
+    EnterpriseBlocker, EnterpriseBlockerSummary, EnterpriseCounts, EnterpriseReport,
+    EnterpriseRunOptions, EnterpriseTestMeasurement, EnterpriseTiming, StageMetric, run,
 };
 pub use salesforce::{
     EnterpriseSalesforceCli, SalesforceCapture, SalesforceCaptureOptions, SalesforceTestOutcome,
