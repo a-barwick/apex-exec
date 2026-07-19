@@ -201,6 +201,13 @@ fn display_traversal_enforces_deterministic_cost_budgets() {
     assert!(rendered.truncated);
     assert_eq!(rendered.stats.output_bytes, MAX_DEBUG_RENDERED_VALUE_BYTES);
 
+    let multibyte = Value::String("😀".repeat(MAX_DEBUG_RENDERED_VALUE_BYTES));
+    let rendered = interpreter.render_value(&multibyte);
+    assert!(rendered.text.ends_with('…'));
+    assert!(rendered.truncated);
+    assert!(rendered.text.len() <= MAX_DEBUG_RENDERED_VALUE_BYTES);
+    assert_eq!(rendered.stats.output_bytes, rendered.text.len());
+
     let mut nested = Value::Integer(1);
     for _ in 0..=MAX_VALUE_GRAPH_DEPTH {
         nested = interpreter.allocate(Collection::List {
@@ -282,7 +289,7 @@ fn internal_sobject_field_cycles_render_safely_and_fail_json_explicitly() {
         .insert(0, Value::SObject(id));
     let value = Value::SObject(id);
 
-    assert!(interpreter.display_value(&value).contains("=<cycle>"));
+    assert!(interpreter.stringify_value(&value).contains("=<cycle>"));
     let error = interpreter
         .value_to_json(&value, Span::new(0, 1))
         .unwrap_err();

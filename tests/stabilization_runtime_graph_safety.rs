@@ -202,6 +202,10 @@ fn acyclic_display_and_json_output_remain_compatible() {
         System.debug(unique);
         System.debug(mapped);
         System.debug(JSON.serialize(mapped));
+        List<Object> shared = new List<Object>{1};
+        List<Object> dag = new List<Object>{shared, shared};
+        System.debug(dag);
+        System.debug(JSON.serialize(dag));
         ",
     )
     .unwrap();
@@ -212,7 +216,150 @@ fn acyclic_display_and_json_output_remain_compatible() {
             "(1, two)",
             "{1, two}",
             "{values=(1, two), ok=true}",
-            "{\"values\":[1,\"two\"],\"ok\":true}"
+            "{\"values\":[1,\"two\"],\"ok\":true}",
+            "((1), (1))",
+            "[[1],[1]]"
         ]
     );
+}
+
+#[test]
+fn json_structural_limits_are_typed_and_catchable() {
+    let output = execute(
+        "
+        List<Object> deep = new List<Object>();
+        List<Object> cursor = deep;
+        for (Integer i = 0; i < 65; i++) {
+            List<Object> next = new List<Object>();
+            cursor.add(next);
+            cursor = next;
+        }
+        try {
+            JSON.serialize(deep);
+        } catch (IllegalArgumentException error) {
+            System.debug(error.getTypeName());
+            System.debug(error.getMessage());
+        }
+
+        List<Object> wide = new List<Object>();
+        for (Integer i = 0; i < 4096; i++) {
+            wide.add(i);
+        }
+        try {
+            JSON.serialize(wide);
+        } catch (IllegalArgumentException error) {
+            System.debug(error.getTypeName());
+            System.debug(error.getMessage());
+        }
+        ",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "IllegalArgumentException",
+            "JSON serialization exceeded the runtime value depth limit",
+            "IllegalArgumentException",
+            "JSON serialization exceeded the runtime value node limit"
+        ]
+    );
+}
+
+#[test]
+fn semantic_string_paths_preserve_long_acyclic_values() {
+    let payload = "x".repeat(20 * 1024);
+    let output = execute(&format!(
+        "
+        String raw = '{payload}';
+
+        String valueOfText = String.valueOf(raw);
+        System.debug(valueOfText.length());
+        System.debug(valueOfText == raw);
+
+        String joined = String.join(new List<String>{{raw}}, '');
+        System.debug(joined.length());
+        System.debug(joined == raw);
+
+        String concatenated = raw + '';
+        System.debug(concatenated.length());
+        System.debug(concatenated == raw);
+
+        Object boxed = raw;
+        String objectText = boxed.toString();
+        System.debug(objectText.length());
+        System.debug(objectText == raw);
+
+        String nested = String.valueOf(new List<Object>{{raw}});
+        System.debug(nested.length());
+
+        try {{
+            System.assert(false, raw);
+        }} catch (AssertException error) {{
+            System.debug(error.getMessage().length());
+        }}
+        try {{
+            System.assertEquals(raw, 'y');
+        }} catch (AssertException error) {{
+            System.debug(error.getMessage().length());
+        }}
+
+        System.debug(JSON.serialize(raw).length());
+        "
+    ))
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "20480", "true", "20480", "true", "20480", "true", "20480", "true", "20482", "20519",
+            "20517", "20482"
+        ]
+    );
+
+    let assertion = execute(&format!(
+        "String raw = '{payload}'; System.assert(false, raw);"
+    ))
+    .unwrap_err();
+    assert_eq!(
+        assertion.message,
+        format!("Assertion Failed: {payload} (condition is false)")
+    );
+
+    let equality_assertion = execute(&format!(
+        "String raw = '{payload}'; System.assertEquals(raw, 'y');"
+    ))
+    .unwrap_err();
+    assert_eq!(
+        equality_assertion.message,
+        format!("Assertion Failed: expected {payload}, actual y")
+    );
+
+    let program = check(&format!(
+        "
+        public class LongReturn {{
+            public static String run() {{
+                return '{payload}';
+            }}
+        }}
+        "
+    ))
+    .unwrap();
+
+    let invoked = Interpreter::new()
+        .invoke_static(&program, "LongReturn", "run")
+        .unwrap();
+    assert_eq!(invoked, [payload.clone()]);
+
+    let debugged = Interpreter::new().debug_invoke(&program, "LongReturn", "run");
+    assert!(debugged.diagnostic.is_none());
+    assert_eq!(debugged.output.len(), 1);
+    assert_eq!(debugged.output[0].len(), 16 * 1024);
+    assert!(debugged.output[0].ends_with('…'));
+    assert!(debugged.trace_status.truncated);
+
+    let debug_output = execute(&format!("String raw = '{payload}'; System.debug(raw);")).unwrap();
+    assert_eq!(debug_output.len(), 1);
+    assert_eq!(debug_output[0].len(), 16 * 1024);
+    assert!(debug_output[0].ends_with('…'));
 }

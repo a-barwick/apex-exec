@@ -305,7 +305,11 @@ impl<'program> Interpreter<'program, RecordingHost> {
         let diagnostic = match result {
             Ok(value) => {
                 if !matches!(value, Value::Void) {
-                    output.push(self.display_value(&value));
+                    let rendered = self.render_value(&value);
+                    if rendered.truncated {
+                        self.instrumentation.mark_debug_trace_truncated();
+                    }
+                    output.push(rendered.text);
                 }
                 None
             }
@@ -374,7 +378,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let value = self.invoke_static_entry(program, class_name, method_name)?;
         let mut output = self.host.take_debug_output();
         if !matches!(value, Value::Void) {
-            output.push(self.display_value(&value));
+            output.push(self.stringify_value(&value));
         }
         Ok(output)
     }
@@ -2707,7 +2711,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             BinaryOperator::Add => {
                 if left.has_string_type() || right.has_string_type() {
                     Ok(Value::String(
-                        self.display_value(&left) + &self.display_value(&right),
+                        self.stringify_value(&left) + &self.stringify_value(&right),
                     ))
                 } else {
                     match (&left, &right) {

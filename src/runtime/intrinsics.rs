@@ -100,7 +100,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         argument.span,
                     ));
                 }
-                Ok(Value::String(self.display_value(&argument.value)))
+                Ok(Value::String(self.stringify_value(&argument.value)))
             }
             StaticStringIntrinsic::Join => {
                 let [iterable, separator] = arguments else {
@@ -111,7 +111,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let elements = self.sequence_snapshot(id, iterable.span)?;
                 let joined = elements
                     .iter()
-                    .map(|value| self.display_value(value))
+                    .map(|value| self.stringify_value(value))
                     .collect::<Vec<_>>()
                     .join(separator);
                 Ok(Value::String(joined))
@@ -211,7 +211,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 if matches!(argument.value, Value::Void) {
                     return Err(Diagnostic::new("cannot debug void", argument.span));
                 }
-                let message = self.display_value(&argument.value);
+                let message = self.render_bounded_value(&argument.value);
                 self.host.debug(DebugEvent { message });
                 Ok(Value::Void)
             }
@@ -224,7 +224,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 let message = arguments
                     .get(1)
-                    .map(|message| self.display_value(&message.value));
+                    .map(|message| self.stringify_value(&message.value));
                 Err(runtime_exception(
                     "AssertException",
                     assertion_failure_message(message.as_deref(), "condition is false"),
@@ -247,15 +247,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let detail = if intrinsic == SystemIntrinsic::AssertEquals {
                     format!(
                         "expected {}, actual {}",
-                        self.display_value(&expected.value),
-                        self.display_value(&actual.value)
+                        self.stringify_value(&expected.value),
+                        self.stringify_value(&actual.value)
                     )
                 } else {
-                    format!("did not expect {}", self.display_value(&actual.value))
+                    format!("did not expect {}", self.stringify_value(&actual.value))
                 };
                 let message = arguments
                     .get(2)
-                    .map(|message| self.display_value(&message.value));
+                    .map(|message| self.stringify_value(&message.value));
                 Err(runtime_exception(
                     "AssertException",
                     assertion_failure_message(message.as_deref(), &detail),

@@ -37,6 +37,10 @@ impl TraversalLimits {
             output_bytes: usize::MAX,
         }
     }
+
+    const fn semantic() -> Self {
+        Self::bounded(usize::MAX)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +90,10 @@ impl ValueGraphTraversal {
 
     pub(super) fn for_json() -> Self {
         Self::new(TraversalLimits::bounded(usize::MAX))
+    }
+
+    fn for_semantic_string() -> Self {
+        Self::new(TraversalLimits::semantic())
     }
 
     fn for_equality() -> Self {
@@ -234,8 +242,22 @@ pub(super) struct RenderedValue {
 }
 
 impl<'program, H: PlatformHost> Interpreter<'program, H> {
-    pub(super) fn display_value(&self, value: &Value) -> String {
+    /// Renders presentation output under the fixed display-byte budget.
+    pub(super) fn render_bounded_value(&self, value: &Value) -> String {
         self.render_value(value).text
+    }
+
+    /// Converts a value into observable Apex/API String content.
+    ///
+    /// Structural traversal remains cycle-safe and bounded by depth, node, and
+    /// element counts, but already-materialized String bytes are not silently
+    /// constrained by the debugger's presentation limit.
+    pub(super) fn stringify_value(&self, value: &Value) -> String {
+        let mut traversal = ValueGraphTraversal::for_semantic_string();
+        let mut text = String::new();
+        self.render_value_with_traversal(value, 0, &mut traversal, &mut text, CycleBehavior::Mark)
+            .expect("semantic String traversal converts every bound into a marker");
+        text
     }
 
     pub(super) fn render_value(&self, value: &Value) -> RenderedValue {

@@ -311,7 +311,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             P::ObjectToString => {
                 expect_no_arguments(arguments, span)?;
-                Ok(Value::String(self.display_value(
+                Ok(Value::String(self.stringify_value(
                     &receiver.ok_or_else(|| invalid_runtime_operands(span))?,
                 )))
             }
