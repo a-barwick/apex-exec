@@ -535,7 +535,7 @@ all `#[ignore]` attributes are removed from those goals, and
 
 ### M22 — Representative enterprise baseline
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 
@@ -566,6 +566,17 @@ benchmark.
 The repository contains a reproducible, candidate/API/tool-bound baseline that
 reports every in-scope test, keeps unsupported failures in the denominator, and
 orders the remaining compatibility work by measured project impact.
+
+Nebula Logger Core v4.18.4 is pinned at
+`55ba832d1d51680dd5e291d67ffe2104fa48977f`. Salesforce API 65.0
+`RunLocalTests` froze 1,159/1,159 passing methods before local inspection.
+The byte-identical three-rerun report discovers 1,159/1,159 tests and records
+0/1,159 at parse, check, execution, outcome agreement, and the strict
+compatibility numerator. All unsupported results remain in the raw denominator.
+The impact census records 43 exact parse blocker locations; the two leading
+production blockers each affect all 1,159 tests. Candidate, Salesforce, and
+local evidence is checked in under `benchmarks/milestone22/` and
+`evidence/milestone22/`.
 
 ### M23 — Broader SOQL fidelity
 

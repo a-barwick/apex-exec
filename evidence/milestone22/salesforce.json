@@ -1,0 +1,4696 @@
+{
+  "schemaVersion": 1,
+  "manifestSha256": "c352505e5ade7662919f4f32fea230a72342e8dccfbf2bf4725b31ae4c47cbcd",
+  "targetOrg": "apex-exec-m22-nebula",
+  "orgId": "00DWL00000BuCUn2AN",
+  "apiVersion": "65.0",
+  "salesforceCliVersion": "@salesforce/cli/2.134.1",
+  "capturedAt": "2026-07-19T18:24:56Z",
+  "testLevel": "RunLocalTests",
+  "sourceTestClasses": [
+    "CallableLogger_Tests",
+    "ComponentLogger_Tests",
+    "FlowCollectionLogEntry_Tests",
+    "FlowLogEntry_Tests",
+    "FlowLogger_Tests",
+    "FlowRecordLogEntry_Tests",
+    "LogBatchPurgeController_Tests",
+    "LogBatchPurger_Tests",
+    "LogBatchPurgeScheduler_Tests",
+    "LogEntryEventBuilder_Tests",
+    "LogEntryEventHandler_Tests",
+    "LogEntryEventStreamController_Tests",
+    "LogEntryFieldSetPicklist_Tests",
+    "LogEntryHandler_Tests",
+    "LogEntryMetadataViewerController_Tests",
+    "LogEntryTagHandler_Tests",
+    "Logger_Tests",
+    "LoggerBatchableContext_Tests",
+    "LoggerCache_Tests",
+    "LoggerConfigurationSelector_Tests",
+    "LoggerDataStore_Tests",
+    "LoggerEmailSender_Tests",
+    "LoggerEngineDataSelector_Tests",
+    "LoggerFieldMapper_Tests",
+    "LoggerHomeHeaderController_Tests",
+    "LoggerMockDataCreator",
+    "LoggerMockDataStore",
+    "LoggerParameter_Tests",
+    "LoggerPlugin_Tests",
+    "LoggerScenarioHandler_Tests",
+    "LoggerScenarioRule_Tests",
+    "LoggerSettingsController_Tests",
+    "LoggerSObjectHandler_Tests",
+    "LoggerSObjectMetadata_Tests",
+    "LoggerSObjectProxy_Tests",
+    "LoggerStackTrace_Tests",
+    "LoggerTagHandler_Tests",
+    "LoggerTestConfigurator",
+    "LoggerTriggerableContext_Tests",
+    "LogHandler_Tests",
+    "LogManagementDataSelector_Tests",
+    "LogMassDeleteExtension_Tests",
+    "LogMessage_Tests",
+    "LogViewerController_Tests",
+    "RelatedLogEntriesController_Tests"
+  ],
+  "tests": [
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_and_saves_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_that_meets_user_logging_level_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_that_overrides_should_save_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_exception_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_record_id_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_record_list_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_record_map_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_record_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_new_entry_with_tags_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_adds_omnistudio_output_maps_to_new_entry_message_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_ends_scenario_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_ends_scenario_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_parent_log_transaction_id_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_parent_log_transaction_id_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_scenario_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_scenario_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_transaction_id_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gets_transaction_id_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_gracefully_no_ops_new_entry_for_unmet_logging_level_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_logs_try_catch_when_passed_as_action",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_requires_case_sensitive_string_values_for_action_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_returns_exception_message_for_unsupported_action_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_returns_exception_message_for_unsupported_action_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_saves_log_with_specified_save_method_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_saves_log_with_specified_save_method_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_saves_log_without_specifying_a_save_method_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_saves_log_without_specifying_a_save_method_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_sets_parent_log_transaction_id_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_sets_parent_log_transaction_id_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_sets_scenario_when_using_omnistudio_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "CallableLogger_Tests.it_sets_scenario_when_using_standard_approach",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_return_aura_exception_when_it_breaks",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_return_logger_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_with_browser_context",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_with_component_error",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_with_invalid_custom_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_with_queueable_job",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_with_valid_custom_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_without_browser_context",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_without_custom_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_save_component_log_entry_without_stack_trace",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_set_aura_javascript_origin_stack_trace_details",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_set_logger_scenario",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_set_lwc_javascript_origin_stack_trace_details",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_truncate_long_browser_fields_when_publishing_to_the_event_bus",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_truncate_long_exception_stack_trace_when_publishing_to_the_event_bus",
+      "outcome": "pass"
+    },
+    {
+      "name": "ComponentLogger_Tests.it_should_truncate_long_origin_stack_trace_fields_when_publishing_to_the_event_bus",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_add_tags_to_log_entry",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_auto_save_entry_when_saveLog_is_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_auto_save_entry_with_save_method_when_saveMethodName_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_not_save_entry_when_logging_level_not_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_save_entry_when_logging_level_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_set_logger_scenario",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_throw_exception_when_shouldThrowFaultMessageException_is_set_to_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_use_debug_as_default_level_when_faultMessage_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowCollectionLogEntry_Tests.it_should_use_error_as_default_level_when_faultMessage_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_add_tags_to_log_entry",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_auto_save_entry_when_saveLog_is_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_auto_save_entry_with_save_method_when_saveMethodName_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_not_save_entry_when_logging_level_not_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_save_entry_when_logging_level_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_set_logger_scenario",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_throw_exception_when_shouldThrowFaultMessageException_is_set_to_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_use_debug_as_default_level_when_faultMessage_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogEntry_Tests.it_should_use_error_as_default_level_when_faultMessage_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_should_add_entry_to_logger_buffer",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_should_auto_save_entry_when_saveLog_is_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_should_auto_save_entry_with_save_method_when_saveMethodName_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_should_throw_exception_with_fault_error_message_when_shouldThrowFaultMessageException_is_set_to_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_should_throw_exception_with_generic_message_when_shouldThrowFaultMessageException_is_set_to_true_and_faultMessage_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowLogger_Tests.it_truncates_too_long_exception_messages",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_add_tags_to_log_entry",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_auto_save_entry_when_saveLog_is_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_auto_save_entry_with_save_method_when_saveMethodName_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_not_save_entry_when_logging_level_not_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_save_entry_when_logging_level_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_set_logger_scenario",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_throw_exception_when_shouldThrowFaultMessageException_is_set_to_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_use_debug_as_default_level_when_faultMessage_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "FlowRecordLogEntry_Tests.it_should_use_error_as_default_level_when_faultMessage_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_execute_the_purge_batch",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_not_permit_user_to_execute_purge_batch_when_custom_permission_is_not_assigned",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_permit_user_to_execute_purge_batch_when_custom_permission_is_assigned",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_logPurgeAction_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_metrics_for_all_logObjects",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_purge_batch_job_records",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntry_created_this_month",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntry_created_this_week",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntry_created_today",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntryTag_created_This_Month",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntryTag_created_This_Week",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logEntryTag_created_today",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logs_created_this_month",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logs_created_this_week",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeController_Tests.it_should_return_summary_for_logs_created_today",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_returns_configured_logger_parameter_value_for_the_default_batch_size",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_default_batch_size_for_chained_job_batch_size",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_delete_a_log_after_scheduled_deletion_date_when_system_messages_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_delete_a_log_after_scheduled_deletion_date_when_system_messages_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_delete_a_log_with_a_scheduled_deletion_date_and_without_log_entries",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_delete_a_log_without_a_scheduled_deletion_date_and_without_log_entries",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_not_delete_a_log_before_scheduled_deletion_date",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_not_delete_a_log_without_a_scheduled_deletion_date_and_with_log_entries",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_run_apex_plugin_in_execute_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_run_apex_plugin_in_finish_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_run_apex_plugin_in_start_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_set_chained_job_batch_size",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurger_Tests.it_should_throw_an_exception_when_data_cannot_be_purged",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeScheduler_Tests.it_implements_system_schedulable_interface",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeScheduler_Tests.it_should_create_system_log_entry_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeScheduler_Tests.it_should_execute_batch_job",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeScheduler_Tests.it_should_use_default_batch_size_when_specified_batch_size_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogBatchPurgeScheduler_Tests.it_should_use_specified_batch_size_when_specified_batch_size_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_gracefully_handles_invalid_value_for_field",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_http_request_body_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_http_response_body_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_message_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_record_json_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_record_list_json_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_record_map_json_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_rest_request_body_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_apply_data_mask_rule_to_rest_response_body_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_deduplicate_and_sort_tags",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_apply_data_mask_rule_when_disabled_for_user",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_apply_data_mask_rule_when_rule_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_run_authSession_query_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_run_organization_query_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_run_queries_when_logging_is_disabled_via_logger_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_run_user_query_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_stack_trace_for_new_builder_instance_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_stack_trace_for_parseStackTrace_method_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_transaction_heap_limits_fields_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_transaction_heap_limits_fields_when_transaction_limit_tracking_is_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_transaction_limits_fields_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_set_user_fields_when_anonymous_mode_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_not_short_circuit_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_message_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_http_request_body_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_http_response_body_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_json_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_list_json_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_map_json_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_rest_request_body_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_properly_truncate_loooooong_record_rest_response_body_when_data_mask_rule_is_applied",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_query_and_handle_authSession_when_logingHistory_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_return_value_of_shouldSave_when_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_return_value_of_shouldSave_when_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_run_authSession_query_when_enabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_run_organization_query_when_enabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_run_user_query_when_enabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_approval_lockResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_approval_processResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_approval_unlockResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_approval_lockResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_approval_processResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_approval_unlockResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_mergeResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_list_of_upsertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_mergeResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_database_result_fields_for_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_exception_fields_for_dmlException",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_http_request_fields_when_header_keys_are_provided_and_storing_header_values_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_http_request_fields_when_header_keys_are_provided_and_storing_header_values_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_http_request_fields_when_request_is_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_http_response_fields_when_storing_header_values_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_http_response_fields_when_storing_header_values_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_map_of_fields_with_specified_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_message_fields_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_message_fields_for_null_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_message_fields_for_null_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_message_fields_for_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_iterable_ids_when_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_list_of_id_records_when_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_list_of_records_when_first_record_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_list_of_records_when_list_is_empty",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_list_of_records_when_list_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_list_of_records_when_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_map_of_sobject_records_when_first_record_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_map_of_sobject_records_when_map_contains_null_key",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_map_of_sobject_records_when_map_is_empty",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_map_of_sobject_records_when_map_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_map_of_user_records_when_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_custom_metadata_type",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_custom_object",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_published_platform_event",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_standard_object",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_record_when_unpublished_platform_event",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_recordId_when_custom_metadata_type",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_recordId_when_custom_object",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_recordId_when_standard_object",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_recordId_when_template_standard_object",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_record_fields_for_set_of_id_records_when_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_rest_request_fields_when_storing_header_values_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_rest_request_fields_when_storing_header_values_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_rest_response_fields_when_storing_header_values_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_rest_response_fields_when_storing_header_values_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_save_reason_when_entry_saving_is_overridden",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_save_reason_when_user_logging_level_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_single_field_with_specified_value",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_single_field_with_truncated_string_value",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_tags_string_for_list_of_tags",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_transaction_limits_fields_when_enabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_set_user_fields_when_anonymous_mode_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_short_circuit_when_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_short_circuit_when_enabled_logging_level_above_called_level",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_setting_exception_fields_when_exception_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_setting_http_request_fields_when_request_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_setting_http_response_fields_when_response_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_setting_rest_response_fields_when_response_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_stripping_inaccessible_fields_for_aggregate_result",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_skip_stripping_inaccessible_fields_for_aggregate_results",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_http_request_body_field_when_string_is_too_long",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_http_response_body_field_when_string_is_too_long",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_message_field_when_string_is_too_long",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_message_for_long_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_message_for_long_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_rest_request_body_field_when_string_is_too_long",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_truncate_rest_response_body_field_when_string_is_too_long",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_use_configured_log_entry_event_fields_for_debug_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_use_logger_stack_trace_class_to_set_exception_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventBuilder_Tests.it_should_use_logger_stack_trace_class_to_set_origin_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_append_tags_for_contains_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_append_tags_for_equals_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_append_tags_for_regex_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_append_tags_for_startsWith_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_create_log_and_log_entry_data_when_event_save_reason_is_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_create_log_entry_data_with_matching_scenario_rule_when_platform_event_storage_logging_level_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_create_tag_records_when_tagging_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_gracefully_skip_execution_when_logEntryEvents_list_is_empty",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_gracefully_skip_tag_rule_when_field_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_normalize_event_data_for_multiple_transactions_into_multiple_logs",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_normalize_event_data_into_log_and_log_entry_when_no_scenario_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_normalize_event_data_into_logger_scenario_and_log_and_log_entry_when_scenario_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_create_log_entry_data_when_platform_event_storage_logging_level_is_not_met",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_create_log_or_log_entry_data_when_platform_event_storage_location_is_null_in_logger_scenario_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_create_log_or_log_entry_data_when_platform_event_storage_location_is_null_in_logger_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_normalize_scenario_data_when_data_normalization_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_normalize_tag_data_when_data_normalization_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_set_api_release_number_or_api_release_version_from_callout_when_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_not_set_logging_user_as_log_owner_when_anonymous_mode_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_query_and_handle_authSession_when_logingHistory_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_query_and_set_auth_session_data_when_synchronous_querying_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_query_and_set_organization_data_when_synchronous_querying_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_query_and_set_user_data_when_synchronous_querying_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_return_the_logEntryEvent_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_reuse_existing_tag_records",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_save_data_when_saving_with_synchronous_dml",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_save_log_entries_when_event_uuid_is_not_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_set_api_release_number_and_api_release_version_from_callout_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_set_api_release_number_and_api_release_version_from_recent_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_set_logger_scenario_owner_as_log_owner_when_log_assignment_enabled_via_logger_scenario_rule",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_set_logging_user_as_log_owner_when_anonymous_mode_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_skip_setting_api_release_number_and_api_release_version_when_callout_fails",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_upsert_log_entries_when_event_uuid_is_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_upsert_logger_scenarios_when_entry_scenario_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_upsert_logger_scenarios_when_transaction_and_entry_scenarios_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventHandler_Tests.it_should_upsert_logger_scenarios_when_transaction_scenario_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventStreamController_Tests.it_should_return_default_fields_when_list_of_fields_not_configured_in_logger_parameters",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventStreamController_Tests.it_should_return_is_enabled_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryEventStreamController_Tests.it_should_return_list_of_fields_configured_in_logger_parameters",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryFieldSetPicklist_Tests.it_should_return_all_field_sets_as_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryFieldSetPicklist_Tests.it_should_return_non_null_for_default_value_when_valid_value_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryFieldSetPicklist_Tests.it_should_return_null_for_default_value_when_empty_value_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryFieldSetPicklist_Tests.it_should_return_null_for_default_value_when_invalid_value_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_not_populate_related_record_fields_on_log_entry_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_not_populate_related_record_fields_on_log_entry_with_related_template_standard_object_record_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_populate_related_record_fields_on_log_entry_with_related_profile_record_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_populate_related_record_fields_on_log_entry_with_related_user_record_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_return_the_logEntry_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_save_log_entry_without_related_record_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_exception_apex_class_details_for_top_level_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_gracefully_skip_setting_flow_details_when_origin_location_is_not_valid_flow_api_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasDatabaseResultJson_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasDatabaseResultJson_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasExceptionStackTrace_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasExceptionStackTrace_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestBody_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestBody_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestHeaderKeys_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestHeaderKeys_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestHeaders_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpRequestHeaders_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseBody_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseBody_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseHeaderKeys_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseHeaderKeys_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseHeaders_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasHttpResponseHeaders_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasInlineTags_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasInlineTags_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRecordJson_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRecordJson_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestBody_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestBody_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestHeaderKeys_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestHeaderKeys_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestHeaders_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestRequestHeaders_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseBody_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseBody_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseHeaderKeys_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseHeaderKeys_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseHeaders_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasRestResponseHeaders_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasStackTrace_on_before_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_hasStackTrace_on_before_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_origin_apex_class_details_for_inner_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_origin_apex_class_details_for_top_level_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_origin_apex_trigger_details",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_origin_omni_process_details",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_skip_setting_apex_class_details_when_origin_location_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryHandler_Tests.it_should_set_skip_setting_origin_omni_process_details_when_origin_source_id_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryMetadataViewerController_Tests.it_indicates_when_exception_source_metadata_has_been_modified_after_log_entry_timestamp",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryMetadataViewerController_Tests.it_indicates_when_origin_source_metadata_has_been_modified_after_log_entry_timestamp",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryMetadataViewerController_Tests.it_returns_apex_class_metadata_for_log_entry_when_source_metadata_is_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryMetadataViewerController_Tests.it_returns_apex_class_metadata_for_log_entry_when_source_metadata_is_origin",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryMetadataViewerController_Tests.it_returns_apex_trigger_metadata_for_log_entry_when_source_metadata_is_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_generates_a_unique_composite_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_should_not_insert_duplicate_tag",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_should_return_the_logEntryTag_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_should_set_unique_id_on_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogEntryTagHandler_Tests.it_should_set_unique_id_on_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_new_entry_for_loggingLevel_with_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_new_entry_for_loggingLevel_with_logMessage_and_shouldSave_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_new_entry_for_loggingLevel_with_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_new_entry_for_loggingLevel_with_string_and_shouldSave_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_record_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_recordId_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_recordList_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_record_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_recordId_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_recordList_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_a_warn_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_debug_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_record_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_recordId_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_recordList_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_record_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_recordId_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_recordList_and_exception",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_error_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_fine_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finer_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_finest_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_logMessage_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_deleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_emptyRecycleBinResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_failed_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_leadConvertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_saveResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_deleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_emptyRecycleBinResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_leadConvertResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_saveResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_undeleteResult",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_upsertResult_when_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_successful_upsertResult_when_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_undeleteResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_add_an_info_entry_for_string_message_with_upsertResultList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_auto_create_log_entry_event_for_batchable_async_context_details_when_system_messages_are_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_auto_create_log_entry_event_for_queueable_async_context_details_when_system_messages_are_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_auto_create_log_entry_event_for_scheduleable_async_context_details_when_system_messages_are_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_auto_create_log_entry_event_for_success_finalizer_async_context_details_when_system_messages_are_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_auto_create_log_entry_event_for_unhandled_exception_finalizer_async_context_details_when_system_messages_are_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_create_new_in_memory_settings_with_default_field_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_end_scenario_when_no_scenario_was_previously_set",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_end_scenario_when_specified_scenario_matches",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_flush_buffer",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_gracefully_return_null_when_callout_fails_to_status_api",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_ignore_origin_when_apex_class_type_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_ignore_parent_transaction_id_when_set_to_current_transaction_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_deleteResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_deleteResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_leadConvertResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_leadConvertResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_mergeResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_mergeResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_saveResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_saveResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_undeleteResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_undeleteResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_upsertResult_for_logMessage_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_log_database_upsertResult_for_string_message_when_isSuccess_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_add_a_new_entry_for_loggingLevel_with_logMessage_and_shouldNotSave_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_add_a_new_entry_for_loggingLevel_with_string_and_shouldNotSave_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_ignore_origin_when_apex_class_type_not_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_save_when_saving_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_org_default_settings_when_end_time_is_in_the_past",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_org_default_settings_when_start_time_is_in_the_future",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_profile_settings_when_end_time_is_in_the_past",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_profile_settings_when_start_time_is_in_the_future",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_user_settings_when_end_time_is_in_the_past",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_not_use_user_settings_when_start_time_is_in_the_future",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_anonymous_mode_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_apex_system_debugging_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_data_masking_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_javascript_console_logging_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_javascript_lightning_logger_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_logger_is_enabled_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_record_field_stripping_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_save_method_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_saving_enabled_setting_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_override_user_logging_level_when_matching_logger_scenario_rule_is_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_properly_set_default_field_values_for_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_require_scenario_when_parameter_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_resume_saving",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_callout_response_from_status_api",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_logging_levels_for_string_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_namespace_prefix",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_null_when_status_api_callout_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_organization_api_version",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_quiddity_level",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_system_request_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_the_buffer_size",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_debug_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_error_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_fine_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_finer_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_finest_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_info_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_provided_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_saving_is_suspended",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_true_when_warn_logging_level_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_user_logging_level",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_return_version_number",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_revert_to_previous_scenario_rule_when_current_scenario_is_ended",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_revert_to_previous_scenario_when_current_scenario_is_ended",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_revert_to_previous_user_settings_when_the_only_scenario_is_ended",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_revert_to_previous_user_settings_with_scenario_rule_applied_when_scenario_is_ended_and_other_scenarios_have_been_used",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_accurate_timestamp_when_logging_user_has_different_time_zone",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_logMessage",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_logMessage_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_logMessage_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_logMessage_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_string_message",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_string_message_with_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_string_message_with_recordId",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_and_throw_exception_for_string_message_with_recordList",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_event_bus_when_defaulted",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_event_bus_when_specified_via_setSaveMethod",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_event_bus_when_specified_via_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_queueable_when_defaulted",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_queueable_when_specified_via_setSaveMethod",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_queueable_when_specified_via_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_rest_api_when_defaulted",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_rest_api_when_specified_via_setSaveMethod",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_rest_api_when_specified_via_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_synchronous_dml_when_defaulted",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_synchronous_dml_when_specified_via_setSaveMethod",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_save_via_synchronous_dml_when_specified_via_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_async_context_details_for_batchable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_async_context_details_for_finalizer_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_async_context_details_for_queueable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_async_context_details_for_schedulable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_map_of_transaction_fields_on_all_entries_when_events_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_parent_transaction_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_scenario_when_default_scenario_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_scenario_when_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_single_transaction_field_on_all_entries_when_events_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_transaction_details",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_set_transaction_scenario_and_entry_scenario_for_published_log_entry_events",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_deleteResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_deleteResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_deleteResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_deleteResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_leadConvertResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_leadConvertResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_leadConvertResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_leadConvertResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_mergeResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_mergeResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_mergeResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_mergeResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_saveResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_saveResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_saveResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_saveResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_undeleteResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_undeleteResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_undeleteResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_undeleteResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_upsertResult_for_logMessage_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_upsertResult_for_logMessage_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_upsertResult_for_string_message_when_logging_level_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_skip_logging_database_upsertResult_for_string_message_when_no_errors_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_suspend_saving",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_throw_exception_when_save_via_rest_api_fails",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_a_uuid_for_transaction_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_first_non_null_context_details_for_batchable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_first_non_null_context_details_for_finalizer_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_first_non_null_context_details_for_queueable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_first_non_null_context_details_for_schedulable_context_when_event_published",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_in_memory_default_settings_when_not_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_org_default_settings_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_profile_settings_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_the_first_specified_scenario_as_transaction_scenario_when_parameter_is_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_the_last_specified_scenario_as_transaction_scenario_when_parameter_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "Logger_Tests.it_should_use_user_settings_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerBatchableContext_Tests.it_constructs_instance_when_both_parameters_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerBatchableContext_Tests.it_constructs_instance_when_neither_parameters_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_to_only_transaction_cache_when_organization_platform_cache_is_not_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_to_only_transaction_cache_when_session_platform_cache_is_not_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_to_organization_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_to_session_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_to_transaction_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_with_null_value_to_organization_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_with_null_value_to_session_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_adds_new_key_with_null_value_to_transaction_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_removes_value_for_existing_key_in_organization_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_removes_value_for_existing_key_in_session_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_removes_value_for_existing_key_in_transaction_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_returns_value_in_transaction_cache_when_organization_and_transaction_cache_both_contain_key",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_returns_value_in_transaction_cache_when_session_and_transaction_cache_both_contain_key",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_updates_value_for_existing_key_in_organization_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_updates_value_for_existing_key_in_session_and_transaction_cache_when_platform_cache_is_available",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerCache_Tests.it_updates_value_for_existing_key_in_transaction_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_initializes_mock_lists_when_use_mocks_is_called",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_entry_data_mask_rules_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_entry_data_mask_rules_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_entry_tag_rules_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_entry_tag_rules_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_statuses_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_log_statuses_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_field_mappings_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_field_mappings_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_parameters_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_parameters_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_plugins_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_plugins_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_scenario_rules_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_scenario_rules_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_sobject_handlers_from_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerConfigurationSelector_Tests.it_returns_logger_sobject_handlers_from_provided_mocks",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_delete_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_delete_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_enqueue_job",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_hard_delete_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_hard_delete_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_insert_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_insert_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_delete_record_list_when_allOrNone_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_insert_record_list_when_allOrNone_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_insert_record_list_when_allOrNone_is_false_in_dml_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_undelete_records_when_allOrNone_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_update_record_list_when_allOrNone_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_update_record_list_when_allOrNone_is_false_in_dml_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_partially_upsert_record_list_when_allOrNone_is_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_publish_platform_event_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_publish_platform_event_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_support_overriding_database_instance",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_support_overriding_event_bus_instance",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_support_overriding_job_queue_instance",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_undelete_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_undelete_records",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_update_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_update_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_upsert_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerDataStore_Tests.it_should_upsert_record_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_indicate_email_deliverability_is_based_on_email_deliverability_when_org_limits_not_exceeded",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_indicate_email_deliverability_is_not_available_when_org_limits_exceeded",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_not_send_email_notification_for_saveResult_errors_when_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_not_send_email_notification_for_saveResult_errors_when_no_recipients_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_not_send_email_notification_for_upsertResult_errors_when_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_not_send_email_notification_for_upsertResult_errors_when_no_recipients_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_send_email_notification_for_saveResult_errors_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEmailSender_Tests.it_should_send_email_notification_for_upsertResult_errors_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_does_not_query_auth_session_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_does_not_query_organization_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_loads_mock_instance",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_cached_auth_session_proxy_when_populated_in_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_cached_network_proxy_when_populated_in_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_cached_organization",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_cached_user",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_mock_auth_session_proxy_when_mock_is_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_mock_network_proxy_when_mock_is_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_null_when_network_id_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_null_when_querying_auth_session_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_null_when_querying_network_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_null_when_querying_user_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerEngineDataSelector_Tests.it_returns_queried_auth_session_proxy_when_cache_is_not_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_handles_when_field_mappings_are_not_configured_for_current_target_sobject_type_but_do_exist_for_other_types",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_maps_field_value_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_maps_field_value_when_configured_with_deprecated_set_mock_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_maps_field_values_for_multiple_target_sobject_types_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_safely_returns_when_no_field_mappings_are_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_safely_returns_when_source_record_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_safely_returns_when_target_record_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_safely_skips_field_mappings_for_incompatible_field_mappings",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_should_throw_exception_when_mock_record_developer_name_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerFieldMapper_Tests.it_truncates_string_value_when_mapping_string_field_value",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerHomeHeaderController_Tests.it_returns_environment_details_when_plugins_are_installed",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerHomeHeaderController_Tests.it_returns_environment_details_when_status_api_callout_does_not_provide_instance_products_list",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerHomeHeaderController_Tests.it_returns_environment_details_when_status_api_callout_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerHomeHeaderController_Tests.it_returns_environment_details_when_status_api_callout_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_load_mock_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_match_on_developer_name_prefix",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_boolean_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_boolean_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_call_status_api",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_default_log_entry_related_list_field_set",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_enable_log_entry_event_stream",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_enable_stack_trace_parsing",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_enable_system_messages",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_enable_tagging",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_log_batch_purger_default_batch_size",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_normalize_scenario_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_normalize_tag_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_platform_cache_partition_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_apex_class_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_apex_trigger_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_auth_session_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_auth_session_data_synchronously",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_flow_definition_view_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_network_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_network_data_synchronously",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_omni_process_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_organization_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_organization_data_synchronously",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_related_record_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_user_data",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_query_user_data_synchronously",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_require_scenario_usage_when_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_require_scenario_usage_when_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_send_error_email_notifications",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_http_request_header_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_http_response_header_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_organization_limits_when_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_organization_limits_when_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_rest_request_header_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_rest_response_header_values",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_transaction_limits_when_false",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_store_transaction_limits_when_true",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_system_debug_message_format",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_use_platform_cache",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_constant_value_for_use_topics_for_tags",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_date_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_date_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_datetime_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_datetime_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_decimal_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_decimal_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_default_value_when_configured_boolean_list_parameter_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_double_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_double_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_id_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_id_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_integer_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_integer_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_long_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_long_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_sobject_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_sobject_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_string_list_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_return_string_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_throw_exception_when_mock_record_developer_name_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_use_false_as_default_constant_value_for_require_scenario_usage_when_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_use_true_as_default_constant_value_for_store_organization_limits_when_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerParameter_Tests.it_should_use_true_as_default_constant_value_for_store_transaction_limits_when_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_batchable_apex_plugin_instance_for_valid_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_null_batchable_apex_plugin_instance_for_class_that_does_not_implement_batchable_plugin_interface",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_null_batchable_apex_plugin_instance_for_nonexistent_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_null_triggerable_apex_plugin_instance_for_class_that_does_not_implement_triggerable_plugin_interface",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_null_triggerable_apex_plugin_instance_for_nonexistent_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_return_triggerable_apex_plugin_instance_for_valid_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_returned_all_enabled_plugin_configurations",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerPlugin_Tests.it_should_returned_filtered_plugin_configurations_in_sorted_order",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioHandler_Tests.it_should_not_allow_duplicate_scenario_to_be_inserted",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioHandler_Tests.it_should_return_the_loggerScenario_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioHandler_Tests.it_should_run_when_enabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_load_all_mock_records",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_load_configured_rule_when_start_and_end_time_are_both_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_load_configured_rule_when_start_and_end_time_are_both_valid",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_load_configured_rule_when_start_time_is_null_and_end_time_is_valid",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_load_configured_rule_when_start_time_is_valid_and_end_time_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_not_load_configured_rule_when_end_time_is_in_the_past",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_not_load_configured_rule_when_start_time_is_in_the_future",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerScenarioRule_Tests.it_should_throw_exception_when_mock_record_scenario_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_append_custom_loggerSaveMethod_picklist_options_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_append_custom_platformEventStorageLocation_picklist_options_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_create_new_record_when_organization_is_a_sandbox",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_create_new_record_when_organization_is_not_a_sandbox",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_delete_existing_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_empty_profile_search_results_list_when_no_matches_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_empty_settings_records_list_when_not_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_empty_user_search_results_list_when_no_matches_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_loggerSaveMethod_picklist_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_loggingLevel_picklist_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_logPurgeAction_picklist_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_organization_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_profile_search_results_list_when_matches_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_settings_records_when_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_setupOwnerType_picklist_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_shareAccessLevel_picklist_options",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_return_user_search_results_list_when_matches_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_save_existing_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_save_new_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_throw_exception_when_deleting_invalid_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_throw_exception_when_invalid_setupOwnerType_specified",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSettingsController_Tests.it_should_throw_exception_when_saving_invalid_record",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_execute_apex_plugin",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_gracefully_skip_non_existent_apex_plugin",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_gracefully_skip_non_existent_flow_plugin",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_not_run_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_not_run_when_disabled_via_private_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_override_triggerable_context",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_return_configured_sobject_handler",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_return_default_sobject_handler_implementation_when_no_configuration_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_return_handler_via_override",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_after_delete_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_after_insert_methods",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_after_undelete_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_after_update_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_before_delete_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_before_insert_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectHandler_Tests.it_should_run_before_update_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectMetadata_Tests.it_should_return_schema_for_specified_sobject_api_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectMetadata_Tests.it_should_return_schema_for_specified_sobject_type",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectProxy_Tests.it_correctly_deserializes_auth_session_records_to_proxies",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectProxy_Tests.it_correctly_deserializes_login_history_records_to_proxies",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectProxy_Tests.it_correctly_deserializes_network_records_to_proxies_when_experience_cloud_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectProxy_Tests.it_deserializes_omni_process_record_to_proxy_from_database_when_omnistudio_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerSObjectProxy_Tests.it_supports_constructing_proxy_classes",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_deduplicate_sequential_lines_in_apex_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_gracefully_handle_parsing_null_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_ignore_external_entry_point_stack_trace_line",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_ignore_stack_trace_line_when_matching_apex_class_type_has_been_ignored",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_ignore_stack_trace_line_when_matching_class_name_has_been_declaratively_ignored",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_not_set_details_for_empty_parenthesis_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_not_set_details_for_namespaced_parenthesis_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_not_set_details_for_system_code_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_not_skip_external_entry_point_stack_trace_line_in_middle_of_stack_trace",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_anonymous_apex_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_apex_exception_constructor",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_apex_inner_class_constructor_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_apex_inner_class_method_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_parameterless_constructor_for_inner_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_parameterless_constructor_for_top_level_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerStackTrace_Tests.it_should_set_details_for_trigger_apex_stack_trace_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTagHandler_Tests.it_should_not_insert_duplicate_tag",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTagHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTagHandler_Tests.it_should_return_the_loggerTag_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTagHandler_Tests.it_should_set_unique_id_on_insert",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTagHandler_Tests.it_should_set_unique_id_on_update",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTriggerableContext_Tests.it_constructs_instance_when_before_delete_operation",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTriggerableContext_Tests.it_constructs_instance_when_before_insert_operation",
+      "outcome": "pass"
+    },
+    {
+      "name": "LoggerTriggerableContext_Tests.it_constructs_instance_when_before_update_operation",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_clear_closed_status_fields_when_open",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_grant_edit_access_to_user_when_access_level_is_edit",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_grant_read_access_to_user_when_access_level_is_read",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_have_null_retention_details_when_no_retention_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_keep_existing_retention_details_when_populated",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_not_grant_access_to_user_when_access_level_is_an_unknown_string",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_not_grant_access_to_user_when_access_level_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_not_run_when_disabled_via_configuration",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_not_set_organization_limits_when_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_return_the_log_sobjectType",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_closed_status_fields_when_closed",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_hasComments_field_on_insert_when_comments_field_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_hasComments_field_on_insert_when_comments_field_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_hasComments_field_on_update_when_comments_field_is_not_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_hasComments_field_on_update_when_comments_field_is_null",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_organization_limits_when_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_owner_when_default_configured_with_queue_developer_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_owner_when_default_configured_with_queue_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_owner_when_default_configured_with_user_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_owner_when_default_configured_with_username",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_parent_log_when_it_exists_in_the_database",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_parent_log_when_it_exists_in_the_same_trigger_context",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_parent_log_when_it_is_created_after_child_log",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_priority_to_high_when_there_is_an_error_log_entry",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_priority_to_medium_when_there_is_a_warn_log_entry",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_retention_details_when_configured_via_logger_scenario_rules",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_set_retention_details_when_configured_via_logger_settings",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_skip_setting_parent_log_when_it_does_not_exist",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogHandler_Tests.it_should_use_current_user_as_owner_when_no_default_configured",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_does_not_query_apex_classes_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_does_not_query_apex_triggers_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_does_not_query_flow_definition_view_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_does_not_query_omni_processes_when_disabled_via_logger_parameter",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_dynamically_queries_all_records_for_specified_sobject_type_and_fields",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_dynamically_queries_records_for_specified_sobject_type_and_fields_and_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_loads_mock_instance",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_cached_apex_email_notifications",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_cached_recent_log_with_api_release_details_when_call_status_api_callout_is_enabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_count_of_async_apex_jobs_for_specified_apex_class_and_method_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_deleteable_user_record_access",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_empty_list_without_querying_when_specified_search_term_is_blank",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_flow_definition_view_for_nonexistent_api_name",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_flow_version_view_for_nonexistent_durable_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_log_entries_for_specified_log_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_log_entry_for_specified_log_entry_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_log_for_specified_log_id",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_logger_scenarios_for_specified_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_logs_for_specified_log_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_logs_for_specified_log_transaction_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_logs_for_specified_parent_log_transaction_ids_and_no_parent_log",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_matching_apex_classes_for_specified_class_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_matching_apex_triggers_for_specified_class_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_null_for_cached_recent_log_with_api_release_details_when_status_api_callout_is_disabled",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_null_when_no_recent_log_with_api_release_details_is_found",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_omni_processes_for_empty_list_of_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_profiles_for_specified_profile_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_profiles_for_specified_search_term",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_queues_for_specified_developer_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_tags_for_specified_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_topics_for_specified_names",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_user_for_specified_search_term",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_users_for_user_ids",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogManagementDataSelector_Tests.it_returns_users_for_user_usernames",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMassDeleteExtension_Tests.it_should_add_error_to_page_when_user_does_not_have_delete_access",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMassDeleteExtension_Tests.it_should_delete_selected_log_records",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMassDeleteExtension_Tests.it_should_return_deletable_logs",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_return_formatted_message_when_1_object_list_parameter_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_return_formatted_message_when_1_object_parameter_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_return_formatted_message_when_2_object_parameters_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_return_formatted_message_when_3_object_parameters_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_support_extending_LogMessage_class",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogMessage_Tests.it_should_support_overriding_getMessage_method",
+      "outcome": "pass"
+    },
+    {
+      "name": "LogViewerController_Tests.it_should_return_log_when_id_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "RelatedLogEntriesController_Tests.it_should_return_matching_logEntryQueryResult_when_no_search_term_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "RelatedLogEntriesController_Tests.it_should_return_matching_logEntryQueryResult_when_search_term_provided",
+      "outcome": "pass"
+    },
+    {
+      "name": "RelatedLogEntriesController_Tests.it_should_return_no_matching_logEntryQueryResult_when_search_term_provided_and_strict_mode_enabled",
+      "outcome": "pass"
+    }
+  ],
+  "snapshotSha256": "1d0972ced93edca0053675229378fd805e4feae5596f60d60737a237df80ada0"
+}
