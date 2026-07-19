@@ -13,8 +13,8 @@ the bounded S0 process-safety and correctness criteria pass.
 
 Initial S0 work may begin in three disjoint packages:
 
-- S0-01 — frontend process safety and correctness (Active maintainability
-  remediation on `codex/stab-frontend-safety` from `c7d4ac7`)
+- S0-01 — frontend process safety and correctness (in Review on
+  `codex/stab-frontend-safety` at `2a8635d`)
 - S0-02 — opt-in runtime instrumentation
 - S0-05 — CI, maintainability ratchet, and release-document gates
 
@@ -339,7 +339,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 320 ordinary tests pass with no failures (14 separate North Star goal tests
+- 321 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
