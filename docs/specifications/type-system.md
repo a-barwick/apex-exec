@@ -109,17 +109,19 @@ independent shallow copies; ordinary assignment preserves reference identity.
 
 ## Declarations
 
-**Implemented.** Local declarations require explicit initialization:
+**Implemented.** Local declarations may be uninitialized or contain multiple
+declarators:
 
 ```apex
-String name = 'Ada';
+String name = 'Ada', alias;
 ```
 
-Uninitialized local declarations are rejected in the current supported
-surface. Class fields and automatic properties receive typed null before any
-explicit initializer executes. M21 will parse valid uninitialized and
-multi-declarator Apex forms; execution support still requires an explicit
-typed-null initialization rule.
+An uninitialized local receives typed null. Multi-declarator initializers are
+checked and evaluated from left to right, and each earlier declaration enters
+the same scope before the next initializer. Class fields and automatic
+properties likewise receive typed null before explicit initialization.
+Multi-declarator fields are retained losslessly but remain an explicit semantic
+unsupported case.
 
 ## Assignment
 

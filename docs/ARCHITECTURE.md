@@ -546,6 +546,24 @@ qualified, array, or generic type facts in HIR. Custom exception subclasses
 participate in typed throw/catch/subtyping and inherit the supported zero- and
 one-String construction surface.
 
+## M21 grammar-closure architecture
+
+M21 separates syntax ownership from execution claims. Arbitrary annotations
+and arguments, switch arms, external-ID DML fields, multi-declarator fields,
+and remaining modifiers have dedicated immutable AST structure with original
+spelling and file-aware spans. Semantic analysis either consumes a supported
+form or emits an explicit unsupported diagnostic; runtime retains defensive
+guards but never interprets checked-only syntax.
+
+Uninitialized and multi-declarator locals are executable. The checker and
+runtime process declarators left to right in one lexical scope, using typed
+null for omitted initializers. Comma-separated traditional-`for` expressions
+use a structural sequence node that visits and executes each child in source
+order without creating a scope, coverage line, or debugger snapshot of its own.
+The AST-derived census in `docs/NORTH_STAR_GRAMMAR_CENSUS.md` is an executable
+guard over the unchanged corpus rather than a text search that can count
+comments.
+
 ## Phase 2 architecture constraints
 
 The Phase 2 roadmap expands compatibility without weakening the existing phase

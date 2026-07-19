@@ -769,24 +769,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
         self.instrument_statement(
             statement.span(),
-            !matches!(statement, Statement::Block { .. }),
+            !matches!(
+                statement,
+                Statement::Block { .. } | Statement::Sequence { .. }
+            ),
         );
         match statement {
-            Statement::VariableDeclaration {
-                ty,
-                name,
-                initializer,
-                ..
-            } => {
-                let value = typed_value(self.evaluate(initializer)?, ty);
-                self.current_scope_mut().insert(
-                    name.canonical.clone(),
-                    Slot {
-                        ty: ty.clone(),
-                        value,
-                    },
-                );
-                Ok(Flow::Normal)
+            declaration @ Statement::VariableDeclaration { .. }
+            | declaration @ Statement::LocalDeclaration { .. }
+            | declaration @ Statement::Sequence { .. } => {
+                self.execute_declaration_statement(declaration)
             }
             Statement::Expression { expression, .. } => {
                 self.evaluate(expression)?;
@@ -843,6 +835,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Flow::Normal)
             }
+            Statement::Switch { span, .. } => Err(Diagnostic::new(
+                "unsupported switch statement escaped semantic validation",
+                *span,
+            )),
             Statement::For {
                 initializer,
                 condition,
@@ -897,15 +893,76 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     )),
                 }
             }
-            Statement::Dml {
-                operation,
-                value,
-                span,
-            } => {
-                self.execute_dml(*operation, value, *span)?;
-                Ok(Flow::Normal)
-            }
+            Statement::Dml { .. } => self.execute_dml_statement(statement),
         }
+    }
+
+    fn execute_declaration_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
+        match statement {
+            Statement::VariableDeclaration {
+                ty,
+                name,
+                initializer,
+                ..
+            } => {
+                let value = typed_value(self.evaluate(initializer)?, ty);
+                self.bind_local(name, ty, value);
+            }
+            Statement::LocalDeclaration {
+                ty, declarators, ..
+            } => {
+                for declarator in declarators {
+                    let value = declarator.initializer.as_ref().map_or_else(
+                        || Ok(Value::Null(Some(ty.clone()))),
+                        |initializer| {
+                            self.evaluate(initializer)
+                                .map(|value| typed_value(value, ty))
+                        },
+                    )?;
+                    self.bind_local(&declarator.name, ty, value);
+                }
+            }
+            Statement::Sequence { statements, .. } => {
+                for statement in statements {
+                    let flow = self.execute_statement(statement)?;
+                    if flow != Flow::Normal {
+                        return Ok(flow);
+                    }
+                }
+            }
+            _ => unreachable!("caller selects declarations and sequences"),
+        }
+        Ok(Flow::Normal)
+    }
+
+    fn bind_local(&mut self, name: &Identifier, ty: &TypeName, value: Value) {
+        self.current_scope_mut().insert(
+            name.canonical.clone(),
+            Slot {
+                ty: ty.clone(),
+                value,
+            },
+        );
+    }
+
+    fn execute_dml_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
+        let Statement::Dml {
+            operation,
+            value,
+            external_id,
+            span,
+        } = statement
+        else {
+            unreachable!("caller selects DML statements");
+        };
+        if external_id.is_some() {
+            return Err(Diagnostic::new(
+                "unsupported external-ID DML escaped semantic validation",
+                *span,
+            ));
+        }
+        self.execute_dml(*operation, value, *span)?;
+        Ok(Flow::Normal)
     }
 
     fn execute_try(

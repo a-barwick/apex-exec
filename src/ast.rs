@@ -85,6 +85,7 @@ pub enum Modifier {
     Abstract,
     Override,
     Final,
+    Transient,
     WithSharing,
     WithoutSharing,
     InheritedSharing,
@@ -93,10 +94,20 @@ pub enum Modifier {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClassMember {
     Field(FieldDeclaration),
+    FieldGroup(FieldGroupDeclaration),
     Property(PropertyDeclaration),
     Constructor(ConstructorDeclaration),
     Method(MethodDeclaration),
     Initializer(InitializerBlock),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldGroupDeclaration {
+    pub annotations: Vec<Annotation>,
+    pub modifiers: Vec<Modifier>,
+    pub ty: TypeName,
+    pub declarators: Vec<VariableDeclarator>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +119,7 @@ pub struct InitializerBlock {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldDeclaration {
+    pub annotations: Vec<Annotation>,
     pub modifiers: Vec<Modifier>,
     pub ty: TypeName,
     pub name: Identifier,
@@ -117,6 +129,7 @@ pub struct FieldDeclaration {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropertyDeclaration {
+    pub annotations: Vec<Annotation>,
     pub modifiers: Vec<Modifier>,
     pub ty: TypeName,
     pub name: Identifier,
@@ -140,6 +153,7 @@ pub enum AccessorKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConstructorDeclaration {
+    pub annotations: Vec<Annotation>,
     pub modifiers: Vec<Modifier>,
     pub name: Identifier,
     pub parameters: Vec<Parameter>,
@@ -174,7 +188,16 @@ pub struct MethodDeclaration {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Annotation {
+    pub name: Identifier,
+    pub arguments: Vec<AnnotationArgument>,
     pub kind: AnnotationKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnnotationArgument {
+    pub name: Option<Identifier>,
+    pub value: Expression,
     pub span: Span,
 }
 
@@ -183,6 +206,7 @@ pub enum AnnotationKind {
     IsTest { see_all_data: Option<bool> },
     TestSetup,
     Future,
+    Other,
 }
 
 impl AnnotationKind {
@@ -230,11 +254,41 @@ pub struct CatchClause {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VariableDeclarator {
+    pub name: Identifier,
+    pub initializer: Option<Expression>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SwitchArm {
+    pub labels: SwitchLabels,
+    pub body: Statement,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SwitchLabels {
+    Expressions(Vec<Expression>),
+    Else(Span),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
     VariableDeclaration {
         ty: TypeName,
         name: Identifier,
         initializer: Expression,
+        span: Span,
+    },
+    LocalDeclaration {
+        modifiers: Vec<Modifier>,
+        ty: TypeName,
+        declarators: Vec<VariableDeclarator>,
+        span: Span,
+    },
+    Sequence {
+        statements: Vec<Statement>,
         span: Span,
     },
     Expression {
@@ -259,6 +313,11 @@ pub enum Statement {
     DoWhile {
         body: Box<Statement>,
         condition: Expression,
+        span: Span,
+    },
+    Switch {
+        value: Expression,
+        arms: Vec<SwitchArm>,
         span: Span,
     },
     For {
@@ -294,6 +353,7 @@ pub enum Statement {
     Dml {
         operation: DmlOperation,
         value: Expression,
+        external_id: Option<Identifier>,
         span: Span,
     },
     Return {
@@ -994,11 +1054,14 @@ impl Statement {
     pub fn span(&self) -> Span {
         match self {
             Self::VariableDeclaration { span, .. }
+            | Self::LocalDeclaration { span, .. }
+            | Self::Sequence { span, .. }
             | Self::Expression { span, .. }
             | Self::Block { span, .. }
             | Self::If { span, .. }
             | Self::While { span, .. }
             | Self::DoWhile { span, .. }
+            | Self::Switch { span, .. }
             | Self::For { span, .. }
             | Self::ForEach { span, .. }
             | Self::Break { span }

@@ -10,8 +10,8 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Next feature milestone:** M21 — North Star grammar closure
-- **Feature policy:** M18 through M20 are complete. M21 is the next language
+- **Next feature milestone:** M22 — representative enterprise baseline
+- **Feature policy:** M18 through M21 are complete. M22 is the next evidence
   milestone and retains the additional architecture prerequisites below.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`

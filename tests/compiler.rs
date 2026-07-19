@@ -20,9 +20,10 @@ fn rejects_double_quoted_strings() {
 }
 
 #[test]
-fn rejects_missing_initializer() {
-    let error = parse("String value;").unwrap_err();
-    assert!(error.message.contains("explicit initializer"));
+fn uninitialized_locals_receive_typed_null() {
+    let source = "String value; System.debug(value);";
+    assert_eq!(parse(source).unwrap().statements.len(), 2);
+    assert_eq!(execute(source).unwrap(), ["null"]);
 }
 
 #[test]

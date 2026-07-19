@@ -1,11 +1,11 @@
 use super::Parser;
 use crate::{
     ast::{
-        AccessorKind, Annotation, AnnotationKind, ClassDeclaration, ClassKind, ClassMember,
-        ConstructorDeclaration, ConstructorDelegation, ConstructorDelegationKind, Expression,
-        FieldDeclaration, Identifier, InitializerBlock, MethodDeclaration, Modifier, NamedType,
-        Parameter, PropertyAccessor, PropertyDeclaration, ReturnType, Statement,
-        TriggerDeclaration, TriggerEvent, TypeName,
+        AccessorKind, Annotation, AnnotationArgument, AnnotationKind, ClassDeclaration, ClassKind,
+        ClassMember, ConstructorDeclaration, ConstructorDelegation, ConstructorDelegationKind,
+        Expression, FieldDeclaration, FieldGroupDeclaration, Identifier, InitializerBlock,
+        MethodDeclaration, Modifier, NamedType, Parameter, PropertyAccessor, PropertyDeclaration,
+        ReturnType, Statement, TriggerDeclaration, TriggerEvent, TypeName, VariableDeclarator,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -270,31 +270,68 @@ impl Parser {
                 start,
             ));
         };
-        if let Some(annotation) = annotations.first() {
-            return Err(Diagnostic::new(
-                "annotations are only supported on classes and methods",
-                annotation.span,
-            ));
-        }
         if self.check(&TokenKind::LeftBrace) {
             return self
-                .parse_property(modifiers, ty, name, start)
+                .parse_property(annotations, modifiers, ty, name, start)
                 .map(ClassMember::Property);
         }
+        self.parse_field_declaration(annotations, modifiers, ty, name, start)
+    }
+
+    fn parse_field_declaration(
+        &mut self,
+        annotations: Vec<Annotation>,
+        modifiers: Vec<Modifier>,
+        ty: TypeName,
+        name: Identifier,
+        start: Span,
+    ) -> Result<ClassMember, Diagnostic> {
+        let first = self.parse_variable_declarator(name)?;
+        if self.check(&TokenKind::Comma) {
+            let mut declarators = vec![first];
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                let name = self.expect_identifier("expected a field name after `,`")?;
+                declarators.push(self.parse_variable_declarator(name)?);
+            }
+            let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after fields")?;
+            return Ok(ClassMember::FieldGroup(FieldGroupDeclaration {
+                annotations,
+                modifiers,
+                ty,
+                declarators,
+                span: start.merge(end.span),
+            }));
+        }
+        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after field")?;
+        Ok(ClassMember::Field(FieldDeclaration {
+            annotations,
+            modifiers,
+            ty,
+            name: first.name,
+            initializer: first.initializer,
+            span: start.merge(end.span),
+        }))
+    }
+
+    fn parse_variable_declarator(
+        &mut self,
+        name: Identifier,
+    ) -> Result<VariableDeclarator, Diagnostic> {
         let initializer = if self.check(&TokenKind::Equal) {
             self.advance();
             Some(self.parse_expression()?)
         } else {
             None
         };
-        let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after field")?;
-        Ok(ClassMember::Field(FieldDeclaration {
-            modifiers,
-            ty,
+        let end = initializer
+            .as_ref()
+            .map_or(name.span, |initializer| initializer.span());
+        Ok(VariableDeclarator {
+            span: name.span.merge(end),
             name,
             initializer,
-            span: start.merge(end.span),
-        }))
+        })
     }
 
     fn parse_constructor(
@@ -302,18 +339,13 @@ impl Parser {
         annotations: Vec<Annotation>,
         modifiers: Vec<Modifier>,
     ) -> Result<ClassMember, Diagnostic> {
-        if let Some(annotation) = annotations.first() {
-            return Err(Diagnostic::new(
-                "annotations are not supported on constructors",
-                annotation.span,
-            ));
-        }
         let name = self.expect_identifier("expected constructor name")?;
         let parameters = self.parse_parameters()?;
         let mut body = self.parse_block()?;
         let delegation = take_constructor_delegation(&mut body);
         let span = name.span.merge(body.span());
         Ok(ClassMember::Constructor(ConstructorDeclaration {
+            annotations,
             modifiers,
             name,
             parameters,
@@ -325,6 +357,7 @@ impl Parser {
 
     pub(super) fn parse_property(
         &mut self,
+        annotations: Vec<Annotation>,
         modifiers: Vec<Modifier>,
         ty: TypeName,
         name: Identifier,
@@ -333,51 +366,57 @@ impl Parser {
         self.expect_simple(TokenKind::LeftBrace, "expected `{` after property name")?;
         let mut accessors = Vec::new();
         while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
-            let accessor_modifier = if self.check(&TokenKind::Public)
-                || self.check(&TokenKind::Private)
-                || self.check(&TokenKind::Protected)
-                || self.check(&TokenKind::Global)
-            {
-                Some(self.parse_modifier()?)
-            } else {
-                None
-            };
-            let accessor_start = self.current().span;
-            let kind = if matches!(&self.current().kind, TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("get"))
-            {
-                self.advance();
-                AccessorKind::Get
-            } else if matches!(&self.current().kind, TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("set"))
-            {
-                self.advance();
-                AccessorKind::Set
-            } else {
-                return Err(Diagnostic::new(
-                    "expected `get` or `set` property accessor",
-                    self.current().span,
-                ));
-            };
-            let (body, end) = if self.check(&TokenKind::Semicolon) {
-                (None, self.advance().span)
-            } else {
-                let body = self.parse_block()?;
-                let end = body.span();
-                (Some(body), end)
-            };
-            accessors.push(PropertyAccessor {
-                kind,
-                modifier: accessor_modifier,
-                body,
-                span: accessor_start.merge(end),
-            });
+            accessors.push(self.parse_property_accessor()?);
         }
         let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after property")?;
         Ok(PropertyDeclaration {
+            annotations,
             modifiers,
             ty,
             name,
             accessors,
             span: start.merge(end.span),
+        })
+    }
+
+    fn parse_property_accessor(&mut self) -> Result<PropertyAccessor, Diagnostic> {
+        let modifier = if matches!(
+            self.current().kind,
+            TokenKind::Public | TokenKind::Private | TokenKind::Protected | TokenKind::Global
+        ) {
+            Some(self.parse_modifier()?)
+        } else {
+            None
+        };
+        let start = self.current().span;
+        let kind = match &self.current().kind {
+            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("get") => {
+                self.advance();
+                AccessorKind::Get
+            }
+            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("set") => {
+                self.advance();
+                AccessorKind::Set
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    "expected `get` or `set` property accessor",
+                    start,
+                ));
+            }
+        };
+        let (body, end) = if self.check(&TokenKind::Semicolon) {
+            (None, self.advance().span)
+        } else {
+            let body = self.parse_block()?;
+            let end = body.span();
+            (Some(body), end)
+        };
+        Ok(PropertyAccessor {
+            kind,
+            modifier,
+            body,
+            span: start.merge(end),
         })
     }
 
@@ -463,73 +502,114 @@ impl Parser {
         while self.check(&TokenKind::At) {
             let start = self.advance().span;
             let name = self.expect_identifier("expected an annotation name after `@`")?;
+            let (arguments, parenthesized) = self.parse_annotation_arguments()?;
             let kind = match name.canonical.as_str() {
                 "istest" => {
-                    let see_all_data = if self.check(&TokenKind::LeftParen) {
-                        self.advance();
-                        let argument = self
-                            .expect_identifier("expected `SeeAllData` in `@IsTest` annotation")?;
-                        if argument.canonical != "seealldata" {
+                    let see_all_data = match arguments.as_slice() {
+                        [] if !parenthesized => None,
+                        [] => {
                             return Err(Diagnostic::new(
-                                "only `SeeAllData` is supported in `@IsTest`",
-                                argument.span,
+                                "expected `SeeAllData` in `@IsTest` annotation",
+                                name.span,
                             ));
                         }
-                        self.expect_simple(TokenKind::Equal, "expected `=` after `SeeAllData`")?;
-                        let value = match self.current().kind {
-                            TokenKind::BooleanLiteral(value) => {
-                                self.advance();
-                                value
-                            }
-                            _ => {
+                        [argument] => {
+                            if argument.name.as_ref().map(|name| name.canonical.as_str())
+                                != Some("seealldata")
+                            {
                                 return Err(Diagnostic::new(
-                                    "`SeeAllData` requires a Boolean literal",
-                                    self.current().span,
+                                    "only `SeeAllData` is supported in `@IsTest`",
+                                    argument.span,
                                 ));
                             }
-                        };
-                        self.expect_simple(
-                            TokenKind::RightParen,
-                            "expected `)` after `@IsTest` arguments",
-                        )?;
-                        Some(value)
-                    } else {
-                        None
+                            let Expression::BooleanLiteral(value, _) = argument.value else {
+                                return Err(Diagnostic::new(
+                                    "`SeeAllData` requires a Boolean literal",
+                                    argument.value.span(),
+                                ));
+                            };
+                            Some(value)
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "only `SeeAllData` is supported in `@IsTest`",
+                                arguments[1].span,
+                            ));
+                        }
                     };
                     AnnotationKind::IsTest { see_all_data }
                 }
                 "testsetup" => {
-                    if self.check(&TokenKind::LeftParen) {
+                    if parenthesized {
                         return Err(Diagnostic::new(
                             "`@TestSetup` does not accept arguments",
-                            self.current().span,
+                            name.span,
                         ));
                     }
                     AnnotationKind::TestSetup
                 }
                 "future" => {
-                    if self.check(&TokenKind::LeftParen) {
+                    if parenthesized {
                         return Err(Diagnostic::new(
                             "`@future` options are not supported",
-                            self.current().span,
+                            name.span,
                         ));
                     }
                     AnnotationKind::Future
                 }
-                _ => {
-                    return Err(Diagnostic::new(
-                        format!("unsupported annotation `@{}`", name.spelling),
-                        name.span,
-                    ));
-                }
+                _ => AnnotationKind::Other,
             };
-            let end = self.peek(0).span.start;
+            let end = self.token_at(self.cursor.saturating_sub(1)).span.end;
             annotations.push(Annotation {
+                name,
+                arguments,
                 kind,
                 span: Span::new_in(start.source_id, start.start, end),
             });
         }
         Ok(annotations)
+    }
+
+    fn parse_annotation_arguments(
+        &mut self,
+    ) -> Result<(Vec<AnnotationArgument>, bool), Diagnostic> {
+        if !self.check(&TokenKind::LeftParen) {
+            return Ok((Vec::new(), false));
+        }
+        self.advance();
+        let mut arguments = Vec::new();
+        while !self.check(&TokenKind::RightParen) {
+            let start = self.current().span;
+            let name = if matches!(self.current().kind, TokenKind::Identifier(_))
+                && matches!(self.peek(1).kind, TokenKind::Equal)
+            {
+                let name = self.expect_identifier("expected an annotation argument name")?;
+                self.advance();
+                Some(name)
+            } else {
+                None
+            };
+            let value = self.parse_expression()?;
+            arguments.push(AnnotationArgument {
+                name,
+                span: start.merge(value.span()),
+                value,
+            });
+            if !self.check(&TokenKind::Comma) {
+                if matches!(self.current().kind, TokenKind::Identifier(_))
+                    && matches!(self.peek(1).kind, TokenKind::Equal)
+                {
+                    continue;
+                }
+                break;
+            }
+            self.advance();
+        }
+        self.expect_simple(
+            TokenKind::RightParen,
+            "expected `)` after annotation arguments",
+        )?;
+        Ok((arguments, true))
     }
 
     pub(super) fn parse_modifier(&mut self) -> Result<Modifier, Diagnostic> {
@@ -544,6 +624,7 @@ impl Parser {
             TokenKind::Abstract => Ok(Modifier::Abstract),
             TokenKind::Override => Ok(Modifier::Override),
             TokenKind::Final => Ok(Modifier::Final),
+            TokenKind::Transient => Ok(Modifier::Transient),
             _ => Err(Diagnostic::new("expected a modifier", token.span)),
         }
     }
@@ -560,6 +641,7 @@ impl Parser {
                 | TokenKind::Abstract
                 | TokenKind::Override
                 | TokenKind::Final
+                | TokenKind::Transient
         )
     }
 }

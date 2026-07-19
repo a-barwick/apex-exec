@@ -34,8 +34,8 @@ for the documented case.
 | `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character standalone values with checksum-aware `to15`/`to18` |
 | `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
-| Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
-| Uninitialized/multi-declarator locals | No | No | No | Unsupported | Valid Apex forms are planned for M21 grammar closure |
+| Explicit initialization | Yes | Yes | Yes | Compatible | Initializers remain checked and execute in source order |
+| Uninitialized/multi-declarator locals | Yes | Yes | Yes | Compatible | Uninitialized values receive typed null; declarators check and execute left to right in one scope |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative; arithmetic, String, bitwise, and shift compounds share evaluate-once lvalue handling |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
@@ -53,7 +53,7 @@ for the documented case.
 | Bitwise/shift operators | Yes | Yes | Yes | Compatible | Boolean/integral `&`, <code>&#124;</code>, `^`, integral `~`, `<<`, `>>`, and `>>>`; shift widths are masked to 32/64 bits |
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
-| `switch on` / `when` | No | No | No | Unsupported | Required by M21 North Star grammar closure |
+| `switch on` / `when` | Yes | Explicit error | No | Stubbed | Lossless arms and spans; semantic execution remains unsupported |
 | Loops and loop control | Yes | Yes | Yes | Compatible | Traditional and enhanced `for`, `while`, `do`/`while`, `break`, and `continue` |
 | Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution; declared methods have checked values |
 | `null` | Yes | Yes | Yes | Simplified | Assignable to every supported value type; selected runtime null behavior implemented |
@@ -77,16 +77,17 @@ for the documented case.
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
 | Static SOSL | Yes | Yes | Yes | Simplified | Checked returning clauses with deterministic local String-field matching |
-| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution |
+| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution; external-ID upsert is retained then rejected semantically |
 | `Database` DML methods | Yes | Yes | Yes | Simplified | Common methods are atomic and return void; partial result APIs are unsupported |
 | Apex triggers | Yes | Yes | Yes | Simplified | Schema-checked `.trigger` units, typed contexts, eight before/after DML events, bulk handlers, and bounded recursion |
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, source-ordered initializer blocks, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
-| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
+| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` is retained then rejected semantically |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, method-only `@TestSetup`, and correct `Test.isRunningTest()` mode in tests and their queued work; `SeeAllData=true` is explicit |
+| Non-test annotations | Yes | Explicit error | No | Stubbed | Names plus positional/named arguments and spans are lossless; platform effects are not approximated |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
 | Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract whose declared `T` binds the List-returning `start` and `execute` scope types, plus deterministic chunking, context job ID, and `finish` |
@@ -231,7 +232,8 @@ An `@IsTest` class may contain `@IsTest` and `@TestSetup` methods. Both method
 kinds must be static, return void, accept no parameters, and have a body.
 Private top-level test classes are accepted. `SeeAllData=false` is recognized;
 `SeeAllData=true` is rejected because no org data host exists. Other
-annotations remain explicit parse errors.
+annotations retain their syntax and fail with an explicit semantic unsupported
+diagnostic.
 
 `System.assert(Boolean[, message])`, `System.assertEquals(expected, actual[,
 message])`, and `System.assertNotEquals(expected, actual[, message])` raise a
@@ -674,13 +676,10 @@ language or Salesforce compatibility claim.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-M20 reproduces 8 of 14 passing goals (57.14%): all 7 lexer goals and 1 of 7
-parser goals, up from the 1-of-14 Phase 2 baseline. `JSONParse.cls` now parses
-completely; the six remaining parser goals first stop at unsupported
-annotations, external-ID DML syntax, or uninitialized locals. M21 requires 14
-of 14 passing against the unchanged corpus and removes the seven parser goals'
-`#[ignore]`. These are syntax indicators only, not runtime or Salesforce
-compatibility percentages.
+M21 reproduces all 14 passing goals: lexer 7 of 7 and parser 7 of 7, up from the
+1-of-14 Phase 2 baseline and the M20 8-of-14 result. All goals are ordinary
+tests against the unchanged corpus. These are syntax indicators only, not
+runtime or Salesforce compatibility percentages.
 
 ## Updating this document
 

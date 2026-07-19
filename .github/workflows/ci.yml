@@ -46,9 +46,9 @@ jobs:
       - name: Run the complete ordinary Rust suite
         run: cargo test --locked
 
-      - name: Report North Star frontier; keep future goals ignored
+      - name: Verify and report the North Star syntax gate
         run: |
-          echo "The 14 future lexer/parser goals remain ignored progress indicators."
+          echo "All 14 lexer/parser indicators are ordinary syntax-only gates."
           cargo test --locked --test north_star -- --nocapture
 
       - name: Deny Clippy warnings on every target

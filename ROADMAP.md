@@ -509,7 +509,7 @@ the forms used by the North Star corpus.
 
 ### M21 — North Star grammar closure
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 

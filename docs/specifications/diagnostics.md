@@ -70,3 +70,11 @@ making callers parse wording.
 The internal representation should eventually carry primary and secondary
 spans, notes, and suggested fixes alongside that code. Human wording may then
 improve without breaking integrations.
+
+## M21 grammar-only diagnostics
+
+**Implemented.** Arbitrary annotations, switch arms, external-ID DML fields,
+multi-declarator fields, and `transient` syntax retain their spelling and spans.
+Where executable semantics are not implemented, semantic checking reports an
+explicit unsupported diagnostic. Parser acceptance never falls through to
+runtime approximation.
