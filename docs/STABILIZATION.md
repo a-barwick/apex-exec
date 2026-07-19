@@ -66,7 +66,7 @@ package.
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; review blocker: semantic String truncation) | S0-02 merged | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Review (`codex/stab-runtime-graph-safety`; `8f3ce51`) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
@@ -87,19 +87,34 @@ Only S0-01, S0-02, and S0-05 should start in the first parallel wave.
 
 ### S0-03 — Cycle-safe runtime value traversal
 
-- Implementation `1cda4e0`; branch `codex/stab-runtime-graph-safety`.
+- Initial implementation `1cda4e0`; semantic-rendering remediation `f241728`;
+  debug trace-status correction `8f3ce51`; branch
+  `codex/stab-runtime-graph-safety`.
+- The first independent review reproduced a blocking regression at `657a118`:
+  the 16 KiB debug presentation budget shortened a 20,480-character String to
+  16,382 characters in concatenation, `String.valueOf`/`join`,
+  `Object.toString`, assertion messages, and ordinary invocation output.
+  `f241728` separates bounded debug presentation from semantic
+  stringification and adds the fail-before/pass-after regressions. A preflight
+  then proved that truncated `System.debug` output did not set debugger trace
+  status; `8f3ce51` propagates that metadata under debugger instrumentation and
+  adds the direct-literal regression.
 - The recorded List display, equality, JSON, Set display, Map display, and
   object-identity CLI cases now terminate deterministically. Cycles render as
   `<cycle>`, while JSON raises a catchable `IllegalArgumentException`.
-- Focused verification passed: six integration tests covering the library and
+- Focused verification passed: eight integration tests covering the library and
   CLI reproduction, cyclic List/Set/Map equality, an adversarial equality
   backtracking case, 5,000-level iterative equality, catchable JSON failures,
-  debugger capture, and acyclic compatibility.
+  JSON structural limits, shared-DAG handling, debugger capture, complete
+  semantic String paths, and acyclic compatibility. Runtime unit coverage also
+  proves bounded multibyte rendering ends on a valid UTF-8 boundary.
 - Full branch verification passed before handoff: `cargo fmt --check`; `cargo
-  test`; and `cargo clippy --all-targets -- -D warnings`.
+  test` (323 passed, 14 ignored North Star indicators); and `cargo clippy
+  --all-targets -- -D warnings`. The exact cyclic CLI reproduction emitted all
+  eight expected lines.
 - Comparable Lizard evidence removes the 112-NLOC `display_value` hotspot,
-  introduces no new function above the 80-NLOC/15-CCN ratchet, and keeps the
-  extracted value-graph functions at or below 61 NLOC and 15 CCN.
+  introduces no new function above the 80-NLOC/15-CCN ratchet, and passes the
+  immutable S0-05 baseline with 71 current violations against 73 debt caps.
 
 ## Integrated package evidence
 

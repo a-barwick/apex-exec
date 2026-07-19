@@ -104,9 +104,12 @@ trace keeps the earliest pre-statement observations and is bounded to 4,096
 snapshots, an estimated 16 MiB of retained snapshot structures and text, 256
 variables and 128 frames per snapshot, and 16 KiB per rendered value.
 `DebugExecution::trace_status` reports retained bytes and any truncation.
-Display, JSON serialization, equality, and debugger capture share runtime
-value-graph traversal state. Display uses fixed depth, node, element, and
-UTF-8 output budgets with deterministic `<cycle>` and `…` markers. JSON uses
+Semantic String conversion, bounded presentation rendering, JSON
+serialization, equality, and debugger capture share runtime value-graph
+traversal state. Debug and debugger presentation use fixed depth, node,
+element, and UTF-8 output budgets with deterministic `<cycle>` and `…`
+markers. Semantic conversion preserves complete scalar and nested String
+content while retaining the structural budgets and cycle marker. JSON uses
 the same identity path and structural budgets but turns cycles or exhausted
 budgets into catchable `IllegalArgumentException` values. Collection equality
 uses an explicit work stack and a rollback-aware visited-pair trail, so cyclic

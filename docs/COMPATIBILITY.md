@@ -43,7 +43,7 @@ for the documented case.
 | Integer arithmetic | Yes | Yes | Yes | Simplified | `+`, `-`, `*`, `/`, `%`, unary signs; checked `i64` runtime behavior |
 | Comparison and equality | Yes | Yes | Yes | Compatible | Integer ordering; case-insensitive String `==`; same-type collection and null equality |
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
-| String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; collection text uses deterministic local formatting |
+| String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; complete String content is preserved and collection text uses deterministic cycle-safe local formatting |
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
 | Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
 | `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
@@ -429,9 +429,12 @@ with at most 256 variables and 128 frames per snapshot and 16 KiB per rendered
 value. `DebugExecution::trace_status` reports when any bound truncates the
 trace. Rendered values also use a 64-level, 4,096-node, and 4,096-element graph
 budget, mark cycles as `<cycle>`, and mark exhausted display budgets as `…`.
-Ordinary execute/invoke paths select no instrumentation, while the test runner
-records coverage facts without debugger snapshots. Expression evaluation and
-value mutation from the debug console are not supported.
+That 16 KiB limit applies only to debug and debugger presentation; semantic
+String conversion and ordinary invocation preserve complete scalar and nested
+String content while retaining the structural graph budgets. Ordinary
+execute/invoke paths select no instrumentation, while the test runner records
+coverage facts without debugger snapshots. Expression evaluation and value
+mutation from the debug console are not supported.
 
 `apex-exec lsp [project]` implements stdio Language Server Protocol
 initialization, full-document synchronization, inline diagnostic publication,
