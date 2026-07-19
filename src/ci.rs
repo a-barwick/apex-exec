@@ -472,25 +472,9 @@ pub fn run(manifest: &CiManifest, options: &CiRunOptions) -> Result<CiRunResult,
             compilation,
             compile_duration_ms,
         )?,
-        Err(error) => CiRunResult {
-            schema_version: CACHE_SCHEMA_VERSION,
-            cache_key: key.clone(),
-            shard,
-            selected_tests: Vec::new(),
-            selection: if manifest.changed_files.is_empty() {
-                SelectionMode::All
-            } else {
-                SelectionMode::ConservativeAll
-            },
-            profiles: Vec::new(),
-            compile_success: false,
-            compile_diagnostic: Some(ci_diagnostic(manifest, &error)),
-            tests: None,
-            compile_duration_ms,
-            test_duration_ms: 0,
-            policy_violations: Vec::new(),
-            cache_hit: false,
-        },
+        Err(error) => {
+            compile_failure_result(manifest, key.clone(), shard, compile_duration_ms, &error)
+        }
     };
     apply_policy(manifest, &mut result)?;
     if !options.no_cache {
@@ -498,6 +482,34 @@ pub fn run(manifest: &CiManifest, options: &CiRunOptions) -> Result<CiRunResult,
     }
     emit_reports(manifest, &result)?;
     Ok(result)
+}
+
+fn compile_failure_result(
+    manifest: &CiManifest,
+    cache_key: String,
+    shard: CiShard,
+    compile_duration_ms: u64,
+    error: &ProjectError,
+) -> CiRunResult {
+    CiRunResult {
+        schema_version: CACHE_SCHEMA_VERSION,
+        cache_key,
+        shard,
+        selected_tests: Vec::new(),
+        selection: if manifest.changed_files.is_empty() {
+            SelectionMode::All
+        } else {
+            SelectionMode::ConservativeAll
+        },
+        profiles: Vec::new(),
+        compile_success: false,
+        compile_diagnostic: Some(ci_diagnostic(manifest, error)),
+        tests: None,
+        compile_duration_ms,
+        test_duration_ms: 0,
+        policy_violations: Vec::new(),
+        cache_hit: false,
+    }
 }
 
 fn execute_tests(

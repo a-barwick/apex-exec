@@ -334,12 +334,7 @@ impl ValidationEvidence {
         if self.request.sha256()? != self.request_sha256 {
             return Err("validation request digest does not match its contents".to_owned());
         }
-        if self.target.trim().is_empty() {
-            return Err("validation evidence target cannot be empty".to_owned());
-        }
-        validate_org_id(&self.org_id)?;
-        validate_api_version(&self.api_version)?;
-        validate_effective_profiles(&self.profiles)?;
+        self.validate_environment_identity()?;
         if self.apex_exec_version.trim().is_empty() {
             return Err("validation evidence Apex Exec version cannot be empty".to_owned());
         }
@@ -360,6 +355,15 @@ impl ValidationEvidence {
             ));
         }
         Ok(())
+    }
+
+    fn validate_environment_identity(&self) -> Result<(), String> {
+        if self.target.trim().is_empty() {
+            return Err("validation evidence target cannot be empty".to_owned());
+        }
+        validate_org_id(&self.org_id)?;
+        validate_api_version(&self.api_version)?;
+        validate_effective_profiles(&self.profiles)
     }
 }
 
@@ -707,15 +711,10 @@ pub fn run_with_cli_at(
     }
     let local_inventory = OrgInventory::capture(manifest.project_root(), "local")?;
     let compilation = project::compile(manifest.project_root()).map_err(|error| error.render())?;
-    let profiles = compilation.profiles.clone();
     let affected = select_affected_components(manifest, &compilation, &local_inventory);
     let ci_result = ci::run(manifest, &options.ci)?;
     let affected_tests = ci_result.selected_tests.clone();
-    let candidate = CandidateEvidence {
-        manifest_sha256: manifest.sha256()?,
-        ci_cache_key: ci_result.cache_key.clone(),
-        ci_result_sha256: ci::result_sha256(&ci_result)?,
-    };
+    let candidate = candidate_evidence(manifest, &ci_result)?;
     let request = validation_request(manifest, &affected, &affected_tests)?;
     let validation_snapshot = match source {
         ValidationSource::TargetOrg(target) => {
@@ -737,7 +736,7 @@ pub fn run_with_cli_at(
                     target: capture.target,
                     org_id: capture.org_id,
                     api_version,
-                    profiles,
+                    profiles: compilation.profiles.clone(),
                     apex_exec_version: env!("CARGO_PKG_VERSION").to_owned(),
                     salesforce_cli_version,
                     captured_at: format_capture_time(now),
@@ -752,7 +751,7 @@ pub fn run_with_cli_at(
         ValidationSource::Snapshot(_) => {
             let snapshot = replayed_snapshot
                 .expect("snapshot sources load evidence before candidate evaluation");
-            validate_candidate_binding(&snapshot, &candidate, &request, &profiles)?;
+            validate_candidate_binding(&snapshot, &candidate, &request, &compilation.profiles)?;
             snapshot
         }
     };
@@ -827,6 +826,17 @@ pub fn run_with_cli_at(
             blockers,
         },
         validation_snapshot,
+    })
+}
+
+fn candidate_evidence(
+    manifest: &CiManifest,
+    result: &ci::CiRunResult,
+) -> Result<CandidateEvidence, String> {
+    Ok(CandidateEvidence {
+        manifest_sha256: manifest.sha256()?,
+        ci_cache_key: result.cache_key.clone(),
+        ci_result_sha256: ci::result_sha256(result)?,
     })
 }
 

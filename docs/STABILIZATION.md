@@ -10,11 +10,11 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Completed feature milestone:** M24 — partial DML results and bulk failure
-  fidelity on `codex/milestone-24-partial-dml-results`
-- **Active feature milestone:** M25 — API-version compatibility profiles
-- **Feature policy:** M18 through M24 are complete. M25 is the next language
-  milestone and requires the typed compatibility context gate below.
+- **Completed feature milestone:** M25 — API-version compatibility profiles on
+  `codex/milestone-25-api-version-profiles`
+- **Active feature milestone:** M26 — complete metadata accounting
+- **Feature policy:** M18 through M25 are complete. M26 is the next platform
+  milestone.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.
@@ -76,7 +76,7 @@ package.
 | S1-02 | Lossless type syntax and typed identities | Complete (`codex/milestone-20`; M20 integrated verification) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked (M20 typed-exception/class-initialization prerequisites complete) | S1-02 | No other HIR/runtime-image work |
 | S1-04 | `Place` and centralized numeric operations | Complete (M19 checked place/numeric vertical slice) | S1-01 and M19 typed identity slice | Disjoint docs/tooling work |
-| S1-05 | Intrinsic and compatibility-profile catalog | Blocked | S1-03 | Disjoint data work |
+| S1-05 | Intrinsic and compatibility-profile catalog | Blocked (M25 typed profile slice complete; descriptor/handler consolidation remains) | S1-03 | Disjoint data work |
 | S1-06 | Structured diagnostic model | Blocked | S1-03, S1-05 | Nothing cross-cutting |
 | S2-01 | Transaction, host-capability, and DML contracts | Blocked | S0-GATE | S1 work with disjoint files |
 | S2-02 | Project-scale performance and incremental compilation | Blocked | S1-03, S2-01 | Editor work |

@@ -156,10 +156,12 @@ cargo run -- hybrid \
   --replay
 ```
 
-M17 snapshot schema version 2 binds live evidence to the exact M14 manifest and
-CI result, affected request, org, API/tool versions, capture time, age policy,
-and normalized inventory. Capture performs two matching retrievals; replay
-requires the exact cached CI artifact and installed Salesforce CLI version.
+M25 snapshot schema version 3 binds live evidence to the exact M14 manifest and
+CI result, affected request, org, project and per-source API profiles, tool
+versions, capture time, age policy, and normalized inventory. Capture performs
+two matching retrievals; replay requires the exact cached CI artifact and
+installed Salesforce CLI version. Historical M17 schema-2 bundles remain
+review records but are not accepted by current replay.
 The reviewed clean and controlled-drift artifacts are tracked in
 `evidence/milestone17/`. They contain no auth material and intentionally expire
 under their recorded 24-hour replay policy; expiration does not erase their

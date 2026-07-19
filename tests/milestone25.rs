@@ -169,9 +169,8 @@ fn oracle_snapshot_and_report_bind_every_effective_profile() {
     assert_eq!(local.fixtures[0].profiles.len(), 4);
     assert_eq!(local.fixtures[0].tests[0].outcome, "pass");
 
-    let mut salesforce = local.clone();
-    salesforce.provider = oracle::OracleProvider::Salesforce;
-    salesforce.target = "recorded-test-double".to_owned();
+    let salesforce = oracle::OracleSnapshot::load("evidence/milestone25/salesforce.json").unwrap();
+    assert_eq!(salesforce.provider, oracle::OracleProvider::Salesforce);
     let report = oracle::compare(&manifest, &local, &salesforce).unwrap();
     assert!(report.is_match());
     assert_eq!(report.coverage.matched, 3);

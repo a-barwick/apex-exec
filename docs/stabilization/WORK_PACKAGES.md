@@ -306,7 +306,8 @@ without duplicating target resolution or numeric policy.
 
 ## S1-05 — Intrinsic and compatibility-profile catalog
 
-**Status:** Blocked by S1-03
+**Status:** Blocked by S1-03. M25 completed the typed compatibility-profile
+transport; the authoritative descriptor catalog and handler split remain.
 **Suggested branch:** `codex/stab-intrinsic-catalog`
 
 Scope:

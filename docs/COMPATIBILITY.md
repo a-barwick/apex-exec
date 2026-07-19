@@ -389,11 +389,33 @@ schema identities. Text matching is case-insensitive; a single match updates,
 no match inserts, null keys and ambiguous matches return structured errors,
 and unique external-ID metadata rejects duplicate values.
 
+## M25 API-version profiles
+
+Every discovered Apex class and trigger has one exact effective profile. A
+well-formed matching `*-meta.xml` sidecar takes precedence over the required
+project `sourceApiVersion`; missing sidecars inherit the project default.
+Profile identity is preserved in HIR/runtime context, CI/cache results, oracle
+snapshots/reports, and schema-3 hybrid validation evidence.
+
+The closed modeled catalog is API 31.0 and API 60.0 through 66.0. API 31.0
+reproduces the reviewed historical behavior where null `instanceof` returns
+true. Current profiles return false, allow M18 null-aware syntax, and expose
+the curated M10 platform APIs. Legacy null-aware syntax and curated platform
+calls fail during semantic checking with the exact profile identity.
+Malformed/missing metadata, API 32.0–59.0, nonzero minor versions, and API 67.0
+or later fail explicitly rather than inheriting a nearby behavior.
+
+A sidecar-only edit reuses source-text parsing but invalidates the affected
+checked unit and changes content-addressed CI identity. The M25 guarded
+Salesforce fixture covers API 31.0 and 65.0 classes plus an API 31.0 trigger;
+compile, profiles, and test outcomes match 3/3.
+
 ## M10 curated platform compatibility
 
-The first compatibility profile is named `m10-common`. Supported platform
-calls are statically selected HIR intrinsics; calls outside the recognized
-surface produce a compile diagnostic naming the API and profile.
+M25 assigns M10's curated platform surface to exact current API profiles named
+`salesforce-api-60.0` through `salesforce-api-66.0`. Supported platform calls
+are statically selected HIR intrinsics; calls outside the recognized surface
+produce a compile diagnostic naming the API and exact effective profile.
 
 - `Date`: `newInstance`, `valueOf`, `today`, `addDays`, `addMonths`, `addYears`,
   `daysBetween`, `format`, `year`, `month`, and `day`.
@@ -598,13 +620,15 @@ extra observations do not expand the bound request. Auth inspection does not
 request verbose output or persist access tokens/auth URLs. The tool does not
 create, authenticate, reset, or delete orgs.
 
-Version-1 validation snapshots are rejected. M17 schema-version-2 snapshots
+Version-1 validation snapshots are rejected. M25 schema-version-3 snapshots
 bind the provider-neutral inventory and validation observations to the exact
 serialized M14 manifest, cache key, CI-result digest, changed paths, affected
 component selectors/digests, selected tests, test level, target alias and org
-ID, API version, Apex Exec/Salesforce CLI versions, capture time, exact age
-policy, and full snapshot digest. Authenticated capture requires two identical
-normalized retrieval digests before check-only deployment.
+ID, project API version, canonical effective per-source profiles, Apex
+Exec/Salesforce CLI versions, capture time, exact age policy, and full snapshot
+digest. Authenticated capture requires two identical normalized retrieval
+digests before check-only deployment. Schema-2 M17 bundles remain historical
+review records and are deliberately rejected by current replay.
 
 `--validation-snapshot` replay is credential-free but requires the exact M14
 cache artifact, expected target and org ID, matching tool/API versions, and
@@ -672,7 +696,7 @@ are not a runtime or general Salesforce compatibility percentage.
 | Triggers | Implemented (simplified) | M9 |
 | Transaction-wide rollback | Implemented (snapshot-backed) | M9 |
 | Recycle bin / undelete | Implemented (simplified) | M9 |
-| Common platform APIs | Implemented (`m10-common` profile) | M10 |
+| Common platform APIs | Implemented (current API 60.0–66.0 profiles) | M10/M25 |
 | Async Apex | Implemented (simplified deterministic drain profile) | M11 |
 | Persistent REPL | Implemented (deterministic replay profile) | M12 |
 | Debug Adapter Protocol | Implemented (snapshot-backed stdio server) | M12 |
@@ -682,10 +706,10 @@ are not a runtime or general Salesforce compatibility percentage.
 | Enterprise CI | Implemented (hermetic manifests/replay, content cache, impacted tests, shards, standard reports, provider templates, and policy gates) | M14 |
 | Hybrid deployment confidence | Implemented (affected components/tests, optional validation org, drift, test differential, readiness reports, and snapshot replay) | M15 |
 | Governor limits | Deferred | Post-core compatibility profile |
-| Candidate-bound live validation evidence | Implemented (schema v2, exact replay, repeated retrieval, and reviewed clean/blocked live bundle) | M17 |
+| Candidate-bound live validation evidence | Implemented (schema v3 with effective profiles, exact replay, repeated retrieval, and reviewed clean/blocked live bundle) | M17/M25 |
 | Broad metadata accounting and org-only drift | Planned | M26 |
 | Sharing/security behavior | Planned (profile-scoped) | M27 |
-| API-version differences | Planned | M25 |
+| API-version differences | Implemented (API 31.0 and current API 60.0–66.0 family; strict rejection outside modeled versions) | M25 |
 | Runtime isolation for untrusted code | Out of scope | None |
 
 ## Compiler behavior

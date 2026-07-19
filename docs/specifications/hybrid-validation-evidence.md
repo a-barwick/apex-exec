@@ -1,7 +1,8 @@
 # Hybrid Validation Evidence
 
-**Status:** Implemented and live-reviewed in M17. The clean, replayed, and
-controlled-blocker artifacts are in `evidence/milestone17/`.
+**Status:** Implemented and live-reviewed in M17, extended by M25. The clean,
+replayed, and controlled-blocker artifacts are in `evidence/milestone17/`;
+M25 profile evidence is in `evidence/milestone25/`.
 
 This specification defines the observable candidate-bound evidence contract
 for `apex-exec hybrid`. It sits above M14 hermetic CI and the M15 hybrid
@@ -10,8 +11,9 @@ execution.
 
 ## Schema
 
-Validation snapshots use strict schema version 2. Unknown fields and version-1
-snapshots are rejected. A snapshot contains:
+Validation snapshots use strict schema version 3. Unknown fields and earlier
+schema versions are rejected. Schema-2 M17 artifacts retain historical review
+value but are not current replay inputs. A snapshot contains:
 
 - the exact serialized M14 manifest SHA-256;
 - the M14 cache key and exact CI-result SHA-256;
@@ -21,6 +23,8 @@ snapshots are rejected. A snapshot contains:
 - canonical selected Apex tests and `NoTestRun` or `RunSpecifiedTests`;
 - target alias and Salesforce org ID;
 - project `sourceApiVersion`;
+- the canonical source path, exact API version, typed behavior family, and
+  project-default/sidecar origin for every Apex class and trigger;
 - Apex Exec and Salesforce CLI versions;
 - UTC capture time and maximum permitted evidence age;
 - normalized retrieved-inventory SHA-256 and retrieval count;
@@ -36,7 +40,8 @@ duplicates. Digests are lowercase 64-character SHA-256 text. Org IDs must be
 An authenticated run:
 
 1. verifies the hermetic M14 inputs;
-2. resolves `sourceApiVersion` from `sfdx-project.json`;
+2. resolves `sourceApiVersion` and every class/trigger sidecar into exact
+   effective profiles;
 3. records the installed `sf` version;
 4. compiles the project, selects affected components, and produces or reuses a
    cacheable M14 CI artifact;
@@ -67,7 +72,7 @@ Replay is credential-free and makes no org request. It requires:
 
 Replay validates errors in this order:
 
-1. manifest inputs and project API version;
+1. manifest inputs, project API version, and effective source profiles;
 2. snapshot schema, canonical fields, inventory/request digests, and complete
    snapshot seal;
 3. installed Salesforce CLI version, expected target and org ID, Apex Exec

@@ -2478,21 +2478,8 @@ impl Checker {
                 arguments,
                 span,
             } => self.function_call_type(name, arguments, *span),
-            Expression::MethodCall {
-                safe_navigation: true,
-                navigation_span,
-                ..
-            }
-            | Expression::MemberAccess {
-                safe_navigation: true,
-                navigation_span,
-                ..
-            } => {
-                self.require_current_syntax("safe navigation", *navigation_span)?;
-                self.navigation_expression_type(expression)
-            }
             Expression::MethodCall { .. } | Expression::MemberAccess { .. } => {
-                self.navigation_expression_type(expression)
+                self.checked_navigation_expression_type(expression)
             }
             Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
             Expression::Conditional {
@@ -2502,10 +2489,7 @@ impl Checker {
                 question_span,
                 ..
             } => self.conditional_type(condition, when_true, when_false, *question_span),
-            Expression::NullCoalesce { operator_span, .. } => {
-                self.require_current_syntax("null coalescing", *operator_span)?;
-                self.null_coalescing_expression_type(expression)
-            }
+            Expression::NullCoalesce { .. } => self.null_coalescing_expression_type(expression),
             Expression::Instanceof {
                 value,
                 target,
@@ -2626,6 +2610,26 @@ impl Checker {
         self.null_coalescing_type(left, right, *operator_span)
     }
 
+    fn checked_navigation_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        match expression {
+            Expression::MethodCall {
+                safe_navigation: true,
+                navigation_span,
+                ..
+            }
+            | Expression::MemberAccess {
+                safe_navigation: true,
+                navigation_span,
+                ..
+            } => self.require_current_syntax("safe navigation", *navigation_span)?,
+            _ => {}
+        }
+        self.navigation_expression_type(expression)
+    }
+
     fn new_collection_expression_type(
         &mut self,
         expression: &Expression,
@@ -2706,6 +2710,28 @@ impl Checker {
         Ok(ExpressionType::Value(member.ty))
     }
 
+    fn platform_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        arguments: &[Expression],
+        span: Span,
+        constructor: PlatformConstructor,
+    ) -> Result<ExpressionType, Diagnostic> {
+        self.require_curated_platform("platform object construction", span)?;
+        for argument in arguments {
+            self.expression_type(argument)?;
+        }
+        if !arguments.is_empty() {
+            return Err(Diagnostic::new(
+                format!("{} constructor expects no arguments", ty.apex_name()),
+                arguments[0].span(),
+            ));
+        }
+        self.calls
+            .insert(span, CallTarget::PlatformConstructor(constructor));
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
     fn new_object_type(
         &mut self,
         ty: &TypeName,
@@ -2720,19 +2746,7 @@ impl Checker {
             _ => None,
         };
         if let Some(constructor) = platform_constructor {
-            self.require_curated_platform("platform object construction", span)?;
-            for argument in arguments {
-                self.expression_type(argument)?;
-            }
-            if !arguments.is_empty() {
-                return Err(Diagnostic::new(
-                    format!("{} constructor expects no arguments", ty.apex_name()),
-                    arguments[0].span(),
-                ));
-            }
-            self.calls
-                .insert(span, CallTarget::PlatformConstructor(constructor));
-            return Ok(ExpressionType::Value(ty.clone()));
+            return self.platform_constructor_type(ty, arguments, span, constructor);
         }
         let TypeName::Custom(name) = ty else {
             return Err(Diagnostic::new(
@@ -3956,6 +3970,16 @@ impl Checker {
             }
         };
 
+        self.finish_method_call_type(receiver, method, span, result)
+    }
+
+    fn finish_method_call_type(
+        &self,
+        receiver: &Expression,
+        method: &Identifier,
+        span: Span,
+        result: Result<ExpressionType, Diagnostic>,
+    ) -> Result<ExpressionType, Diagnostic> {
         let result = result.map_err(|mut error| {
             if error.span == Span::new(0, 0) {
                 error.span = method.span;

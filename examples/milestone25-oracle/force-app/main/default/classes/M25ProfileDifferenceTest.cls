@@ -8,6 +8,11 @@ private class M25ProfileDifferenceTest {
         M25VersionProbe__c probe = new M25VersionProbe__c();
         probe.Name = 'oracle';
         insert probe;
-        System.assertEquals(true, probe.LegacyObserved__c);
+        M25VersionProbe__c stored = [
+            SELECT LegacyObserved__c
+            FROM M25VersionProbe__c
+            WHERE Id = :probe.Id
+        ];
+        System.assertEquals(true, stored.LegacyObserved__c);
     }
 }

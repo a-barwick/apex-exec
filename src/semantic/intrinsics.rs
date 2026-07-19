@@ -1061,6 +1061,14 @@ impl Checker {
         ))
     }
 
+    fn unsupported_instance_platform_api(
+        &self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+    ) -> Diagnostic {
+        self.unsupported_platform_api(&receiver_type.apex_name(), method)
+    }
+
     pub(super) fn platform_instance_method_type(
         &mut self,
         receiver_type: &TypeName,
@@ -1138,9 +1146,7 @@ impl Checker {
                 P::AsyncContextGetJobId
             }
             (TypeName::SchedulableContext, "gettriggerid") => P::SchedulableContextGetTriggerId,
-            _ => {
-                return Err(self.unsupported_platform_api(&receiver_type.apex_name(), method));
-            }
+            _ => return Err(self.unsupported_instance_platform_api(receiver_type, method)),
         };
         let owner = receiver_type.apex_name();
         let result = match intrinsic {
