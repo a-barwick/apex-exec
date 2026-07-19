@@ -16,10 +16,11 @@ S0-04 execution context/lazy class initialization merged as `c847fb2` after
 fresh runtime review, one setup-context regression remediation, re-review, and
 an independent adversarial audit. The complete post-integration Rust,
 reproduction, website, editor, documentation, maintainability, and dependency
-matrix is green. S0-GATE is in Review pending a fresh read-only audit of the
-complete integrated diff and the repository owner's merge decision. Package
-status, dependencies, acceptance criteria, branch rules, and the coordinator
-prompt live under `docs/stabilization/`.
+matrix is green. S0-GATE is in Review pending the repository owner's merge
+decision. A fresh read-only review approved evidence checkpoint `a7ac474` with
+no blocking findings; therefore only the explicit owner merge decision
+remains. Package status, dependencies, acceptance criteria, branch rules, and
+the coordinator prompt live under `docs/stabilization/`.
 
 ## Completed
 
@@ -367,12 +368,11 @@ prompt live under `docs/stabilization/`.
 
 ## Immediate target
 
-Complete the fresh integrated-diff review, freeze the immutable stabilization
-candidate, and request explicit owner approval before merging it to `main`.
-M18 safe-navigation and null-coalescing work remains gated until that owner
-handoff completes. The package tracker is in `docs/STABILIZATION.md`; the
-complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
-`docs/PHASE_2_BASELINE.md`.
+Freeze the reviewed stabilization candidate and obtain explicit owner approval
+before merging it to `main`. M18 safe-navigation and null-coalescing work
+remains gated until that owner handoff completes. The package tracker is in
+`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
+baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
