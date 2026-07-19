@@ -37,7 +37,8 @@ test("server-renders the engineering leadership site", async () => {
   assert.match(html, /Built as infrastructure, not a demo/);
   assert.match(html, /Phase 2 stabilized/);
   assert.match(html, /Stabilization gate/);
-  assert.match(html, /M18 feature work is the next planned milestone/);
+  assert.match(html, /M18 null-aware/);
+  assert.match(html, /M19 is next/);
   assert.match(html, /Compatibility posture/);
   assert.match(html, /github\.com\/a-barwick\/apex-exec/);
   assert.doesNotMatch(html, /M7 active|Six completed milestones/);

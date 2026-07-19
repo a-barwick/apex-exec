@@ -19,6 +19,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &mut self,
         intrinsic: IntrinsicId,
         receiver: &Expression,
+        evaluated_receiver: Option<Value>,
         method: &Identifier,
         arguments: &[Expression],
         span: Span,
@@ -27,7 +28,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let receiver = if intrinsic.is_static() {
             None
         } else {
-            Some(self.evaluate(receiver)?)
+            Some(match evaluated_receiver {
+                Some(receiver) => receiver,
+                None => self.evaluate(receiver)?,
+            })
         };
         let arguments = self.evaluate_arguments(arguments)?;
         match intrinsic {

@@ -355,6 +355,95 @@ fn conditional_short_circuits_records_side_effects_and_rejects_null_conditions()
 }
 
 #[test]
+fn null_aware_expressions_evaluate_once_skip_lazy_paths_and_chain() {
+    let output = execute_source(
+        "public class Box { \
+             public static Integer receiverHits = 0; \
+             public static Integer argumentHits = 0; \
+             public String name; \
+             public Box next; \
+             public Box(String value) { name = value; } \
+             public static Box make(Boolean present) { \
+                 receiverHits++; \
+                 return present ? new Box('present') : null; \
+             } \
+             public static Integer explode() { \
+                 argumentHits++; \
+                 return 1 / 0; \
+             } \
+             public String label(Integer suffix) { return name + suffix; } \
+         } \
+         String memberFallback = Box.make(false)?.name ?? 'member-fallback'; \
+         String methodFallback = Box.make(false)?.label(Box.explode()) ?? 'method-fallback'; \
+         String chainedFallback = Box.make(false)?.next?.name ?? 'chain-fallback'; \
+         String present = Box.make(true)?.label(7) ?? 'unreachable'; \
+         Integer coalesced = 5 ?? Box.explode(); \
+         System.debug(memberFallback); \
+         System.debug(methodFallback); \
+         System.debug(chainedFallback); \
+         System.debug(present); \
+         System.debug(coalesced); \
+         System.debug(Box.receiverHits); \
+         System.debug(Box.argumentHits);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "member-fallback",
+            "method-fallback",
+            "chain-fallback",
+            "present7",
+            "5",
+            "4",
+            "0"
+        ]
+    );
+}
+
+#[test]
+fn null_aware_non_null_paths_preserve_argument_exceptions() {
+    let error = execute_source(
+        "public class Box { \
+             public static Integer explode() { return 1 / 0; } \
+             public String label(Integer value) { return 'value=' + value; } \
+         } \
+         Box box = new Box(); \
+         String value = box?.label(Box.explode()) ?? 'fallback';",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.exception_type.as_deref(), Some("MathException"));
+}
+
+#[test]
+fn safe_navigation_handles_intrinsics_and_void_methods() {
+    let output = execute_source(
+        "public class Worker { \
+             public static Integer touches = 0; \
+             public void touch() { touches++; } \
+         } \
+         String text = null; \
+         List<Integer> values = null; \
+         Worker worker = null; \
+         worker?.touch(); \
+         System.debug(text?.trim().toUpperCase() ?? 'EMPTY'); \
+         System.debug(values?.size() ?? 0); \
+         text = '  ready  '; \
+         values = new List<Integer>{1, 2}; \
+         worker = new Worker(); \
+         worker?.touch(); \
+         System.debug(text?.trim().toUpperCase() ?? 'EMPTY'); \
+         System.debug(values?.size() ?? 0); \
+         System.debug(Worker.touches);",
+    )
+    .unwrap();
+
+    assert_eq!(output, ["EMPTY", "0", "READY", "2", "1"]);
+}
+
+#[test]
 fn instanceof_uses_runtime_identity_handles_generics_and_evaluates_once() {
     let output = execute_source(
         "public virtual class Parent {} \

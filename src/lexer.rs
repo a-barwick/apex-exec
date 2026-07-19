@@ -74,7 +74,7 @@ impl<'a> Lexer<'a> {
             '.' => TokenKind::Dot,
             ',' => TokenKind::Comma,
             ':' => TokenKind::Colon,
-            '?' => TokenKind::Question,
+            '?' => self.question_token_kind(),
             '=' if self.take('=') => TokenKind::EqualEqual,
             '=' if self.take('>') => TokenKind::FatArrow,
             '=' => TokenKind::Equal,
@@ -217,6 +217,16 @@ impl<'a> Lexer<'a> {
             kind,
             span: self.span(start, self.cursor),
             lexeme: self.source[start..self.cursor].to_owned(),
+        }
+    }
+
+    fn question_token_kind(&mut self) -> TokenKind {
+        if self.take('?') {
+            TokenKind::NullCoalesce
+        } else if self.take('.') {
+            TokenKind::SafeNavigation
+        } else {
+            TokenKind::Question
         }
     }
 

@@ -45,6 +45,57 @@ fn checks_conditional_conditions_branches_and_result_types() {
 }
 
 #[test]
+fn checks_null_aware_types_targets_and_lazy_paths_statically() {
+    let error = check_source(
+        "public class Box { \
+             public Integer count; \
+             public String label(Integer ignored) { return 'box'; } \
+         } \
+         Box box = null; \
+         String label = box?.label(missing);",
+    )
+    .unwrap_err();
+    assert_eq!(error.message, "unknown variable `missing`");
+
+    check_source(
+        "public class Box { \
+             public Integer count; \
+             public String label() { return 'box'; } \
+         } \
+         Box box = null; \
+         Integer count = box?.count ?? 0; \
+         String label = box?.label() ?? 'none'; \
+         Decimal promoted = null ?? 1 ?? 2.5; \
+         Object common = box?.count ?? 'text';",
+    )
+    .unwrap();
+
+    let error = check_source("String value = 'x' ?? System.debug('not a value');").unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("null-coalescing operands must produce values")
+    );
+}
+
+#[test]
+fn rejects_safe_navigation_for_static_receivers_and_mutation() {
+    let error = check_source("String value = String?.valueOf(1);").unwrap_err();
+    assert_eq!(
+        error.message,
+        "safe navigation requires an instance receiver"
+    );
+
+    let error = check_source(
+        "public class Box { public Integer count; } \
+         Box box = new Box(); \
+         box?.count++;",
+    )
+    .unwrap_err();
+    assert_eq!(error.message, "safe-navigation access cannot be mutated");
+}
+
+#[test]
 fn checks_instanceof_viability_generic_targets_and_always_true_tests() {
     check_source(
         "public virtual class Parent {} \

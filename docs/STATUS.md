@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** 2026-07-18
+**Last updated:** 2026-07-19
 
 ## Completed program gate
 
@@ -8,8 +8,8 @@ S0 — Phase 2 stabilization — Complete
 
 The pre-open-source audit and execution strategy are now captured in
 [`docs/STABILIZATION.md`](STABILIZATION.md). The bounded S0 process-safety and
-correctness criteria have passed. M18 — null-aware expressions remains the next
-planned feature milestone and has not started.
+correctness criteria have passed. M18 — null-aware expressions is complete;
+M19 — bitwise, shift, `Long`, and compound operators is next.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -43,6 +43,11 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Checked `instanceof` expressions with viable-alternative diagnostics,
   generic collection identity, class/interface runtime relationships,
   null-false behavior, and single evaluation of the value expression
+- Checked safe-navigation member and method access with evaluate-once
+  receivers, lazy arguments, chain propagation, typed-null results, explicit
+  static/mutation rejection, and empty-safe single-record SOQL
+- Left-associative null coalescing with checked type joins, evaluate-once left
+  operands, lazy right operands, and production branch coverage
 - Blocks with nested lexical scopes
 - `if`/`else`, `while`, `do`/`while`, and traditional `for` execution
 - `break`, `continue`, and value-less anonymous `return`
@@ -361,21 +366,21 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 353 ordinary tests pass with no failures (14 separate North Star goal tests
-  remain intentionally ignored); LLVM source-line coverage is 84.33% overall
-  and 83.57% across the three changed production modules (`ci`, `hybrid`, and
-  the CLI)
+- 366 ordinary tests pass with no failures (14 separate North Star goal tests
+  remain intentionally ignored); LLVM source-line coverage is 85.08% overall
+  and 82.80% across the M18-changed production modules. The checked-in M18 Apex
+  project reports 19/19 production lines and 24/24 null-aware branches covered.
 
 ## Immediate target
 
-M18 safe-navigation and null-coalescing is the next planned feature milestone;
-no implementation is active yet. The package tracker is in
+M19 bitwise, shift, `Long`, and compound operators is the next planned feature
+milestone. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-M16 reproduces 5 of 14 passing indicators (**35.71%**): lexer 5 of 7
+M18 reproduces 5 of 14 passing indicators (**35.71%**): lexer 5 of 7
 (**71.43%**) and parser 0 of 7 (**0%**), a gain of four lexer indicators from
 the Phase 2 baseline. `SOQL.cls`, `Logger.cls`, `Rollup.cls`,
 `RollupService.cls`, and `JSONParse.cls` now lex completely. Their first parser
@@ -389,11 +394,13 @@ enums, class literals, static initializer blocks, `switch`/`when`,
 uninitialized and multi-declarator locals, constructor delegation, arbitrary
 generic type references, and additional modifiers/literals. These are
 syntax-progress indicators, not semantic, execution, or Salesforce
-compatibility percentages. M21 requires all 14 original fixtures to pass
+compatibility percentages. Safe navigation and null coalescing no longer
+appear as first diagnostics. M21 requires all 14 original fixtures to pass
 without `#[ignore]` or corpus changes.
 
-M17 intentionally changes no Apex syntax, so its North Star movement is zero:
-lexer 5/7, parser 0/7, total 5/14.
+M18 moves the null-aware language slice through checking and execution but
+does not clear the earlier grammar blockers in the pinned sources, so its North
+Star movement is zero: lexer 5/7, parser 0/7, total 5/14.
 
 ## Phase 2 evidence baseline
 

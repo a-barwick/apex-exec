@@ -172,6 +172,17 @@ separate runtime-type relation so numeric assignment promotion cannot become
 runtime identity. The interpreter evaluates only the chosen ternary arm and
 evaluates an `instanceof` value once against execution-store type identity.
 
+M18 adds maximal-munch `?.` and `??` tokens plus explicit null-coalescing AST
+nodes and navigation metadata on member/method nodes. Safe navigation remains
+checked against the ordinary typed HIR member/call target; static targets and
+mutation are rejected, while a null receiver short-circuits the remaining
+navigation chain without evaluating arguments. Null coalescing is
+left-associative, reuses the checked type-join relation, evaluates its left
+operand once, and evaluates its right operand only for null. HIR marks only
+single-record SOQL used by a null-aware expression as empty-result tolerant, so
+ordinary single-record queries preserve their `QueryException` behavior.
+Coverage records null and present outcomes for both operators.
+
 The CLI is a thin adapter over those functions.
 
 M6 discovers tests from checked annotation metadata and executes each test in

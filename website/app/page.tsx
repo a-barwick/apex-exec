@@ -45,11 +45,18 @@ const roadmap = [
       "Process safety, explicit instrumentation, runtime graph safety, execution context, and enforceable release gates.",
   },
   {
-    milestone: "M18–M21",
+    milestone: "M18",
+    state: "Complete",
+    title: "Null-aware expressions",
+    description:
+      "Checked safe navigation and null coalescing with lazy, evaluate-once execution and branch coverage.",
+  },
+  {
+    milestone: "M19–M21",
     state: "Planned",
     title: "North Star grammar closure",
     description:
-      "Null-aware, bitwise, nested-type, enum, and remaining grammar slices after S0 passes.",
+      "Bitwise, nested-type, enum, and remaining grammar slices build on the completed M18 foundation.",
   },
 ];
 
@@ -350,8 +357,8 @@ export default function Home() {
             </h2>
             <p>
               Apex Exec has a working local feedback loop and reviewed live
-              validation evidence. Bounded stabilization is complete, and M18
-              feature work is the next planned milestone.
+              validation evidence. Bounded stabilization and M18 null-aware
+              expressions are complete; M19 is next.
             </p>
           </div>
           <div className="decision-actions">

@@ -448,7 +448,7 @@ approves resuming M18.
 
 ### M18 — Null-aware expressions
 
-**Status:** Planned (S0 complete; not started)
+**Status:** Complete
 
 #### Scope
 

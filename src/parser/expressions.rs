@@ -35,12 +35,22 @@ impl Parser {
             Expression::MemberAccess {
                 receiver,
                 member,
+                safe_navigation: false,
                 span,
+                ..
             } => AssignmentTarget::Member {
                 receiver,
                 member,
                 span,
             },
+            Expression::MemberAccess {
+                navigation_span, ..
+            } => {
+                return Err(Diagnostic::new(
+                    "safe-navigation access cannot be an assignment target",
+                    navigation_span,
+                ));
+            }
             _ => return Err(Diagnostic::new("invalid assignment target", equals.span)),
         };
         let span = target.span().merge(value.span());
@@ -52,7 +62,7 @@ impl Parser {
     }
 
     pub(super) fn parse_conditional(&mut self) -> Result<Expression, Diagnostic> {
-        let condition = self.parse_or()?;
+        let condition = self.parse_null_coalescing()?;
         if !self.check(&TokenKind::Question) {
             return Ok(condition);
         }
@@ -72,6 +82,22 @@ impl Parser {
             question_span: question.span,
             span,
         })
+    }
+
+    pub(super) fn parse_null_coalescing(&mut self) -> Result<Expression, Diagnostic> {
+        let mut expression = self.parse_or()?;
+        while self.check(&TokenKind::NullCoalesce) {
+            let operator = self.advance();
+            let right = self.parse_or()?;
+            let span = expression.span().merge(right.span());
+            expression = Expression::NullCoalesce {
+                left: Box::new(expression),
+                right: Box::new(right),
+                operator_span: operator.span,
+                span,
+            };
+        }
+        Ok(expression)
     }
 
     pub(super) fn parse_or(&mut self) -> Result<Expression, Diagnostic> {
@@ -211,9 +237,16 @@ impl Parser {
 
     pub(super) fn parse_postfix(&mut self) -> Result<Expression, Diagnostic> {
         let mut expression = self.parse_primary()?;
+        let mut safe_navigation_chain = false;
         loop {
             match self.current().kind {
                 TokenKind::LeftBracket => {
+                    if safe_navigation_chain {
+                        return Err(Diagnostic::new(
+                            "indexed access in a safe-navigation chain is unsupported",
+                            self.current().span,
+                        ));
+                    }
                     self.advance();
                     let index = self.parse_expression()?;
                     let end = self.expect_simple(
@@ -227,8 +260,12 @@ impl Parser {
                         span,
                     };
                 }
-                TokenKind::Dot => {
-                    self.advance();
+                TokenKind::Dot | TokenKind::SafeNavigation => {
+                    let navigation = self.advance();
+                    if navigation.kind == TokenKind::SafeNavigation {
+                        safe_navigation_chain = true;
+                    }
+                    let safe_navigation = safe_navigation_chain;
                     let member = if self.check(&TokenKind::New) {
                         let token = self.advance();
                         Identifier::new(token.lexeme, token.span)
@@ -242,6 +279,8 @@ impl Parser {
                             receiver: Box::new(expression),
                             method: member,
                             arguments,
+                            safe_navigation,
+                            navigation_span: navigation.span,
                             span,
                         };
                     } else {
@@ -249,6 +288,8 @@ impl Parser {
                         expression = Expression::MemberAccess {
                             receiver: Box::new(expression),
                             member,
+                            safe_navigation,
+                            navigation_span: navigation.span,
                             span,
                         };
                     }

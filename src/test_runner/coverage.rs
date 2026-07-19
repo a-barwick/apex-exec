@@ -223,8 +223,26 @@ struct ExpressionBranchCollector<'a> {
 
 impl<'ast> Visitor<'ast> for ExpressionBranchCollector<'_> {
     fn visit_expression(&mut self, expression: &'ast Expression) {
-        if let Expression::Conditional { condition, .. } = expression {
-            self.branches.insert(condition.span());
+        match expression {
+            Expression::Conditional { condition, .. } => {
+                self.branches.insert(condition.span());
+            }
+            Expression::NullCoalesce { left, .. } => {
+                self.branches.insert(left.span());
+            }
+            Expression::MethodCall {
+                receiver,
+                safe_navigation: true,
+                ..
+            }
+            | Expression::MemberAccess {
+                receiver,
+                safe_navigation: true,
+                ..
+            } => {
+                self.branches.insert(receiver.span());
+            }
+            _ => {}
         }
         visit::walk_expression(self, expression);
     }

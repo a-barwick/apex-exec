@@ -152,6 +152,128 @@ fn conditional_requires_a_false_branch_in_the_parser() {
 }
 
 #[test]
+fn null_aware_operators_chain_and_bind_between_or_and_conditional() {
+    let program = parse(
+        "String first = null; String second = null; Boolean flag = true; \
+         String value = first ?? second ?? flag ? first?.trim()?.toUpperCase() : 'fallback';",
+    );
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[3] else {
+        panic!("expected declaration");
+    };
+    let Expression::Conditional {
+        condition,
+        when_true,
+        ..
+    } = initializer
+    else {
+        panic!("expected conditional at the expression root");
+    };
+    let Expression::NullCoalesce { left, .. } = condition.as_ref() else {
+        panic!("expected null coalescing below conditional");
+    };
+    assert!(matches!(left.as_ref(), Expression::NullCoalesce { .. }));
+    assert!(matches!(
+        when_true.as_ref(),
+        Expression::MethodCall {
+            safe_navigation: true,
+            receiver,
+            ..
+        } if matches!(
+            receiver.as_ref(),
+            Expression::MethodCall {
+                safe_navigation: true,
+                ..
+            }
+        )
+    ));
+}
+
+#[test]
+fn safe_navigation_is_not_an_assignment_target() {
+    let error = Parser::new(
+        Lexer::new("Box value = null; value?.count = 1;")
+            .tokenize()
+            .unwrap(),
+    )
+    .unwrap()
+    .parse_program()
+    .unwrap_err();
+
+    assert_eq!(
+        error.message,
+        "safe-navigation access cannot be an assignment target"
+    );
+}
+
+#[test]
+fn safe_navigation_short_circuits_the_remaining_member_chain() {
+    let program = parse("String value = input?.trim().toUpperCase();");
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[0] else {
+        panic!("expected declaration");
+    };
+    let Expression::MethodCall {
+        receiver,
+        safe_navigation,
+        ..
+    } = initializer
+    else {
+        panic!("expected outer method call");
+    };
+    assert!(*safe_navigation);
+    assert!(matches!(
+        receiver.as_ref(),
+        Expression::MethodCall {
+            safe_navigation: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn safe_navigation_rejects_unsupported_index_chaining_explicitly() {
+    let error = Parser::new(
+        Lexer::new("String value = holder?.values[0];")
+            .tokenize()
+            .unwrap(),
+    )
+    .unwrap()
+    .parse_program()
+    .unwrap_err();
+
+    assert_eq!(
+        error.message,
+        "indexed access in a safe-navigation chain is unsupported"
+    );
+}
+
+#[test]
+fn null_coalescing_is_left_associative_and_cannot_be_assigned_through() {
+    let program = parse("String value = first ?? second ?? third;");
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[0] else {
+        panic!("expected declaration");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::NullCoalesce {
+            left,
+            right,
+            ..
+        } if matches!(left.as_ref(), Expression::NullCoalesce { .. })
+            && matches!(right.as_ref(), Expression::Variable(name) if name.canonical == "third")
+    ));
+
+    let error = Parser::new(
+        Lexer::new("String first = null; String second = null; first ?? second = 'x';")
+            .tokenize()
+            .unwrap(),
+    )
+    .unwrap()
+    .parse_program()
+    .unwrap_err();
+    assert_eq!(error.message, "invalid assignment target");
+}
+
+#[test]
 fn else_binds_to_the_nearest_if() {
     let program = parse("if (true) if (false) System.debug('inner'); else System.debug('else');");
     let Statement::If {

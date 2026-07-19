@@ -47,8 +47,8 @@ for the documented case.
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
 | Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
 | `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
-| Safe navigation | No | No | No | Unsupported | Planned with evaluate-once null behavior in M18 |
-| Null coalescing | No | No | No | Unsupported | Planned with lazy right-hand execution in M18 |
+| Safe navigation | Yes | Yes | Yes | Compatible | Evaluate-once instance member/method access, member/method chain short-circuiting, lazy arguments, typed nulls, and null-aware single-record SOQL; indexed chain continuation is rejected |
+| Null coalescing | Yes | Yes | Yes | Compatible | Left-associative Apex precedence, evaluate-once left operand, lazy right operand, checked type joins, and branch coverage |
 | Bitwise/shift operators | No | No | No | Unsupported | Includes compound forms and `Long`; planned in M19 |
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
@@ -668,10 +668,11 @@ language or Salesforce compatibility claim.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-M16 reproduces 5 of 14 passing goals (35.71%): 5 of 7 lexer goals and 0 of 7
+M18 reproduces 5 of 14 passing goals (35.71%): 5 of 7 lexer goals and 0 of 7
 parser goals, up from the 1-of-14 Phase 2 baseline. Ternary and `instanceof` are
-no longer first blockers; the current first diagnostics are bitwise syntax,
-unsupported annotations, and nested declarations. M21 requires 14 of 14
+no longer first blockers, and no current first diagnostic is a null-aware
+operator. The current first diagnostics are bitwise syntax, unsupported
+annotations, and nested declarations. M21 requires 14 of 14
 passing against the unchanged corpus and removes every goal's `#[ignore]`.
 These are syntax indicators only, not runtime or Salesforce compatibility
 percentages.
