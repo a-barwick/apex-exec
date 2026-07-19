@@ -89,12 +89,12 @@ for the documented case.
 | Batch Apex | Yes | Yes | Via drain | Simplified | Checked `Database.Batchable<T>` contract with List-returning `start`, deterministic chunking, context job ID, and `finish` |
 | Scheduled Apex | Yes | Yes | Via drain | Simplified | Checked Schedulable contract, seven-field cron shape validation, deterministic submission, and trigger ID |
 | Platform events | Yes | Yes | Via drain | Simplified | `EventBus.publish` queues imported `__e` records for after-insert trigger delivery; no retention or replay |
-| JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization and recursive untyped deserialization |
+| JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization, catchable cycle/limit failures, and recursive untyped deserialization |
 | Regex | Yes | Yes | Yes | Compatible | `Pattern.compile`/`quote` and stateful `Matcher` match/find/group/start/end |
 | Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
 | HTTP callouts | Yes | Yes | Via host | Simplified | Stateful request/response APIs, queued mock responses, captured requests, and no live network |
 | Persistent REPL | Yes | Yes | Yes | Simplified | Accepted snippets share deterministic replayed state; failed snippets do not commit |
-| Statement debugger | N/A | N/A | Yes | Simplified | Opt-in breakpoints, step in/over/out, frames, variables, database events, and transaction timelines over bounded immutable snapshots |
+| Statement debugger | N/A | N/A | Yes | Simplified | Opt-in breakpoints, step in/over/out, frames, cycle-safe variables, database events, and transaction timelines over bounded immutable snapshots |
 | Editor navigation | N/A | Via HIR | N/A | Simplified | Project class/member definitions, references, rename edits, and source-mapped inline diagnostics |
 | Coverage overlays | N/A | N/A | Via runner | Compatible | Every executable production line is exposed as covered or uncovered to editor clients |
 
@@ -352,7 +352,9 @@ surface produce a compile diagnostic naming the API and profile.
   `scale`, and deterministic text conversion.
 - `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
   `size`; `EncodingUtil`: Base64 encode/decode.
-- `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`.
+- `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`; structural
+  serialization rejects cycles or exhausted traversal budgets with catchable
+  `IllegalArgumentException`.
 - Regex: `Pattern.compile`/`quote` and
   `Matcher.matches`/`find`/`group`/`start`/`end`.
 - Describe: `Schema.getGlobalDescribe`, `SObjectType.getDescribe`, and
@@ -370,6 +372,8 @@ Date/time formatting is fixed UTC rather than locale/time-zone aware. Decimal
 does not expose every Apex rounding mode. Typed JSON deserialization, arbitrary
 user-object reflection, field describe, `HttpCalloutMock`/`Test.setMock`, named
 credentials, and namespace-qualified `System.JSON` syntax remain unsupported.
+Runtime user objects therefore keep their existing identity-string JSON
+surface rather than recursively exposing fields.
 SObject Id/reference fields retain their earlier String surface; standalone
 `Id` values are validated but full field-level integration is future work.
 
@@ -423,9 +427,11 @@ runtime. Debugger launches alone opt into snapshot allocation and retain the
 earliest 4,096 snapshots under an estimated 16 MiB snapshot-memory ceiling,
 with at most 256 variables and 128 frames per snapshot and 16 KiB per rendered
 value. `DebugExecution::trace_status` reports when any bound truncates the
-trace. Ordinary execute/invoke paths select no instrumentation, while the test
-runner records coverage facts without debugger snapshots. Expression
-evaluation and value mutation from the debug console are not supported.
+trace. Rendered values also use a 64-level, 4,096-node, and 4,096-element graph
+budget, mark cycles as `<cycle>`, and mark exhausted display budgets as `…`.
+Ordinary execute/invoke paths select no instrumentation, while the test runner
+records coverage facts without debugger snapshots. Expression evaluation and
+value mutation from the debug console are not supported.
 
 `apex-exec lsp [project]` implements stdio Language Server Protocol
 initialization, full-document synchronization, inline diagnostic publication,

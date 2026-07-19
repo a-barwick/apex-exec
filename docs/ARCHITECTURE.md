@@ -104,6 +104,13 @@ trace keeps the earliest pre-statement observations and is bounded to 4,096
 snapshots, an estimated 16 MiB of retained snapshot structures and text, 256
 variables and 128 frames per snapshot, and 16 KiB per rendered value.
 `DebugExecution::trace_status` reports retained bytes and any truncation.
+Display, JSON serialization, equality, and debugger capture share runtime
+value-graph traversal state. Display uses fixed depth, node, element, and
+UTF-8 output budgets with deterministic `<cycle>` and `…` markers. JSON uses
+the same identity path and structural budgets but turns cycles or exhausted
+budgets into catchable `IllegalArgumentException` values. Collection equality
+uses an explicit work stack and a rollback-aware visited-pair trail, so cyclic
+and deeply nested graphs do not consume the host call stack.
 Debug Adapter Protocol clients navigate the completed immutable trace, so
 editor response timing never changes Apex execution. The Language Server
 Protocol adapter uses checked HIR targets and the project source map for
@@ -189,6 +196,7 @@ state between interpreters.
 | `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
 | `runtime::instrumentation` | Explicit none/coverage/debugger policy, coverage facts, and bounded debugger snapshot retention |
+| `runtime::value_graph` | Cycle-aware, budgeted value rendering and JSON traversal plus iterative collection equality |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
 | `platform` | Storage-independent normalized schema and transactional record-storage contracts |
 | `platform::metadata` | SFDX custom-object and field metadata import |

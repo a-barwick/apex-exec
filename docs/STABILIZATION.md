@@ -66,7 +66,7 @@ package.
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Active (`codex/stab-frontend-safety`; `s0_01_frontend`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Active (`codex/stab-runtime-graph-safety`; `s0_03_graph_safety`) | S0-02 merged | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Review (`1cda4e0`; `codex/stab-runtime-graph-safety`) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
@@ -82,6 +82,24 @@ package.
 | S2-04 | Open-source release gate | Blocked | S0-05, owner license decision | Disjoint implementation work |
 
 Only S0-01, S0-02, and S0-05 should start in the first parallel wave.
+
+## Package review evidence
+
+### S0-03 — Cycle-safe runtime value traversal
+
+- Implementation `1cda4e0`; branch `codex/stab-runtime-graph-safety`.
+- The recorded List display, equality, JSON, Set display, Map display, and
+  object-identity CLI cases now terminate deterministically. Cycles render as
+  `<cycle>`, while JSON raises a catchable `IllegalArgumentException`.
+- Focused verification passed: six integration tests covering the library and
+  CLI reproduction, cyclic List/Set/Map equality, an adversarial equality
+  backtracking case, 5,000-level iterative equality, catchable JSON failures,
+  debugger capture, and acyclic compatibility.
+- Full branch verification passed before handoff: `cargo fmt --check`; `cargo
+  test`; and `cargo clippy --all-targets -- -D warnings`.
+- Comparable Lizard evidence removes the 112-NLOC `display_value` hotspot,
+  introduces no new function above the 80-NLOC/15-CCN ratchet, and keeps the
+  extracted value-graph functions at or below 61 NLOC and 15 CCN.
 
 ## Integrated package evidence
 
