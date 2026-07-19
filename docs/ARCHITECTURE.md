@@ -522,6 +522,30 @@ checked operation succeeds. The numeric module owns checked 32-bit Integer,
 shift-distance masking, and signed/unsigned shift behavior; runtime does not
 reselect operand families from source syntax.
 
+## M20 qualified type and initialization architecture
+
+M20 replaces split type lookahead with one lossless `TypeRef` grammar that
+retains every qualified segment, recursive generic argument, array suffix, and
+source span. Semantic lowering canonicalizes lookup separately from source
+spelling. Nested declarations retain their enclosing and fully qualified
+identities throughout project dependencies, editor indexes, HIR targets, and
+runtime dispatch; typed `ClassId` values carry new type identities across the
+checker/runtime boundary.
+
+The checked program precomputes class lineage, field/property slots, and
+source-ordered static and instance initialization steps. Runtime execution
+allocates typed-null slots first, then consumes those steps, including
+initializer blocks, while preserving lazy class initialization and its bounded
+cycle/depth failures. Constructor targets record checked `this(...)` and
+`super(...)` delegation; semantic analysis resolves overloads, access, and
+cycles before runtime executes a constructor chain.
+
+Enums have qualified runtime identity and checked constants/method targets for
+`name`, `ordinal`, `values`, and `valueOf`. Class literals carry canonical
+qualified, array, or generic type facts in HIR. Custom exception subclasses
+participate in typed throw/catch/subtyping and inherit the supported zero- and
+one-String construction surface.
+
 ## Phase 2 architecture constraints
 
 The Phase 2 roadmap expands compatibility without weakening the existing phase

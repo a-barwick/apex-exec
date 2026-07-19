@@ -6,9 +6,9 @@ use crate::{
     },
     diagnostic::Diagnostic,
     hir::{
-        CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassMemberId, ExpressionType,
-        FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget,
-        TriggerContextVariable,
+        CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
+        ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program,
+        ReferenceTarget, TriggerContextVariable,
     },
     platform::FieldType,
     span::Span,
@@ -17,7 +17,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rust_decimal::Decimal;
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
 };
 
 mod asynchronous;
@@ -96,6 +96,8 @@ enum Value {
     Platform(PlatformValueId),
     Collection(CollectionId),
     Object(ObjectId),
+    Enum { class_id: ClassId, ordinal: usize },
+    TypeLiteral(TypeName),
     SObject(SObjectId),
     AggregateResult(AggregateResultId),
     Exception(Box<Diagnostic>),
@@ -449,7 +451,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let class_id = self
             .classes()
             .iter()
-            .position(|class| class.name.spelling.eq_ignore_ascii_case(class_name))
+            .position(|class| {
+                class
+                    .qualified_name
+                    .spelling
+                    .eq_ignore_ascii_case(class_name)
+            })
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown class `{class_name}`"), Span::new(0, 0))
             })?;
@@ -686,50 +693,57 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn initialize_class_members(&mut self, class_id: usize) -> Result<(), Diagnostic> {
-        let members = self.classes()[class_id].members.clone();
-        for (member_id, member) in members.iter().enumerate() {
-            let (ty, is_static) = match member {
-                ClassMember::Field(field) => {
-                    (&field.ty, field.modifiers.contains(&Modifier::Static))
-                }
-                ClassMember::Property(property) => {
-                    (&property.ty, property.modifiers.contains(&Modifier::Static))
-                }
-                _ => continue,
+        let metadata = self
+            .program()
+            .class_metadata(ClassId::from_index(class_id))
+            .clone();
+        for target in metadata.static_slots {
+            let ty = match &self.classes()[class_id].members[target.member_id] {
+                ClassMember::Field(field) => field.ty.clone(),
+                ClassMember::Property(property) => property.ty.clone(),
+                _ => unreachable!("static slot metadata refers to a value member"),
             };
-            if is_static {
-                self.store.insert_static_slot(
-                    ClassMemberId {
-                        class_id,
-                        member_id,
-                    },
-                    Slot {
-                        ty: ty.clone(),
-                        value: Value::Null(Some(ty.clone())),
-                    },
-                );
-            }
+            self.store.insert_static_slot(
+                target,
+                Slot {
+                    value: Value::Null(Some(ty.clone())),
+                    ty,
+                },
+            );
         }
 
-        for (member_id, member) in members.iter().enumerate() {
-            let ClassMember::Field(field) = member else {
-                continue;
-            };
-            if !field.modifiers.contains(&Modifier::Static) {
-                continue;
+        for step in metadata.static_steps {
+            match step {
+                crate::hir::ClassInitializationStep::Field(target) => {
+                    let ClassMember::Field(field) =
+                        self.classes()[class_id].members[target.member_id].clone()
+                    else {
+                        unreachable!("field initialization metadata refers to a field");
+                    };
+                    let initializer = field
+                        .initializer
+                        .as_ref()
+                        .expect("field initialization metadata requires an initializer");
+                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                    self.store
+                        .static_slot_mut(&target)
+                        .expect("static field was allocated")
+                        .value = value;
+                }
+                crate::hir::ClassInitializationStep::Block(target) => {
+                    let ClassMember::Initializer(initializer) =
+                        self.classes()[class_id].members[target.member_id].clone()
+                    else {
+                        unreachable!("initializer metadata refers to a block");
+                    };
+                    if !matches!(self.execute_statement(&initializer.body)?, Flow::Normal) {
+                        return Err(Diagnostic::new(
+                            "static initializer completed abruptly",
+                            initializer.span,
+                        ));
+                    }
+                }
             }
-            let Some(initializer) = &field.initializer else {
-                continue;
-            };
-            let target = ClassMemberId {
-                class_id,
-                member_id,
-            };
-            let value = typed_value(self.evaluate(initializer)?, &field.ty);
-            self.store
-                .static_slot_mut(&target)
-                .expect("static field was allocated")
-                .value = value;
         }
         Ok(())
     }
@@ -907,7 +921,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             if exception.exception_type.is_some()
                 && let Some(catch) = catches
                     .iter()
-                    .find(|catch| exception_matches(&exception, &catch.exception_type))
+                    .find(|catch| self.exception_matches(&exception, &catch.exception_type))
             {
                 self.scopes.push(HashMap::new());
                 self.current_scope_mut().insert(
@@ -1194,6 +1208,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Expression::Soql(query) => self.evaluate_soql(query.span),
             Expression::Sosl(query) => self.evaluate_sosl(query.span),
             Expression::Variable(identifier) => self.evaluate_variable(identifier),
+            Expression::TypeLiteral { ty, span } => Ok(Value::TypeLiteral(
+                self.program()
+                    .type_literal(*span)
+                    .cloned()
+                    .unwrap_or_else(|| ty.clone()),
+            )),
             Expression::Assignment {
                 target,
                 operator,
@@ -1249,8 +1269,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         *span,
                     )),
                     CallTarget::Constructor { .. }
+                    | CallTarget::CustomExceptionConstructor { .. }
                     | CallTarget::SObjectConstructor { .. }
                     | CallTarget::PlatformConstructor(_)
+                    | CallTarget::EnumMethod { .. }
                     | CallTarget::SObjectGet
                     | CallTarget::SObjectPut
                     | CallTarget::DatabaseDml(_)
@@ -1423,9 +1445,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Some(CallTarget::AggregateResultGet) => {
                 self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
             }
+            Some(target @ CallTarget::EnumMethod { .. }) => self.evaluate_checked_enum_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
             Some(
                 CallTarget::TopLevelMethod(_)
                 | CallTarget::Constructor { .. }
+                | CallTarget::CustomExceptionConstructor { .. }
                 | CallTarget::SObjectConstructor { .. }
                 | CallTarget::PlatformConstructor(_),
             ) => Err(Diagnostic::new(
@@ -1437,6 +1467,27 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 method.span,
             )),
         }
+    }
+
+    fn evaluate_checked_enum_call(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let CallTarget::EnumMethod { class_id, method } = target else {
+            unreachable!("enum call helper requires an enum target");
+        };
+        self.evaluate_enum_method(
+            class_id,
+            method,
+            receiver,
+            evaluated_receiver,
+            arguments,
+            span,
+        )
     }
 
     fn evaluate_object_method_call(
@@ -1463,6 +1514,85 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             _ => return Err(invalid_runtime_operands(receiver.span())),
         };
         self.evaluate_class_method(target, Some(receiver), arguments, span, true)
+    }
+
+    fn evaluate_enum_method(
+        &mut self,
+        class_id: ClassId,
+        method: crate::hir::EnumMethod,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match method {
+            crate::hir::EnumMethod::Name | crate::hir::EnumMethod::Ordinal => {
+                let value = match evaluated_receiver {
+                    Some(value) => value,
+                    None => self.evaluate(receiver)?,
+                };
+                let Value::Enum {
+                    class_id: actual_class,
+                    ordinal,
+                } = value
+                else {
+                    return Err(invalid_runtime_operands(receiver.span()));
+                };
+                if actual_class != class_id {
+                    return Err(Diagnostic::new("enum receiver type mismatch", span));
+                }
+                if method == crate::hir::EnumMethod::Name {
+                    Ok(Value::String(
+                        self.classes()[class_id.index()].enum_constants[ordinal]
+                            .spelling
+                            .clone(),
+                    ))
+                } else {
+                    Ok(Value::Integer(i64::try_from(ordinal).unwrap_or(i64::MAX)))
+                }
+            }
+            crate::hir::EnumMethod::Values => {
+                let element_type = TypeName::Custom(crate::ast::NamedType::new(
+                    self.classes()[class_id.index()]
+                        .qualified_name
+                        .spelling
+                        .clone(),
+                    span,
+                ));
+                let elements = (0..self.classes()[class_id.index()].enum_constants.len())
+                    .map(|ordinal| Value::Enum { class_id, ordinal })
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            crate::hir::EnumMethod::ValueOf => {
+                let [argument] = arguments else {
+                    return Err(Diagnostic::new("invalid enum valueOf arguments", span));
+                };
+                let Value::String(name) = self.evaluate(argument)? else {
+                    return Err(invalid_runtime_operands(argument.span()));
+                };
+                let ordinal = self.classes()[class_id.index()]
+                    .enum_constants
+                    .iter()
+                    .position(|constant| constant.spelling == name)
+                    .ok_or_else(|| {
+                        runtime_exception(
+                            "IllegalArgumentException",
+                            format!(
+                                "No enum constant {}.{}",
+                                self.classes()[class_id.index()].qualified_name.spelling,
+                                name
+                            ),
+                            span,
+                        )
+                    })?;
+                Ok(Value::Enum { class_id, ordinal })
+            }
+        }
     }
 
     fn evaluate_database_dml_call(
@@ -1547,34 +1677,63 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 reference_field_id,
                 target_object_id,
-            } => {
-                let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
-                let instance = self.store.sobject(receiver);
-                if instance.object_id != object_id {
-                    return Err(Diagnostic::new(
-                        "SObject relationship target does not match runtime object type",
-                        span,
-                    ));
-                }
-                Ok(instance
-                    .relationships
-                    .get(&reference_field_id)
-                    .copied()
-                    .map(Value::SObject)
-                    .unwrap_or_else(|| {
-                        let target = self
-                            .program()
-                            .schema()
-                            .object_at(target_object_id)
-                            .expect("checked relationship target is valid");
-                        Value::Null(Some(TypeName::Custom(crate::ast::NamedType::new(
-                            target.api_name().to_owned(),
-                            span,
-                        ))))
-                    }))
-            }
+            } => self.evaluate_sobject_relationship(
+                receiver,
+                evaluated_receiver,
+                object_id,
+                reference_field_id,
+                target_object_id,
+                span,
+            ),
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
+            MemberTarget::EnumConstant { class_id, ordinal } => {
+                Ok(Value::Enum { class_id, ordinal })
+            }
+            MemberTarget::TypeReference { class_id } => Ok(Value::TypeLiteral(TypeName::Custom(
+                crate::ast::NamedType::new(
+                    self.classes()[class_id.index()]
+                        .qualified_name
+                        .spelling
+                        .clone(),
+                    span,
+                ),
+            ))),
         }
+    }
+
+    fn evaluate_sobject_relationship(
+        &mut self,
+        expression: &Expression,
+        evaluated_receiver: Option<Value>,
+        object_id: usize,
+        reference_field_id: usize,
+        target_object_id: usize,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = self.evaluate_sobject_receiver(expression, evaluated_receiver)?;
+        let instance = self.store.sobject(receiver);
+        if instance.object_id != object_id {
+            return Err(Diagnostic::new(
+                "SObject relationship target does not match runtime object type",
+                span,
+            ));
+        }
+        Ok(instance
+            .relationships
+            .get(&reference_field_id)
+            .copied()
+            .map(Value::SObject)
+            .unwrap_or_else(|| {
+                let target = self
+                    .program()
+                    .schema()
+                    .object_at(target_object_id)
+                    .expect("checked relationship target is valid");
+                Value::Null(Some(TypeName::Custom(crate::ast::NamedType::new(
+                    target.api_name().to_owned(),
+                    span,
+                ))))
+            }))
     }
 
     fn trigger_context_value(
@@ -1956,6 +2115,28 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.ensure_class_initialized(class_id, span)?;
                 self.construct_user_object(class_id, member_id, arguments, span)
             }
+            CallTarget::CustomExceptionConstructor { class_id } => {
+                let class_id = class_id.index();
+                let message = match arguments {
+                    [] => String::new(),
+                    [message] => match self.evaluate(message)? {
+                        Value::String(message) => message,
+                        Value::Null(_) => String::new(),
+                        _ => return Err(invalid_runtime_operands(message.span())),
+                    },
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "invalid custom exception constructor arguments",
+                            span,
+                        ));
+                    }
+                };
+                Ok(Value::Exception(Box::new(Diagnostic::runtime_exception(
+                    self.classes()[class_id].qualified_name.spelling.clone(),
+                    message,
+                    Span::new(0, 0),
+                ))))
+            }
             _ => Err(Diagnostic::new("invalid constructor target", span)),
         }
     }
@@ -2031,63 +2212,150 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         let object_id = self.store.allocate_object(class_id);
         self.allocate_instance_fields(object_id, class_id);
-        let lineage = self.class_lineage_base_first(class_id);
-        for current in lineage {
-            self.initialize_instance_fields(object_id, current)?;
-            let selected = if current == class_id {
-                member_id
-            } else {
-                self.zero_argument_constructor(current)
-            };
-            if let Some(member_id) = selected {
-                let constructor = match self.classes()[current].members[member_id].clone() {
-                    ClassMember::Constructor(constructor) => constructor,
-                    _ => return Err(Diagnostic::new("invalid constructor member", span)),
-                };
-                let constructor_arguments = if current == class_id {
-                    arguments.clone()
-                } else {
-                    Vec::new()
-                };
-                self.execute_callable(
-                    &constructor.parameters,
-                    &constructor.body,
-                    &ReturnType::Void,
-                    &constructor.name.spelling,
-                    Some(object_id),
-                    current,
-                    constructor_arguments,
-                    span,
-                )?;
-            }
-        }
+        let mut initialized = HashSet::new();
+        self.execute_constructor_chain(
+            object_id,
+            class_id,
+            member_id,
+            arguments,
+            span,
+            &mut initialized,
+        )?;
         Ok(Value::Object(object_id))
+    }
+
+    fn execute_constructor_chain(
+        &mut self,
+        object: ObjectId,
+        class_id: usize,
+        member_id: Option<usize>,
+        arguments: Vec<EvaluatedArgument>,
+        span: Span,
+        initialized: &mut HashSet<usize>,
+    ) -> Result<(), Diagnostic> {
+        let constructor = member_id
+            .map(
+                |member_id| match self.classes()[class_id].members[member_id].clone() {
+                    ClassMember::Constructor(constructor) => Ok(constructor),
+                    _ => Err(Diagnostic::new("invalid constructor member", span)),
+                },
+            )
+            .transpose()?;
+
+        if let Some(delegation) = constructor
+            .as_ref()
+            .and_then(|constructor| constructor.delegation.as_ref())
+        {
+            let delegated_arguments = self.evaluate_constructor_delegation_arguments(
+                object,
+                class_id,
+                constructor.as_ref().expect("delegation has a constructor"),
+                &arguments,
+                &delegation.arguments,
+            )?;
+            let Some(CallTarget::Constructor {
+                class_id: target_class,
+                member_id: target_member,
+            }) = self.program().call_target(delegation.span)
+            else {
+                return Err(Diagnostic::new(
+                    "unresolved constructor delegation",
+                    delegation.span,
+                ));
+            };
+            self.execute_constructor_chain(
+                object,
+                target_class,
+                target_member,
+                delegated_arguments,
+                delegation.span,
+                initialized,
+            )?;
+        } else if let Some(parent) = self.classes()[class_id]
+            .superclass
+            .as_ref()
+            .and_then(|parent| self.runtime_class_id(parent))
+        {
+            self.execute_constructor_chain(
+                object,
+                parent,
+                self.zero_argument_constructor(parent),
+                Vec::new(),
+                span,
+                initialized,
+            )?;
+        }
+
+        if initialized.insert(class_id) {
+            self.initialize_instance_fields(object, class_id)?;
+        }
+        if let Some(constructor) = constructor {
+            self.execute_callable(
+                &constructor.parameters,
+                &constructor.body,
+                &ReturnType::Void,
+                &constructor.name.spelling,
+                Some(object),
+                class_id,
+                arguments,
+                span,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn evaluate_constructor_delegation_arguments(
+        &mut self,
+        object: ObjectId,
+        class_id: usize,
+        constructor: &crate::ast::ConstructorDeclaration,
+        current_arguments: &[EvaluatedArgument],
+        expressions: &[Expression],
+    ) -> Result<Vec<EvaluatedArgument>, Diagnostic> {
+        let scope = constructor
+            .parameters
+            .iter()
+            .zip(current_arguments)
+            .map(|(parameter, argument)| {
+                (
+                    parameter.name.canonical.clone(),
+                    Slot {
+                        ty: parameter.ty.clone(),
+                        value: typed_value(argument.value.clone(), &parameter.ty),
+                    },
+                )
+            })
+            .collect();
+        let caller_scopes = std::mem::replace(&mut self.scopes, vec![scope]);
+        let saved_receiver = self.current_receiver.replace(object);
+        let saved_declaring = self.current_declaring_class.replace(class_id);
+        let result = self.evaluate_arguments(expressions);
+        self.scopes = caller_scopes;
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        result
     }
 
     fn allocate_instance_fields(&mut self, object: ObjectId, class_id: usize) {
         for current in self.class_lineage_base_first(class_id) {
-            for (member_id, member) in self.classes()[current].members.iter().enumerate() {
-                let (ty, is_static) = match member {
-                    ClassMember::Field(field) => {
-                        (&field.ty, field.modifiers.contains(&Modifier::Static))
-                    }
-                    ClassMember::Property(property) => {
-                        (&property.ty, property.modifiers.contains(&Modifier::Static))
-                    }
-                    _ => continue,
+            let targets = self
+                .program()
+                .class_metadata(ClassId::from_index(current))
+                .instance_slots
+                .clone();
+            for target in targets {
+                let ty = match &self.classes()[current].members[target.member_id] {
+                    ClassMember::Field(field) => field.ty.clone(),
+                    ClassMember::Property(property) => property.ty.clone(),
+                    _ => unreachable!("instance slot metadata refers to a value member"),
                 };
-                if !is_static {
-                    self.store.object_mut(object).fields.insert(
-                        ClassMemberId {
-                            class_id: current,
-                            member_id,
-                        },
-                        Slot {
-                            ty: ty.clone(),
-                            value: Value::Null(Some(ty.clone())),
-                        },
-                    );
-                }
+                self.store.object_mut(object).fields.insert(
+                    target,
+                    Slot {
+                        value: Value::Null(Some(ty.clone())),
+                        ty,
+                    },
+                );
             }
         }
     }
@@ -2099,26 +2367,45 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<(), Diagnostic> {
         let saved_receiver = self.current_receiver.replace(object);
         let saved_declaring = self.current_declaring_class.replace(class_id);
-        let members = self.classes()[class_id].members.clone();
+        let steps = self
+            .program()
+            .class_metadata(ClassId::from_index(class_id))
+            .instance_steps
+            .clone();
         let result = (|| {
-            for (member_id, member) in members.iter().enumerate() {
-                let ClassMember::Field(field) = member else {
-                    continue;
-                };
-                if field.modifiers.contains(&Modifier::Static) {
-                    continue;
-                }
-                if let Some(initializer) = &field.initializer {
-                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.store
-                        .object_mut(object)
-                        .fields
-                        .get_mut(&ClassMemberId {
-                            class_id,
-                            member_id,
-                        })
-                        .expect("instance field was allocated")
-                        .value = value;
+            for step in steps {
+                match step {
+                    crate::hir::ClassInitializationStep::Field(target) => {
+                        let ClassMember::Field(field) =
+                            self.classes()[class_id].members[target.member_id].clone()
+                        else {
+                            unreachable!("field initialization metadata refers to a field");
+                        };
+                        let initializer = field
+                            .initializer
+                            .as_ref()
+                            .expect("field initialization metadata requires an initializer");
+                        let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                        self.store
+                            .object_mut(object)
+                            .fields
+                            .get_mut(&target)
+                            .expect("instance field was allocated")
+                            .value = value;
+                    }
+                    crate::hir::ClassInitializationStep::Block(target) => {
+                        let ClassMember::Initializer(initializer) =
+                            self.classes()[class_id].members[target.member_id].clone()
+                        else {
+                            unreachable!("initializer metadata refers to a block");
+                        };
+                        if !matches!(self.execute_statement(&initializer.body)?, Flow::Normal) {
+                            return Err(Diagnostic::new(
+                                "instance initializer completed abruptly",
+                                initializer.span,
+                            ));
+                        }
+                    }
                 }
             }
             Ok(())
@@ -2129,18 +2416,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn class_lineage_base_first(&self, class_id: usize) -> Vec<usize> {
-        let mut lineage = Vec::new();
-        let mut cursor = Some(class_id);
-        while let Some(id) = cursor {
-            lineage.push(id);
-            cursor = self.classes()[id].superclass.as_ref().and_then(|parent| {
-                self.classes()
-                    .iter()
-                    .position(|class| class.name.canonical == parent.canonical)
-            });
-        }
-        lineage.reverse();
-        lineage
+        self.program()
+            .class_metadata(ClassId::from_index(class_id))
+            .lineage_base_first
+            .iter()
+            .map(|class_id| class_id.index())
+            .collect()
     }
 
     fn zero_argument_constructor(&self, class_id: usize) -> Option<usize> {
@@ -2148,6 +2429,22 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .members
             .iter()
             .position(|member| matches!(member, ClassMember::Constructor(constructor) if constructor.parameters.is_empty()))
+    }
+
+    fn runtime_class_id(&self, name: &crate::ast::NamedType) -> Option<usize> {
+        self.classes()
+            .iter()
+            .position(|class| class.qualified_name.canonical == name.canonical)
+            .or_else(|| {
+                let mut matches = self
+                    .classes()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, class)| class.name.canonical == name.canonical)
+                    .map(|(class_id, _)| class_id);
+                let first = matches.next()?;
+                matches.next().is_none().then_some(first)
+            })
     }
 
     fn evaluate_new_exception(
@@ -2290,11 +2587,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             cursor = self.classes()[class_id]
                 .superclass
                 .as_ref()
-                .and_then(|parent| {
-                    self.classes()
-                        .iter()
-                        .position(|class| class.name.canonical == parent.canonical)
-                });
+                .and_then(|parent| self.runtime_class_id(parent));
         }
         declared
     }
@@ -3331,14 +3624,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let TypeName::Custom(target) = target else {
                     return false;
                 };
-                let target_id = self
-                    .classes()
-                    .iter()
-                    .position(|class| class.name.canonical == target.canonical);
+                let target_id = self.runtime_class_id(target);
                 target_id.is_some_and(|target_id| {
                     self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
                 })
             }
+            Value::Enum { class_id, .. } => {
+                matches!(
+                    target,
+                    TypeName::Custom(name)
+                        if self.classes()[class_id.index()].qualified_name.canonical == name.canonical
+                )
+            }
+            Value::TypeLiteral(_) => matches!(target, TypeName::Type),
             Value::SObject(id) => {
                 let TypeName::Custom(target) = target else {
                     return false;
@@ -3352,10 +3650,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     || actual.api_name().eq_ignore_ascii_case(&target.spelling)
             }
             Value::AggregateResult(_) => matches!(target, TypeName::AggregateResult),
-            Value::Exception(exception) => {
-                matches!(target, TypeName::Exception)
-                    || exception.exception_type.as_deref() == Some(target.apex_name().as_str())
-            }
+            Value::Exception(exception) => self.exception_matches(exception, target),
             Value::Null(ty) => ty.as_ref().is_none_or(|ty| ty == target),
             Value::Void => false,
         }
@@ -3375,9 +3670,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Platform(id) => self.store.platform(*id).ty().apex_name(),
             Value::Collection(id) => self.collection_type(*id).apex_name(),
             Value::Object(id) => self.classes()[self.store.object(*id).class_id]
-                .name
+                .qualified_name
                 .spelling
                 .clone(),
+            Value::Enum { class_id, .. } => self.classes()[class_id.index()]
+                .qualified_name
+                .spelling
+                .clone(),
+            Value::TypeLiteral(_) => TypeName::Type.apex_name(),
             Value::SObject(id) => self
                 .program()
                 .schema()
@@ -3402,9 +3702,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return true;
         }
         if self.classes()[actual].interfaces.iter().any(|interface| {
-            self.classes()
-                .iter()
-                .position(|class| class.name.canonical == interface.canonical)
+            self.runtime_class_id(interface)
                 .is_some_and(|id| self.runtime_class_is_or_inherits(id, expected))
         }) {
             return true;
@@ -3412,12 +3710,32 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.classes()[actual]
             .superclass
             .as_ref()
-            .and_then(|parent| {
-                self.classes()
-                    .iter()
-                    .position(|class| class.name.canonical == parent.canonical)
-            })
+            .and_then(|parent| self.runtime_class_id(parent))
             .is_some_and(|parent| self.runtime_class_is_or_inherits(parent, expected))
+    }
+
+    fn exception_matches(&self, exception: &Diagnostic, catch_type: &TypeName) -> bool {
+        let Some(exception_type) = exception.exception_type.as_deref() else {
+            return false;
+        };
+        if matches!(catch_type, TypeName::Exception)
+            || exception_type.eq_ignore_ascii_case(&catch_type.apex_name())
+        {
+            return true;
+        }
+        let TypeName::Custom(catch_name) = catch_type else {
+            return false;
+        };
+        let actual = self.classes().iter().position(|class| {
+            class
+                .qualified_name
+                .spelling
+                .eq_ignore_ascii_case(exception_type)
+        });
+        let expected = self.runtime_class_id(catch_name);
+        actual
+            .zip(expected)
+            .is_some_and(|(actual, expected)| self.runtime_class_is_or_inherits(actual, expected))
     }
 
     fn collection_type(&self, id: CollectionId) -> TypeName {
@@ -3459,14 +3777,6 @@ impl<'program> Default for Interpreter<'program, RecordingHost> {
 
 fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::runtime_exception(exception_type, message, span)
-}
-
-fn exception_matches(exception: &Diagnostic, catch_type: &TypeName) -> bool {
-    let Some(exception_type) = exception.exception_type.as_deref() else {
-        return false;
-    };
-    matches!(catch_type, TypeName::Exception)
-        || exception_type.eq_ignore_ascii_case(&catch_type.apex_name())
 }
 
 fn typed_value(value: Value, ty: &TypeName) -> Value {

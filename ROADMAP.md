@@ -486,7 +486,7 @@ lexer indicators pass and are promoted into the ordinary test suite.
 
 ### M20 — Nested declarations, enums, and type literals
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 

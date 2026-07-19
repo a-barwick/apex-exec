@@ -379,6 +379,19 @@ impl Parser {
             TokenKind::DecimalLiteral(value) => Expression::DecimalLiteral(value, token.span),
             TokenKind::Null => Expression::NullLiteral(token.span),
             TokenKind::Identifier(spelling) => {
+                let mut probe = self.clone();
+                if probe.parse_type_name().is_ok()
+                    && probe.check(&TokenKind::Dot)
+                    && matches!(probe.peek(1).kind, TokenKind::Class)
+                {
+                    let (ty, type_span) = self.parse_type_name()?;
+                    self.advance();
+                    let end = self.advance();
+                    return Ok(Expression::TypeLiteral {
+                        ty,
+                        span: type_span.merge(end.span),
+                    });
+                }
                 let name = Identifier::new(spelling, token.span);
                 self.advance();
                 if self.check(&TokenKind::LeftParen) {
@@ -419,7 +432,7 @@ impl Parser {
 
     pub(super) fn parse_new_expression(&mut self) -> Result<Expression, Diagnostic> {
         let start = self.expect_simple(TokenKind::New, "expected `new`")?;
-        let (ty, _) = self.parse_base_type_name()?;
+        let (ty, _) = self.parse_type_name()?;
 
         if self.check(&TokenKind::LeftBracket) {
             return self.parse_new_array_expression(start, ty);

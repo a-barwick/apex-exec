@@ -2,13 +2,13 @@ use crate::{
     ast::{
         AccessorKind, AnnotationKind, AssignmentOperator, AssignmentTarget, BinaryOperator,
         CatchClause, ClassDeclaration, ClassKind, ClassMember, CollectionInitializer,
-        ConstructorDeclaration, Expression, Identifier, MethodDeclaration, Modifier,
-        PostfixOperator, Program, ReturnType, Statement, TriggerDeclaration, TypeName,
-        UnaryOperator,
+        ConstructorDeclaration, ConstructorDelegationKind, Expression, Identifier,
+        MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement,
+        TriggerDeclaration, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
-        self, CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassMemberId,
+        self, CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
         ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget,
         PlatformConstructor, ReferenceTarget, TriggerContextVariable,
     },
@@ -168,6 +168,7 @@ struct Checker {
     places: HashMap<Span, PlaceTarget>,
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
+    type_literals: HashMap<Span, TypeName>,
     queries: HashMap<Span, hir::CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, hir::AsyncClassContract>,
@@ -193,6 +194,7 @@ impl Checker {
             places: HashMap::new(),
             binary_operations: HashMap::new(),
             unary_operations: HashMap::new(),
+            type_literals: HashMap::new(),
             queries: HashMap::new(),
             null_aware_queries: HashSet::new(),
             async_contracts: HashMap::new(),
@@ -229,6 +231,7 @@ impl Checker {
                 places: self.places,
                 binary_operations: self.binary_operations,
                 unary_operations: self.unary_operations,
+                type_literals: self.type_literals,
                 queries: self.queries,
                 null_aware_queries: self.null_aware_queries,
                 async_contracts: self.async_contracts,
@@ -295,21 +298,28 @@ impl Checker {
 
     fn collect_classes(&mut self, program: &Program) -> Result<(), Diagnostic> {
         self.classes = program.classes.clone();
+        let mut short_names = HashMap::<String, Vec<usize>>::new();
         for (class_id, class) in self.classes.iter().enumerate() {
             if let Some(previous) = self
                 .class_ids
-                .insert(class.name.canonical.clone(), class_id)
+                .insert(class.qualified_name.canonical.clone(), class_id)
             {
                 let original = &self.classes[previous];
                 return Err(Diagnostic::new(
                     format!(
                         "duplicate type `{}`; first declared as `{}`",
-                        class.name.spelling, original.name.spelling
+                        class.qualified_name.spelling, original.qualified_name.spelling
                     ),
                     class.name.span,
                 ));
             }
-            if self.schema.object(&class.name.spelling).is_ok() || class.name.canonical == "sobject"
+            short_names
+                .entry(class.name.canonical.clone())
+                .or_default()
+                .push(class_id);
+            if class.enclosing_type.is_none()
+                && (self.schema.object(&class.name.spelling).is_ok()
+                    || class.name.canonical == "sobject")
             {
                 return Err(Diagnostic::new(
                     format!(
@@ -318,6 +328,11 @@ impl Checker {
                     ),
                     class.name.span,
                 ));
+            }
+        }
+        for (canonical, ids) in short_names {
+            if let [class_id] = ids.as_slice() {
+                self.class_ids.entry(canonical).or_insert(*class_id);
             }
         }
         Ok(())
@@ -338,16 +353,26 @@ impl Checker {
     fn validate_type_declaration_header(&self, class: &ClassDeclaration) -> Result<(), Diagnostic> {
         self.validate_test_class(class)?;
         validate_modifier_set(&class.modifiers, class.name.span, "type")?;
-        let mut rejected = vec![Modifier::Protected, Modifier::Static, Modifier::Override];
-        if !class_is_test(class) {
-            rejected.push(Modifier::Private);
+        let mut rejected = vec![Modifier::Override];
+        let subject = if class.enclosing_type.is_some() {
+            "nested type"
+        } else {
+            rejected.extend([Modifier::Protected, Modifier::Static]);
+            if !class_is_test(class) {
+                rejected.push(Modifier::Private);
+            }
+            "top-level type"
+        };
+        if class.kind == ClassKind::Enum {
+            rejected.extend([Modifier::Virtual, Modifier::Abstract]);
+            if class.superclass.is_some() || !class.interfaces.is_empty() {
+                return Err(Diagnostic::new(
+                    "enums cannot extend classes or implement interfaces",
+                    class.name.span,
+                ));
+            }
         }
-        reject_modifiers(
-            &class.modifiers,
-            &rejected,
-            class.name.span,
-            "top-level type",
-        )?;
+        reject_modifiers(&class.modifiers, &rejected, class.name.span, subject)?;
         if class.modifiers.iter().any(|modifier| {
             matches!(
                 modifier,
@@ -367,69 +392,107 @@ impl Checker {
         class: &ClassDeclaration,
     ) -> Result<Vec<usize>, Diagnostic> {
         let mut edges = Vec::new();
-        let mut saw_batchable = false;
+        let mut seen_interfaces = HashSet::new();
         if let Some(superclass) = &class.superclass {
-            if !superclass.type_arguments.is_empty() {
-                return Err(Diagnostic::new(
-                    "generic arguments are unsupported on inherited user-defined types",
-                    superclass.span,
-                ));
+            if let Some(parent_id) = self.validated_superclass(class, superclass)? {
+                edges.push(parent_id);
+            } else {
+                return Ok(edges);
             }
-            let parent_id = self
-                .class_ids
-                .get(&superclass.canonical)
-                .copied()
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown superclass `{}`", superclass.spelling),
-                        superclass.span,
-                    )
-                })?;
-            self.validate_superclass_edge(class, superclass, parent_id)?;
-            edges.push(parent_id);
         }
 
         for interface in &class.interfaces {
-            if is_platform_async_interface(&interface.canonical) {
-                if is_batchable_interface(&interface.canonical)
-                    && std::mem::replace(&mut saw_batchable, true)
-                {
-                    return Err(Diagnostic::new(
-                        "a class cannot implement Database.Batchable more than once",
-                        interface.span,
-                    ));
-                }
-                self.validate_platform_interface_edge(class, interface)?;
-                continue;
-            }
-            if !interface.type_arguments.is_empty() {
+            if !seen_interfaces.insert(interface.canonical.clone()) {
                 return Err(Diagnostic::new(
                     format!(
-                        "generic arguments on user-defined interface `{}` are unsupported",
+                        "a type cannot implement interface `{}` more than once",
                         interface.spelling
                     ),
                     interface.span,
                 ));
             }
-            let interface_id = self
-                .class_ids
-                .get(&interface.canonical)
-                .copied()
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown interface `{}`", interface.spelling),
-                        interface.span,
-                    )
-                })?;
-            if self.classes[interface_id].kind != ClassKind::Interface {
-                return Err(Diagnostic::new(
-                    format!("`{}` is not an interface", interface.spelling),
-                    interface.span,
-                ));
+            if let Some(interface_id) = self.validated_interface(class, interface)? {
+                edges.push(interface_id);
             }
-            edges.push(interface_id);
         }
         Ok(edges)
+    }
+
+    fn validated_superclass(
+        &self,
+        class: &ClassDeclaration,
+        superclass: &crate::ast::NamedType,
+    ) -> Result<Option<usize>, Diagnostic> {
+        if !superclass.type_arguments.is_empty() {
+            return Err(Diagnostic::new(
+                "generic arguments are unsupported on inherited user-defined types",
+                superclass.span,
+            ));
+        }
+        if superclass.canonical == "exception" {
+            if class.kind != ClassKind::Class {
+                return Err(Diagnostic::new(
+                    "only classes can extend Exception",
+                    superclass.span,
+                ));
+            }
+            if !class.interfaces.is_empty() {
+                return Err(Diagnostic::new(
+                    "custom exception classes cannot implement interfaces in the supported profile",
+                    class.interfaces[0].span,
+                ));
+            }
+            return Ok(None);
+        }
+        let parent_id = self
+            .class_ids
+            .get(&superclass.canonical)
+            .copied()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown superclass `{}`", superclass.spelling),
+                    superclass.span,
+                )
+            })?;
+        self.validate_superclass_edge(class, superclass, parent_id)?;
+        Ok(Some(parent_id))
+    }
+
+    fn validated_interface(
+        &self,
+        class: &ClassDeclaration,
+        interface: &crate::ast::NamedType,
+    ) -> Result<Option<usize>, Diagnostic> {
+        if is_platform_async_interface(&interface.canonical) {
+            self.validate_platform_interface_edge(class, interface)?;
+            return Ok(None);
+        }
+        if !interface.type_arguments.is_empty() {
+            return Err(Diagnostic::new(
+                format!(
+                    "generic arguments on user-defined interface `{}` are unsupported",
+                    interface.spelling
+                ),
+                interface.span,
+            ));
+        }
+        let interface_id = self
+            .class_ids
+            .get(&interface.canonical)
+            .copied()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown interface `{}`", interface.spelling),
+                    interface.span,
+                )
+            })?;
+        if self.classes[interface_id].kind != ClassKind::Interface {
+            return Err(Diagnostic::new(
+                format!("`{}` is not an interface", interface.spelling),
+                interface.span,
+            ));
+        }
+        Ok(Some(interface_id))
     }
 
     fn validate_superclass_edge(
@@ -550,31 +613,9 @@ impl Checker {
         let members = self.classes[class_id].members.clone();
         let result = (|| {
             for member in &members {
-                match member {
-                    ClassMember::Field(field) => {
-                        self.validate_type(&field.ty, field.name.span)?;
-                        self.current_static = field.modifiers.contains(&Modifier::Static);
-                        if let Some(initializer) = &field.initializer {
-                            let actual =
-                                self.expression_type_for_expected(initializer, &field.ty)?;
-                            self.require_assignable(&field.ty, &actual, initializer.span())?;
-                        }
-                    }
-                    ClassMember::Constructor(constructor) => {
-                        self.current_static = false;
-                        self.check_constructor(constructor)?;
-                    }
-                    ClassMember::Method(method) => {
-                        self.current_static = method.modifiers.contains(&Modifier::Static);
-                        self.check_method(method)?;
-                    }
-                    ClassMember::Property(property) => {
-                        self.validate_type(&property.ty, property.name.span)?;
-                        self.current_static = property.modifiers.contains(&Modifier::Static);
-                        self.check_property_accessors(property)?;
-                    }
-                }
+                self.check_class_member(member)?;
             }
+            self.validate_constructor_delegation_cycles(class_id)?;
             Ok(())
         })();
         self.current_class = saved_class;
@@ -582,11 +623,43 @@ impl Checker {
         result
     }
 
+    fn check_class_member(&mut self, member: &ClassMember) -> Result<(), Diagnostic> {
+        match member {
+            ClassMember::Field(field) => {
+                self.validate_type(&field.ty, field.name.span)?;
+                self.current_static = field.modifiers.contains(&Modifier::Static);
+                if let Some(initializer) = &field.initializer {
+                    let actual = self.expression_type_for_expected(initializer, &field.ty)?;
+                    self.require_assignable(&field.ty, &actual, initializer.span())?;
+                }
+                Ok(())
+            }
+            ClassMember::Constructor(constructor) => {
+                self.current_static = false;
+                self.check_constructor(constructor)
+            }
+            ClassMember::Method(method) => {
+                self.current_static = method.modifiers.contains(&Modifier::Static);
+                self.check_method(method)
+            }
+            ClassMember::Property(property) => {
+                self.validate_type(&property.ty, property.name.span)?;
+                self.current_static = property.modifiers.contains(&Modifier::Static);
+                self.check_property_accessors(property)
+            }
+            ClassMember::Initializer(initializer) => {
+                self.current_static = initializer.is_static;
+                self.check_method_body(&initializer.body)
+            }
+        }
+    }
+
     fn validate_class_member_declarations(&self, class_id: usize) -> Result<(), Diagnostic> {
         let class = &self.classes[class_id];
         let mut values = HashMap::<String, Span>::new();
         let mut methods = HashMap::<(String, Vec<TypeName>), Span>::new();
         let mut constructors = HashMap::<Vec<TypeName>, Span>::new();
+        self.validate_enum_constants(class, &mut values)?;
         for member in &class.members {
             match member {
                 ClassMember::Field(field) => {
@@ -660,43 +733,7 @@ impl Checker {
                     }
                 }
                 ClassMember::Constructor(constructor) => {
-                    validate_modifier_set(
-                        &constructor.modifiers,
-                        constructor.name.span,
-                        "constructor",
-                    )?;
-                    reject_modifiers(
-                        &constructor.modifiers,
-                        &[
-                            Modifier::Static,
-                            Modifier::Virtual,
-                            Modifier::Abstract,
-                            Modifier::Override,
-                            Modifier::Final,
-                        ],
-                        constructor.name.span,
-                        "constructor",
-                    )?;
-                    let signature = constructor
-                        .parameters
-                        .iter()
-                        .map(|parameter| parameter.ty.clone())
-                        .collect::<Vec<_>>();
-                    if constructors
-                        .insert(signature, constructor.name.span)
-                        .is_some()
-                    {
-                        return Err(Diagnostic::new(
-                            "duplicate constructor overload",
-                            constructor.name.span,
-                        ));
-                    }
-                    if class.kind == ClassKind::Interface {
-                        return Err(Diagnostic::new(
-                            "interfaces cannot declare constructors",
-                            constructor.name.span,
-                        ));
-                    }
+                    self.validate_constructor_declaration(class, constructor, &mut constructors)?;
                 }
                 ClassMember::Method(method) => {
                     self.validate_test_method(class, method)?;
@@ -763,7 +800,91 @@ impl Checker {
                         ));
                     }
                 }
+                ClassMember::Initializer(initializer) => {
+                    self.validate_initializer_declaration(class, initializer)?;
+                }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_enum_constants(
+        &self,
+        class: &ClassDeclaration,
+        values: &mut HashMap<String, Span>,
+    ) -> Result<(), Diagnostic> {
+        for constant in &class.enum_constants {
+            if values
+                .insert(constant.canonical.clone(), constant.span)
+                .is_some()
+            {
+                return Err(Diagnostic::new(
+                    format!("duplicate enum constant `{}`", constant.spelling),
+                    constant.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_constructor_declaration(
+        &self,
+        class: &ClassDeclaration,
+        constructor: &ConstructorDeclaration,
+        constructors: &mut HashMap<Vec<TypeName>, Span>,
+    ) -> Result<(), Diagnostic> {
+        if class.kind == ClassKind::Enum {
+            return Err(Diagnostic::new(
+                "enum constructors are not supported",
+                constructor.name.span,
+            ));
+        }
+        validate_modifier_set(&constructor.modifiers, constructor.name.span, "constructor")?;
+        reject_modifiers(
+            &constructor.modifiers,
+            &[
+                Modifier::Static,
+                Modifier::Virtual,
+                Modifier::Abstract,
+                Modifier::Override,
+                Modifier::Final,
+            ],
+            constructor.name.span,
+            "constructor",
+        )?;
+        let signature = constructor
+            .parameters
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .collect::<Vec<_>>();
+        if constructors
+            .insert(signature, constructor.name.span)
+            .is_some()
+        {
+            return Err(Diagnostic::new(
+                "duplicate constructor overload",
+                constructor.name.span,
+            ));
+        }
+        if class.kind == ClassKind::Interface {
+            return Err(Diagnostic::new(
+                "interfaces cannot declare constructors",
+                constructor.name.span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_initializer_declaration(
+        &self,
+        class: &ClassDeclaration,
+        initializer: &crate::ast::InitializerBlock,
+    ) -> Result<(), Diagnostic> {
+        if class.kind == ClassKind::Interface {
+            return Err(Diagnostic::new(
+                "interfaces cannot declare initializer blocks",
+                initializer.span,
+            ));
         }
         Ok(())
     }
@@ -864,6 +985,7 @@ impl Checker {
 
     fn validate_class_contracts(&self, class_id: usize) -> Result<(), Diagnostic> {
         let class = &self.classes[class_id];
+        self.validate_required_method_returns(class_id)?;
         for signature in self.own_class_methods(class_id) {
             let method = self.method_declaration(signature.target);
             let inherited = self
@@ -916,20 +1038,66 @@ impl Checker {
             }
         }
 
-        if class.kind == ClassKind::Class && !class.modifiers.contains(&Modifier::Abstract) {
-            for required in self.required_abstract_methods(class_id) {
-                if self
-                    .find_concrete_implementation(class_id, &required)
-                    .is_none()
-                {
-                    let method = self.method_declaration(required.target);
-                    return Err(Diagnostic::new(
-                        format!(
-                            "non-abstract class `{}` must implement method `{}`",
-                            class.name.spelling, method.name.spelling
-                        ),
-                        class.name.span,
-                    ));
+        self.validate_concrete_class_requirements(class_id)
+    }
+
+    fn validate_concrete_class_requirements(&self, class_id: usize) -> Result<(), Diagnostic> {
+        let class = &self.classes[class_id];
+        if class.kind != ClassKind::Class || class.modifiers.contains(&Modifier::Abstract) {
+            return Ok(());
+        }
+        for required in self.required_abstract_methods(class_id) {
+            if self
+                .find_concrete_implementation(class_id, &required)
+                .is_none()
+            {
+                let method = self.method_declaration(required.target);
+                return Err(Diagnostic::new(
+                    format!(
+                        "non-abstract class `{}` must implement method `{}`",
+                        class.name.spelling, method.name.spelling
+                    ),
+                    class.name.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_required_method_returns(&self, class_id: usize) -> Result<(), Diagnostic> {
+        let mut returns = HashMap::<(String, Vec<TypeName>), ReturnType>::new();
+        let mut pending = vec![class_id];
+        let mut visited = vec![false; self.classes.len()];
+        while let Some(current) = pending.pop() {
+            if std::mem::replace(&mut visited[current], true) {
+                continue;
+            }
+            if self.classes[current].kind == ClassKind::Interface {
+                for signature in self.own_class_methods(current) {
+                    let key = (signature.name.clone(), signature.parameter_types.clone());
+                    if let Some(previous) = returns.get(&key)
+                        && previous != &signature.return_type
+                    {
+                        let method = self.method_declaration(signature.target);
+                        return Err(Diagnostic::new(
+                            format!(
+                                "inherited interface method `{}` has conflicting return types {} and {}",
+                                method.name.spelling,
+                                previous.apex_name(),
+                                signature.return_type.apex_name()
+                            ),
+                            method.name.span,
+                        ));
+                    }
+                    returns.insert(key, signature.return_type);
+                }
+            }
+            if let Some(parent) = self.parent_class_id(current) {
+                pending.push(parent);
+            }
+            for interface in &self.classes[current].interfaces {
+                if !is_platform_async_interface(&interface.canonical) {
+                    pending.push(self.class_ids[&interface.canonical]);
                 }
             }
         }
@@ -1110,6 +1278,35 @@ impl Checker {
             .superclass
             .as_ref()
             .and_then(|name| self.class_ids.get(&name.canonical).copied())
+    }
+
+    fn class_is_custom_exception(&self, class_id: usize) -> bool {
+        let mut current = Some(class_id);
+        let mut visited = vec![false; self.classes.len()];
+        while let Some(id) = current {
+            if std::mem::replace(&mut visited[id], true) {
+                return false;
+            }
+            let Some(superclass) = &self.classes[id].superclass else {
+                return false;
+            };
+            if superclass.canonical == "exception" {
+                return true;
+            }
+            current = self.class_ids.get(&superclass.canonical).copied();
+        }
+        false
+    }
+
+    fn is_exception_type(&self, ty: &TypeName) -> bool {
+        ty.is_exception()
+            || matches!(
+                ty,
+                TypeName::Custom(name)
+                    if self.class_ids
+                        .get(&name.canonical)
+                        .is_some_and(|class_id| self.class_is_custom_exception(*class_id))
+            )
     }
 
     fn own_class_methods(&self, class_id: usize) -> Vec<ClassMethodSignature> {
@@ -1332,12 +1529,51 @@ impl Checker {
                     span,
                 ))
             }
-            TypeName::List(element) | TypeName::Set(element) => self.validate_type(element, span),
+            TypeName::Custom(name) => {
+                if let Some(class_id) = self.class_ids.get(&name.canonical).copied() {
+                    self.ensure_type_access(class_id, span)
+                } else {
+                    Ok(())
+                }
+            }
+            TypeName::List(element) | TypeName::Set(element) | TypeName::Iterable(element) => {
+                self.validate_type(element, span)
+            }
             TypeName::Map(key, value) => {
                 self.validate_type(key, span)?;
                 self.validate_type(value, span)
             }
             _ => Ok(()),
+        }
+    }
+
+    fn ensure_type_access(&self, class_id: usize, span: Span) -> Result<(), Diagnostic> {
+        let class = &self.classes[class_id];
+        if class.enclosing_type.is_none()
+            || class.modifiers.contains(&Modifier::Public)
+            || class.modifiers.contains(&Modifier::Global)
+        {
+            return Ok(());
+        }
+        let same_outer = self.current_class.is_some_and(|current| {
+            outermost_type(&self.classes[current].qualified_name.canonical)
+                == outermost_type(&class.qualified_name.canonical)
+        });
+        if same_outer
+            || (class.modifiers.contains(&Modifier::Protected)
+                && self
+                    .current_class
+                    .is_some_and(|current| self.class_is_or_inherits(current, class_id)))
+        {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!(
+                    "nested type `{}` is not accessible here",
+                    class.qualified_name.spelling
+                ),
+                span,
+            ))
         }
     }
 
@@ -1358,7 +1594,12 @@ impl Checker {
         {
             return true;
         }
-        if *expected == TypeName::Exception && actual.is_exception() {
+        if let (TypeName::List(actual) | TypeName::Set(actual), TypeName::Iterable(expected)) =
+            (actual, expected)
+        {
+            return actual == expected;
+        }
+        if *expected == TypeName::Exception && self.is_exception_type(actual) {
             return true;
         }
         if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
@@ -1447,12 +1688,167 @@ impl Checker {
         let saved_return_type = self.return_type.replace(ReturnType::Void);
         let result = (|| {
             self.bind_parameters(&constructor.parameters)?;
+            if let Some(delegation) = &constructor.delegation {
+                self.check_constructor_delegation(constructor, delegation)?;
+            }
             self.check_method_body(&constructor.body)
         })();
         self.scopes = saved_scopes;
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
         result
+    }
+
+    fn check_constructor_delegation(
+        &mut self,
+        constructor: &ConstructorDeclaration,
+        delegation: &crate::ast::ConstructorDelegation,
+    ) -> Result<(), Diagnostic> {
+        let current = self
+            .current_class
+            .expect("constructors have a declaring class");
+        let target_class = match delegation.kind {
+            ConstructorDelegationKind::This => current,
+            ConstructorDelegationKind::Super => self.parent_class_id(current).ok_or_else(|| {
+                Diagnostic::new(
+                    "`super(...)` requires a user-defined superclass",
+                    delegation.span,
+                )
+            })?,
+        };
+        let constructors =
+            self.delegated_constructor_candidates(current, target_class, constructor.span);
+        if constructors.is_empty() {
+            return self.check_implicit_delegated_constructor(target_class, delegation);
+        }
+        let argument_types = delegation
+            .arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>()?;
+        let applicable = constructors
+            .iter()
+            .filter(|(_, candidate)| {
+                candidate.parameters.len() == argument_types.len()
+                    && candidate
+                        .parameters
+                        .iter()
+                        .zip(&argument_types)
+                        .all(|(parameter, actual)| self.is_assignable(&parameter.ty, actual))
+            })
+            .collect::<Vec<_>>();
+        let selected = self.select_constructor(&applicable).ok_or_else(|| {
+            Diagnostic::new("no unique matching delegated constructor", delegation.span)
+        })?;
+        self.ensure_member_access(selected.0, &selected.1.modifiers, delegation.span)?;
+        self.calls.insert(
+            delegation.span,
+            CallTarget::Constructor {
+                class_id: target_class,
+                member_id: Some(selected.0.member_id),
+            },
+        );
+        Ok(())
+    }
+
+    fn delegated_constructor_candidates(
+        &self,
+        current: usize,
+        target_class: usize,
+        current_constructor_span: Span,
+    ) -> Vec<(ClassMemberId, ConstructorDeclaration)> {
+        self.classes[target_class]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(member_id, member)| {
+                let ClassMember::Constructor(candidate) = member else {
+                    return None;
+                };
+                if target_class == current && candidate.span == current_constructor_span {
+                    return None;
+                }
+                Some((
+                    ClassMemberId {
+                        class_id: target_class,
+                        member_id,
+                    },
+                    candidate.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    fn check_implicit_delegated_constructor(
+        &mut self,
+        target_class: usize,
+        delegation: &crate::ast::ConstructorDelegation,
+    ) -> Result<(), Diagnostic> {
+        for argument in &delegation.arguments {
+            self.expression_type(argument)?;
+        }
+        if delegation.arguments.is_empty() && delegation.kind == ConstructorDelegationKind::Super {
+            self.calls.insert(
+                delegation.span,
+                CallTarget::Constructor {
+                    class_id: target_class,
+                    member_id: None,
+                },
+            );
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                "no matching delegated constructor",
+                delegation.span,
+            ))
+        }
+    }
+
+    fn validate_constructor_delegation_cycles(&self, class_id: usize) -> Result<(), Diagnostic> {
+        let constructors = self.classes[class_id]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(member_id, member)| {
+                matches!(member, ClassMember::Constructor(_)).then_some(member_id)
+            })
+            .collect::<Vec<_>>();
+        for root in constructors {
+            let mut seen = HashSet::new();
+            let mut current = root;
+            loop {
+                if !seen.insert(current) {
+                    let constructor = match &self.classes[class_id].members[current] {
+                        ClassMember::Constructor(constructor) => constructor,
+                        _ => unreachable!(),
+                    };
+                    return Err(Diagnostic::new(
+                        "cyclic `this(...)` constructor delegation",
+                        constructor.span,
+                    ));
+                }
+                let ClassMember::Constructor(constructor) =
+                    &self.classes[class_id].members[current]
+                else {
+                    break;
+                };
+                let Some(delegation) = &constructor.delegation else {
+                    break;
+                };
+                let Some(CallTarget::Constructor {
+                    class_id: target_class,
+                    member_id: Some(target_member),
+                }) = self.calls.get(&delegation.span).copied()
+                else {
+                    break;
+                };
+                if target_class != class_id || delegation.kind != ConstructorDelegationKind::This {
+                    break;
+                }
+                current = target_member;
+            }
+        }
+        Ok(())
     }
 
     fn check_property_accessors(
@@ -1684,20 +2080,7 @@ impl Checker {
                 body,
                 ..
             } => {
-                let iterable_type = self.expression_type(iterable)?;
-                let actual_element_type = match iterable_type {
-                    ExpressionType::Value(TypeName::List(element))
-                    | ExpressionType::Value(TypeName::Set(element)) => *element,
-                    other => {
-                        return Err(Diagnostic::new(
-                            format!(
-                                "enhanced for-loop requires List or Set, found {}",
-                                other.name()
-                            ),
-                            iterable.span(),
-                        ));
-                    }
-                };
+                let actual_element_type = self.iterable_element_type(iterable)?;
                 self.require_assignable(
                     element_type,
                     &ExpressionType::Value(actual_element_type),
@@ -1745,7 +2128,7 @@ impl Checker {
             }
             Statement::Throw { value, .. } => {
                 let actual = self.expression_type(value)?;
-                if matches!(&actual, ExpressionType::Value(ty) if ty.is_exception())
+                if matches!(&actual, ExpressionType::Value(ty) if self.is_exception_type(ty))
                     || actual == ExpressionType::Null
                 {
                     Ok(())
@@ -1761,11 +2144,26 @@ impl Checker {
         }
     }
 
+    fn iterable_element_type(&mut self, iterable: &Expression) -> Result<TypeName, Diagnostic> {
+        match self.expression_type(iterable)? {
+            ExpressionType::Value(TypeName::List(element))
+            | ExpressionType::Value(TypeName::Set(element))
+            | ExpressionType::Value(TypeName::Iterable(element)) => Ok(*element),
+            other => Err(Diagnostic::new(
+                format!(
+                    "enhanced for-loop requires List or Set, found {}",
+                    other.name()
+                ),
+                iterable.span(),
+            )),
+        }
+    }
+
     fn check_catches(&mut self, catches: &[CatchClause]) -> Result<(), Diagnostic> {
         let mut catches_everything = false;
         let mut seen = Vec::new();
         for catch in catches {
-            if !catch.exception_type.is_exception() {
+            if !self.is_exception_type(&catch.exception_type) {
                 return Err(Diagnostic::new(
                     format!(
                         "catch type must be an Exception, found {}",
@@ -1774,7 +2172,7 @@ impl Checker {
                     catch.span,
                 ));
             }
-            if catches_everything || seen.contains(&catch.exception_type) {
+            if self.catch_is_unreachable(&catch.exception_type, &seen, catches_everything) {
                 return Err(Diagnostic::new(
                     format!("unreachable catch for {}", catch.exception_type.apex_name()),
                     catch.span,
@@ -1791,6 +2189,18 @@ impl Checker {
             })?;
         }
         Ok(())
+    }
+
+    fn catch_is_unreachable(
+        &self,
+        exception_type: &TypeName,
+        seen: &[TypeName],
+        catches_everything: bool,
+    ) -> bool {
+        catches_everything
+            || seen
+                .iter()
+                .any(|previous| self.is_subtype(exception_type, previous))
     }
 
     fn check_return(
@@ -1891,6 +2301,12 @@ impl Checker {
             Expression::Soql(query) => self.soql_type(query, None),
             Expression::Sosl(query) => self.sosl_type(query),
             Expression::Variable(identifier) => self.variable_type(identifier),
+            Expression::TypeLiteral { ty, span } => {
+                self.validate_type(ty, *span)?;
+                self.type_literals
+                    .insert(*span, self.canonical_type_name(ty));
+                Ok(ExpressionType::Value(TypeName::Type))
+            }
             Expression::Assignment { .. } => self.assignment_expression_type(expression),
             Expression::NewCollection { .. } => self.new_collection_expression_type(expression),
             Expression::NewException {
@@ -2192,12 +2608,10 @@ impl Checker {
         }
         let class_id = self.class_ids[&name.canonical];
         let class = &self.classes[class_id];
-        if class.kind == ClassKind::Interface || class.modifiers.contains(&Modifier::Abstract) {
-            return Err(Diagnostic::new(
-                format!("cannot construct abstract type `{}`", name.spelling),
-                span,
-            ));
+        if self.class_is_custom_exception(class_id) {
+            return self.new_custom_exception_type(class_id, ty, arguments, span);
         }
+        self.validate_constructable_class(class_id, name, span)?;
         let constructors = class
             .members
             .iter()
@@ -2273,6 +2687,67 @@ impl Checker {
         Ok(ExpressionType::Value(ty.clone()))
     }
 
+    fn new_custom_exception_type(
+        &mut self,
+        class_id: usize,
+        ty: &TypeName,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if self.classes[class_id]
+            .members
+            .iter()
+            .any(|member| matches!(member, ClassMember::Constructor(_)))
+        {
+            return Err(Diagnostic::new(
+                "custom exception constructors are not supported; use inherited zero- or one-String-argument construction",
+                span,
+            ));
+        }
+        match arguments {
+            [] => {}
+            [message] => self.require_operand(message, &TypeName::String, message.span())?,
+            _ => {
+                for argument in arguments {
+                    self.expression_type(argument)?;
+                }
+                return Err(Diagnostic::new(
+                    "custom exception constructor expects zero arguments or one String",
+                    span,
+                ));
+            }
+        }
+        self.calls.insert(
+            span,
+            CallTarget::CustomExceptionConstructor {
+                class_id: ClassId::from_index(class_id),
+            },
+        );
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn validate_constructable_class(
+        &self,
+        class_id: usize,
+        name: &crate::ast::NamedType,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let class = &self.classes[class_id];
+        if class.kind == ClassKind::Enum {
+            return Err(Diagnostic::new(
+                format!("cannot construct enum `{}`", name.spelling),
+                span,
+            ));
+        }
+        if class.kind == ClassKind::Interface || class.modifiers.contains(&Modifier::Abstract) {
+            return Err(Diagnostic::new(
+                format!("cannot construct abstract type `{}`", name.spelling),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
     fn select_constructor<'a>(
         &self,
         applicable: &[&'a (ClassMemberId, ConstructorDeclaration)],
@@ -2307,6 +2782,9 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
+        if let Some(result) = self.qualified_type_reference(receiver, name, span, for_write) {
+            return result;
+        }
         if let Expression::Variable(identifier) = receiver
             && identifier.canonical == "trigger"
         {
@@ -2447,32 +2925,12 @@ impl Checker {
             );
             return Ok(ExpressionType::Value(field_type));
         }
-        let (class_id, static_access) = if let Expression::Variable(identifier) = receiver {
-            if let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
-                && (self
-                    .class_value_member(class_id, &name.canonical)
-                    .is_some_and(|member| member.modifiers.contains(&Modifier::Static))
-                    || (self.lookup(&identifier.canonical).is_none()
-                        && self
-                            .current_class
-                            .and_then(|id| self.class_value_member(id, &identifier.canonical))
-                            .is_none()))
-            {
-                (class_id, true)
-            } else {
-                let receiver_type = self.expression_type(receiver)?;
-                (
-                    self.class_id_from_expression(&receiver_type, receiver.span())?,
-                    false,
-                )
-            }
-        } else {
-            let receiver_type = self.expression_type(receiver)?;
-            (
-                self.class_id_from_expression(&receiver_type, receiver.span())?,
-                false,
-            )
-        };
+        let (class_id, static_access) = self.member_receiver_class(receiver, name)?;
+        if let Some(result) =
+            self.enum_constant_type(class_id, static_access, name, span, for_write)
+        {
+            return result;
+        }
         let member = self
             .class_value_member(class_id, &name.canonical)
             .ok_or_else(|| {
@@ -2530,6 +2988,96 @@ impl Checker {
         Ok(ExpressionType::Value(member.ty))
     }
 
+    fn qualified_type_reference(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let owner = qualified_expression_name(receiver)?;
+        let qualified = format!("{owner}.{}", name.canonical);
+        let class_id = self.class_ids.get(&qualified).copied()?;
+        if for_write {
+            return Some(Err(Diagnostic::new(
+                "type references are not assignable",
+                name.span,
+            )));
+        }
+        self.members.insert(
+            span,
+            MemberTarget::TypeReference {
+                class_id: ClassId::from_index(class_id),
+            },
+        );
+        Some(Ok(ExpressionType::Value(TypeName::Type)))
+    }
+
+    fn member_receiver_class(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+    ) -> Result<(usize, bool), Diagnostic> {
+        if let Some(MemberTarget::TypeReference { class_id }) = self.members.get(&receiver.span()) {
+            return Ok((class_id.index(), true));
+        }
+        if let Expression::Variable(identifier) = receiver
+            && let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
+            && (self
+                .class_value_member(class_id, &name.canonical)
+                .is_some_and(|member| member.modifiers.contains(&Modifier::Static))
+                || (self.lookup(&identifier.canonical).is_none()
+                    && self
+                        .current_class
+                        .and_then(|id| self.class_value_member(id, &identifier.canonical))
+                        .is_none()))
+        {
+            return Ok((class_id, true));
+        }
+        let receiver_type = self.expression_type(receiver)?;
+        Ok((
+            self.class_id_from_expression(&receiver_type, receiver.span())?,
+            false,
+        ))
+    }
+
+    fn enum_constant_type(
+        &mut self,
+        class_id: usize,
+        static_access: bool,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if self.classes[class_id].kind != ClassKind::Enum {
+            return None;
+        }
+        let ordinal = self.classes[class_id]
+            .enum_constants
+            .iter()
+            .position(|constant| constant.canonical == name.canonical)?;
+        if !static_access {
+            return Some(Err(Diagnostic::new(
+                "enum constants must be accessed through their enum type",
+                name.span,
+            )));
+        }
+        if for_write {
+            return Some(Err(Diagnostic::new(
+                "enum constants are read-only",
+                name.span,
+            )));
+        }
+        self.members.insert(
+            span,
+            MemberTarget::EnumConstant {
+                class_id: ClassId::from_index(class_id),
+                ordinal,
+            },
+        );
+        Some(Ok(ExpressionType::Value(self.class_type(class_id))))
+    }
+
     fn class_id_from_expression(
         &self,
         ty: &ExpressionType,
@@ -2564,9 +3112,28 @@ impl Checker {
     fn class_type(&self, class_id: usize) -> TypeName {
         let class = &self.classes[class_id];
         TypeName::Custom(crate::ast::NamedType::new(
-            class.name.spelling.clone(),
+            class.qualified_name.spelling.clone(),
             class.name.span,
         ))
+    }
+
+    fn canonical_type_name(&self, ty: &TypeName) -> TypeName {
+        match ty {
+            TypeName::Custom(name) => self
+                .class_ids
+                .get(&name.canonical)
+                .map_or_else(|| ty.clone(), |class_id| self.class_type(*class_id)),
+            TypeName::List(element) => TypeName::List(Box::new(self.canonical_type_name(element))),
+            TypeName::Set(element) => TypeName::Set(Box::new(self.canonical_type_name(element))),
+            TypeName::Iterable(element) => {
+                TypeName::Iterable(Box::new(self.canonical_type_name(element)))
+            }
+            TypeName::Map(key, value) => TypeName::Map(
+                Box::new(self.canonical_type_name(key)),
+                Box::new(self.canonical_type_name(value)),
+            ),
+            _ => ty.clone(),
+        }
     }
 
     fn ensure_member_access(
@@ -2732,8 +3299,8 @@ impl Checker {
                         && matches!(target, TypeName::Integer | TypeName::Long))
                     || *source == TypeName::Object
                     || *target == TypeName::Object
-                    || (*source == TypeName::Exception && target.is_exception())
-                    || (*target == TypeName::Exception && source.is_exception())
+                    || (*source == TypeName::Exception && self.is_exception_type(target))
+                    || (*target == TypeName::Exception && self.is_exception_type(source))
                     || self.is_subtype(source, target)
                     || self.is_subtype(target, source)
             }
@@ -2978,7 +3545,12 @@ impl Checker {
                 object_id: ObjectTypeId::from_index(object_id),
                 field_id: FieldId::from_index(field_id),
             },
-            Some(MemberTarget::SObjectRelationship { .. } | MemberTarget::TriggerContext(_))
+            Some(
+                MemberTarget::SObjectRelationship { .. }
+                | MemberTarget::TriggerContext(_)
+                | MemberTarget::EnumConstant { .. }
+                | MemberTarget::TypeReference { .. },
+            )
             | None => return Err(Diagnostic::new("member is not assignable", span)),
         };
         self.places.insert(span, place);
@@ -3008,6 +3580,9 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        if let Some(result) = self.qualified_type_method_call(receiver, method, arguments, span) {
+            return result;
+        }
         let result = if let Expression::Variable(identifier) = receiver {
             if let Some(receiver_type) = self.lookup(&identifier.canonical).cloned() {
                 let static_candidates =
@@ -3045,25 +3620,10 @@ impl Checker {
                         .insert(identifier.span, ReferenceTarget::Local);
                     self.instance_method_type(&receiver_type, method, arguments, span, false)
                 }
-            } else if let Some(class_id) = self.class_ids.get(&identifier.canonical).copied()
-                && self
-                    .current_class
-                    .and_then(|id| self.class_value_member(id, &identifier.canonical))
-                    .is_none()
+            } else if let Some(result) =
+                self.unbound_class_method_call(identifier, method, arguments, span)
             {
-                let argument_types = arguments
-                    .iter()
-                    .map(|argument| self.expression_type(argument))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let candidates = self.class_methods_named(class_id, &method.canonical);
-                self.select_class_method_call(
-                    class_id,
-                    method,
-                    &argument_types,
-                    candidates,
-                    ClassCallKind::Static,
-                    span,
-                )
+                result
             } else {
                 match identifier.canonical.as_str() {
                     "database" if method.canonical == "executebatch" => self
@@ -3128,6 +3688,80 @@ impl Checker {
             }
             error
         })
+    }
+
+    fn qualified_type_method_call(
+        &mut self,
+        receiver: &Expression,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if matches!(receiver, Expression::Variable(_)) {
+            return None;
+        }
+        if let Err(error) = self.expression_type(receiver) {
+            return Some(Err(error));
+        }
+        let MemberTarget::TypeReference { class_id } =
+            self.members.get(&receiver.span()).copied()?
+        else {
+            return None;
+        };
+        let class_id = class_id.index();
+        if self.classes[class_id].kind == ClassKind::Enum {
+            return Some(self.enum_method_type(class_id, method, arguments, true, span));
+        }
+        let argument_types = arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>();
+        Some(argument_types.and_then(|argument_types| {
+            let candidates = self.class_methods_named(class_id, &method.canonical);
+            self.select_class_method_call(
+                class_id,
+                method,
+                &argument_types,
+                candidates,
+                ClassCallKind::Static,
+                span,
+            )
+        }))
+    }
+
+    fn unbound_class_method_call(
+        &mut self,
+        identifier: &Identifier,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let class_id = self.class_ids.get(&identifier.canonical).copied()?;
+        if self
+            .current_class
+            .and_then(|id| self.class_value_member(id, &identifier.canonical))
+            .is_some()
+        {
+            return None;
+        }
+        if self.classes[class_id].kind == ClassKind::Enum {
+            return Some(self.enum_method_type(class_id, method, arguments, true, span));
+        }
+        let argument_types = arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>();
+        Some(argument_types.and_then(|argument_types| {
+            let candidates = self.class_methods_named(class_id, &method.canonical);
+            self.select_class_method_call(
+                class_id,
+                method,
+                &argument_types,
+                candidates,
+                ClassCallKind::Static,
+                span,
+            )
+        }))
     }
 
     fn instance_method_type(
@@ -3212,33 +3846,93 @@ impl Checker {
             | TypeName::DescribeSObjectResult => {
                 self.platform_instance_method_type(receiver_type, method, arguments)?
             }
-            ty if ty.is_exception() => {
+            ty if self.is_exception_type(ty) => {
                 self.exception_instance_method_type(receiver_type, method, arguments)?
             }
             TypeName::Custom(name) => {
-                let class_id = self.class_ids[&name.canonical];
-                let argument_types = arguments
-                    .iter()
-                    .map(|argument| self.expression_type(argument))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let candidates = self.class_methods_named(class_id, &method.canonical);
-                return self.select_class_method_call(
-                    class_id,
-                    method,
-                    &argument_types,
-                    candidates,
-                    if super_call {
-                        ClassCallKind::Super
-                    } else {
-                        ClassCallKind::Instance
-                    },
-                    span,
-                );
+                return self.custom_instance_method_type(name, method, arguments, span, super_call);
             }
             _ => return Err(unknown_method(receiver_type, method)),
         };
         self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
         Ok(result)
+    }
+
+    fn custom_instance_method_type(
+        &mut self,
+        name: &crate::ast::NamedType,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+        super_call: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let class_id = self.class_ids[&name.canonical];
+        if self.classes[class_id].kind == ClassKind::Enum {
+            return self.enum_method_type(class_id, method, arguments, false, span);
+        }
+        let argument_types = arguments
+            .iter()
+            .map(|argument| self.expression_type(argument))
+            .collect::<Result<Vec<_>, _>>()?;
+        let candidates = self.class_methods_named(class_id, &method.canonical);
+        self.select_class_method_call(
+            class_id,
+            method,
+            &argument_types,
+            candidates,
+            if super_call {
+                ClassCallKind::Super
+            } else {
+                ClassCallKind::Instance
+            },
+            span,
+        )
+    }
+
+    fn enum_method_type(
+        &mut self,
+        class_id: usize,
+        method: &Identifier,
+        arguments: &[Expression],
+        static_call: bool,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let enum_type = self.class_type(class_id);
+        let (target, result) = match (static_call, method.canonical.as_str()) {
+            (false, "name") if arguments.is_empty() => (hir::EnumMethod::Name, TypeName::String),
+            (false, "ordinal") if arguments.is_empty() => {
+                (hir::EnumMethod::Ordinal, TypeName::Integer)
+            }
+            (true, "values") if arguments.is_empty() => (
+                hir::EnumMethod::Values,
+                TypeName::List(Box::new(enum_type.clone())),
+            ),
+            (true, "valueof") if arguments.len() == 1 => {
+                self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+                (hir::EnumMethod::ValueOf, enum_type)
+            }
+            _ => {
+                for argument in arguments {
+                    self.expression_type(argument)?;
+                }
+                return Err(Diagnostic::new(
+                    format!(
+                        "unknown {}enum method `{}`",
+                        if static_call { "static " } else { "" },
+                        method.spelling
+                    ),
+                    method.span,
+                ));
+            }
+        };
+        self.calls.insert(
+            span,
+            CallTarget::EnumMethod {
+                class_id: ClassId::from_index(class_id),
+                method: target,
+            },
+        );
+        Ok(ExpressionType::Value(result))
     }
 
     fn is_sobject_type(&self, ty: &TypeName) -> bool {
@@ -3665,9 +4359,13 @@ impl Checker {
             | CallTarget::StaticMethod(_)
             | CallTarget::SuperMethod(_)
             | CallTarget::Constructor { .. }
+            | CallTarget::CustomExceptionConstructor { .. }
             | CallTarget::SObjectConstructor { .. }
             | CallTarget::PlatformConstructor(_)
             | CallTarget::DatabaseDml(_) => false,
+            CallTarget::EnumMethod { method, .. } => {
+                matches!(method, hir::EnumMethod::Name | hir::EnumMethod::Ordinal)
+            }
         };
         if valid {
             Ok(())
@@ -3747,7 +4445,7 @@ impl Checker {
         if actual == expected || *expected == TypeName::Object {
             return true;
         }
-        if *expected == TypeName::Exception && actual.is_exception() {
+        if *expected == TypeName::Exception && self.is_exception_type(actual) {
             return true;
         }
         if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
@@ -3790,7 +4488,9 @@ impl Checker {
                 target_class.modifiers.contains(&Modifier::Virtual)
                     || target_class.modifiers.contains(&Modifier::Abstract)
             }
-            (ClassKind::Class, ClassKind::Class) => false,
+            (ClassKind::Class, ClassKind::Class) | (ClassKind::Enum, _) | (_, ClassKind::Enum) => {
+                false
+            }
         }
     }
 
@@ -4059,6 +4759,27 @@ fn push_unique_signature(
     }) {
         signatures.push(signature);
     }
+}
+
+fn qualified_expression_name(expression: &Expression) -> Option<String> {
+    match expression {
+        Expression::Variable(identifier) => Some(identifier.canonical.clone()),
+        Expression::MemberAccess {
+            receiver,
+            member,
+            safe_navigation: false,
+            ..
+        } => Some(format!(
+            "{}.{}",
+            qualified_expression_name(receiver)?,
+            member.canonical
+        )),
+        _ => None,
+    }
+}
+
+fn outermost_type(qualified: &str) -> &str {
+    qualified.split('.').next().unwrap_or(qualified)
 }
 
 fn is_statement_expression(expression: &Expression) -> bool {

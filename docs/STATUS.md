@@ -8,9 +8,9 @@ S0 — Phase 2 stabilization — Complete
 
 The pre-open-source audit and execution strategy are now captured in
 [`docs/STABILIZATION.md`](STABILIZATION.md). The bounded S0 process-safety and
-correctness criteria have passed. M18 — null-aware expressions is complete;
-M19 — bitwise, shift, `Long`, and compound operators is complete; M20 — nested
-declarations, enums, and type literals is next.
+correctness criteria have passed. M18 — null-aware expressions, M19 — bitwise,
+shift, `Long`, and compound operators, and M20 — nested declarations, enums,
+and type literals are complete.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -376,32 +376,35 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 380 ordinary tests pass with no failures (seven future North Star parser
-  goals remain intentionally ignored); LLVM source-line coverage is 85.28%
-  overall and 83.87% across the M19-changed production modules. The checked-in
-  M19 Apex project passes 4/4 Apex tests and reports 37/37 production lines
-  covered.
+- M20 adds lossless qualified/generic/array type references, qualified nested
+  class/interface/enum identities, nested access and dispatch, enums, custom
+  exception subclasses, `this(...)`/`super(...)` constructor delegation,
+  class literals, `Iterable<T>`, and source-ordered static/instance initializer
+  blocks.
+- 390 ordinary tests pass with no failures (seven future North Star parser
+  goals remain intentionally ignored); LLVM source-line coverage is **85.22%**
+  overall and **84.81%** across the M20-changed production modules. The
+  checked-in M20 Apex project passes 2/2 Apex tests and reports 12/12
+  production lines covered.
 
 ## Immediate target
 
-M20 nested declarations, enums, and type literals is the next planned feature
-milestone. The package tracker is in
+M21 North Star grammar closure is the next planned feature milestone. The
+package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-M19 reproduces 7 of 14 passing indicators (**50.00%**): lexer 7 of 7
-(**100.00%**) and parser 0 of 7 (**0%**), a gain of six lexer indicators from
-the Phase 2 baseline. All seven pinned files now lex completely and the lexer
-goals run in the ordinary suite. Their first parser diagnostics are unsupported
-annotations or nested declarations; bitwise and compound tokens no longer
-block `fflib_SObjectDomain.cls` or `Puff.cls`.
+M20 reproduces 8 of 14 passing indicators (**57.14%**): lexer 7 of 7
+(**100.00%**) and parser 1 of 7 (**14.29%**), a gain of seven indicators from
+the Phase 2 baseline. `JSONParse.cls` now parses completely; all lexer goals run
+in the ordinary suite.
 
-Later reachable blockers include arbitrary annotations, nested declarations,
-enums, class literals, static initializer blocks, `switch`/`when`,
-uninitialized and multi-declarator locals, constructor delegation, arbitrary
-generic type references, and additional modifiers/literals. These are
+The six remaining parser goals first stop at arbitrary annotations,
+external-ID DML syntax, or uninitialized locals. Later reachable blockers
+include `switch`/`when`, multi-declarator locals, and additional
+modifiers/literals. These are
 syntax-progress indicators, not semantic, execution, or Salesforce
 compatibility percentages. M21 requires all 14 original fixtures to pass
 without `#[ignore]` or corpus changes.
@@ -504,10 +507,10 @@ without `#[ignore]` or corpus changes.
 - The default recording host owns an in-memory SQLite database for one
   interpreter. A persistent project database configuration and fixture CLI
   remain future work.
-- Nested types, enums, annotations other than
-  `@IsTest`/`@TestSetup`/`@future`, explicit superclass-constructor calls,
-  custom exception classes, and Salesforce-exact object string formatting are
-  not implemented.
+- Annotations other than `@IsTest`/`@TestSetup`/`@future` and
+  Salesforce-exact object string formatting are not implemented. Custom
+  exception subclasses inherit the zero- and one-String constructors; explicit
+  constructors declared on those subclasses remain unsupported.
 - Sharing modifiers are parsed for structural progress but rejected during
   checking because sharing/security semantics remain deferred.
 - Test setup methods run before every isolated test interpreter, and their DML
@@ -527,10 +530,11 @@ without `#[ignore]` or corpus changes.
   expressions are shape-checked but not calendar-evaluated; job monitoring,
   abort/reschedule APIs, flex queue behavior, finalizers, future callout
   options, and platform-event replay or retention are unsupported.
-- Static state initializes lazily per class and caches failures. Cross-class
-  cycles and dependency chains beyond 64 simultaneously initializing classes
-  raise catchable `TypeException` values; M20 initializer blocks and
-  Salesforce-exact class-initialization exception wording remain future work.
+- Static state initializes lazily per class and caches failures. Fields and
+  static/instance initializer blocks execute in source order after typed-null
+  slot allocation. Cross-class cycles and dependency chains beyond 32
+  simultaneously initializing classes raise catchable `TypeException` values;
+  Salesforce-exact class-initialization exception wording remains future work.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, ternary, `while`, `do`/`while`, and condition-bearing `for` branches.
   It is not a claim of Salesforce-exact coverage accounting.

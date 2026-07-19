@@ -120,6 +120,9 @@ fn collect_coverage_candidates(
                     }
                 }
                 ClassMember::Field(_) => {}
+                ClassMember::Initializer(initializer) => {
+                    visit_executable(&initializer.body, statements, branches)
+                }
             }
         }
     }

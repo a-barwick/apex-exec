@@ -56,8 +56,13 @@ pub struct ClassDeclaration {
     pub kind: ClassKind,
     pub modifiers: Vec<Modifier>,
     pub name: Identifier,
+    /// Canonical source-qualified identity, including every enclosing type.
+    pub qualified_name: NamedType,
+    /// Qualified identity of the lexical owner for a nested declaration.
+    pub enclosing_type: Option<NamedType>,
     pub superclass: Option<NamedType>,
     pub interfaces: Vec<NamedType>,
+    pub enum_constants: Vec<Identifier>,
     pub members: Vec<ClassMember>,
     pub span: Span,
 }
@@ -66,6 +71,7 @@ pub struct ClassDeclaration {
 pub enum ClassKind {
     Class,
     Interface,
+    Enum,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -90,6 +96,14 @@ pub enum ClassMember {
     Property(PropertyDeclaration),
     Constructor(ConstructorDeclaration),
     Method(MethodDeclaration),
+    Initializer(InitializerBlock),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InitializerBlock {
+    pub is_static: bool,
+    pub body: Statement,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,8 +143,22 @@ pub struct ConstructorDeclaration {
     pub modifiers: Vec<Modifier>,
     pub name: Identifier,
     pub parameters: Vec<Parameter>,
+    pub delegation: Option<ConstructorDelegation>,
     pub body: Statement,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstructorDelegation {
+    pub kind: ConstructorDelegationKind,
+    pub arguments: Vec<Expression>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructorDelegationKind {
+    This,
+    Super,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -285,6 +313,10 @@ pub enum Expression {
     Soql(Box<SoqlQuery>),
     Sosl(Box<SoslQuery>),
     Variable(Identifier),
+    TypeLiteral {
+        ty: TypeName,
+        span: Span,
+    },
     Assignment {
         target: AssignmentTarget,
         operator: AssignmentOperator,
@@ -387,6 +419,7 @@ impl Expression {
             | Self::LongLiteral(_, span)
             | Self::DecimalLiteral(_, span)
             | Self::NullLiteral(span)
+            | Self::TypeLiteral { span, .. }
             | Self::Assignment { span, .. }
             | Self::NewCollection { span, .. }
             | Self::NewException { span, .. }
@@ -674,7 +707,7 @@ pub enum AssignmentOperator {
     UnsignedShiftRight,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Identifier {
     pub spelling: String,
     pub canonical: String,
@@ -728,10 +761,12 @@ pub enum TypeName {
     DmlException,
     AsyncException,
     AggregateResult,
+    Type,
     Custom(NamedType),
     List(Box<TypeName>),
     Set(Box<TypeName>),
     Map(Box<TypeName>, Box<TypeName>),
+    Iterable(Box<TypeName>),
 }
 
 impl TypeName {
@@ -773,6 +808,7 @@ impl TypeName {
             "dmlexception" => Some(Self::DmlException),
             "asyncexception" => Some(Self::AsyncException),
             "aggregateresult" => Some(Self::AggregateResult),
+            "type" | "system.type" => Some(Self::Type),
             _ => None,
         }
     }
@@ -831,19 +867,55 @@ impl TypeName {
             Self::DmlException => "DmlException".to_owned(),
             Self::AsyncException => "AsyncException".to_owned(),
             Self::AggregateResult => "AggregateResult".to_owned(),
+            Self::Type => "System.Type".to_owned(),
             Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
             Self::Map(key, value) => {
                 format!("Map<{},{}>", key.apex_name(), value.apex_name())
             }
+            Self::Iterable(element) => format!("Iterable<{}>", element.apex_name()),
         }
+    }
+}
+
+/// Lossless source syntax for one Apex type reference.
+///
+/// Semantic analysis continues to expose [`TypeName`] as a transitional view,
+/// but parser lookahead and every parsed generic/hierarchy reference share this
+/// single grammar and retain spelling, segment spans, argument structure, and
+/// array suffix spans.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TypeRef {
+    pub segments: Vec<Identifier>,
+    pub type_arguments: Vec<TypeRef>,
+    pub array_suffixes: Vec<Span>,
+    pub span: Span,
+}
+
+impl TypeRef {
+    pub fn spelling(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| segment.spelling.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    pub fn canonical(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| segment.canonical.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
     }
 }
 
 /// A preserved generic argument on a named hierarchy or trigger type.
 #[derive(Clone, Debug)]
 pub struct TypeArgument {
+    /// Lossless argument syntax.
+    pub syntax: TypeRef,
     /// Parsed argument type.
     pub ty: TypeName,
     /// Exact source span of the argument syntax.
@@ -854,6 +926,8 @@ pub struct TypeArgument {
 pub struct NamedType {
     pub spelling: String,
     pub canonical: String,
+    /// Lossless parsed syntax when this name came from source.
+    pub syntax: Option<TypeRef>,
     /// Generic arguments preserved from source for semantic validation.
     pub type_arguments: Vec<TypeArgument>,
     pub span: Span,
@@ -873,6 +947,20 @@ impl NamedType {
         Self {
             spelling,
             canonical,
+            syntax: None,
+            type_arguments,
+            span,
+        }
+    }
+
+    pub fn from_type_ref(syntax: TypeRef, type_arguments: Vec<TypeArgument>) -> Self {
+        let spelling = syntax.spelling();
+        let canonical = syntax.canonical();
+        let span = syntax.span;
+        Self {
+            spelling,
+            canonical,
+            syntax: Some(syntax),
             type_arguments,
             span,
         }

@@ -2,9 +2,10 @@ use super::Parser;
 use crate::{
     ast::{
         AccessorKind, Annotation, AnnotationKind, ClassDeclaration, ClassKind, ClassMember,
-        ConstructorDeclaration, FieldDeclaration, Identifier, MethodDeclaration, Modifier,
-        Parameter, PropertyAccessor, PropertyDeclaration, ReturnType, TriggerDeclaration,
-        TriggerEvent, TypeName,
+        ConstructorDeclaration, ConstructorDelegation, ConstructorDelegationKind, Expression,
+        FieldDeclaration, Identifier, InitializerBlock, MethodDeclaration, Modifier, NamedType,
+        Parameter, PropertyAccessor, PropertyDeclaration, ReturnType, Statement,
+        TriggerDeclaration, TriggerEvent, TypeName,
     },
     diagnostic::Diagnostic,
     span::Span,
@@ -60,6 +61,13 @@ impl Parser {
     }
 
     pub(super) fn parse_class_declaration(&mut self) -> Result<ClassDeclaration, Diagnostic> {
+        self.parse_type_declaration(None)
+    }
+
+    fn parse_type_declaration(
+        &mut self,
+        enclosing_type: Option<NamedType>,
+    ) -> Result<ClassDeclaration, Diagnostic> {
         let annotations = self.parse_annotations()?;
         if let Some(annotation) = annotations
             .iter()
@@ -72,30 +80,120 @@ impl Parser {
         }
         let modifiers = self.parse_modifiers()?;
         let start = self.current().span;
-        let kind = if self.check(&TokenKind::Class) {
-            self.advance();
-            ClassKind::Class
-        } else {
-            self.expect_simple(TokenKind::Interface, "expected `class` or `interface`")?;
-            ClassKind::Interface
-        };
+        let kind = self.parse_class_kind()?;
         let name = self.expect_identifier("expected a type name")?;
+        let qualified_spelling = enclosing_type.as_ref().map_or_else(
+            || name.spelling.clone(),
+            |owner| format!("{}.{}", owner.spelling, name.spelling),
+        );
+        let qualified_name = NamedType::new(qualified_spelling, name.span);
         let (superclass, interfaces) = self.parse_hierarchy_edges(kind)?;
         self.expect_simple(TokenKind::LeftBrace, "expected `{` after type declaration")?;
-        let mut members = Vec::new();
-        while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
-            members.push(self.parse_class_member(&name)?);
-        }
+        let (enum_constants, members) = self.parse_type_body(kind, &name, &qualified_name)?;
         let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after type body")?;
         Ok(ClassDeclaration {
             annotations,
             kind,
             modifiers,
             name,
+            qualified_name,
+            enclosing_type,
             superclass,
             interfaces,
+            enum_constants,
             members,
             span: start.merge(end.span),
+        })
+    }
+
+    fn parse_class_kind(&mut self) -> Result<ClassKind, Diagnostic> {
+        if self.check(&TokenKind::Class) {
+            self.advance();
+            Ok(ClassKind::Class)
+        } else if self.check(&TokenKind::Interface) {
+            self.advance();
+            Ok(ClassKind::Interface)
+        } else if self.check_keyword("enum") {
+            self.advance();
+            Ok(ClassKind::Enum)
+        } else {
+            Err(Diagnostic::new(
+                "expected `class`, `interface`, or `enum`",
+                self.current().span,
+            ))
+        }
+    }
+
+    fn parse_type_body(
+        &mut self,
+        kind: ClassKind,
+        name: &Identifier,
+        qualified_name: &NamedType,
+    ) -> Result<(Vec<Identifier>, Vec<ClassMember>), Diagnostic> {
+        let enum_constants = if kind == ClassKind::Enum {
+            self.parse_enum_constants()?
+        } else {
+            Vec::new()
+        };
+        let mut members = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
+            if self.is_class_declaration_start() {
+                let nested = self.parse_type_declaration(Some(qualified_name.clone()))?;
+                self.pending_types.push(nested);
+            } else if self.is_initializer_block_start() {
+                members.push(ClassMember::Initializer(self.parse_initializer_block()?));
+            } else {
+                members.push(self.parse_class_member(name)?);
+            }
+        }
+        Ok((enum_constants, members))
+    }
+
+    fn is_initializer_block_start(&self) -> bool {
+        self.check(&TokenKind::LeftBrace)
+            || (self.check(&TokenKind::Static) && matches!(self.peek(1).kind, TokenKind::LeftBrace))
+    }
+
+    fn parse_enum_constants(&mut self) -> Result<Vec<Identifier>, Diagnostic> {
+        let mut constants = Vec::new();
+        if self.check(&TokenKind::RightBrace) || self.check(&TokenKind::Semicolon) {
+            if self.check(&TokenKind::Semicolon) {
+                self.advance();
+            }
+            return Ok(constants);
+        }
+        loop {
+            constants.push(self.expect_identifier("expected an enum constant")?);
+            if !self.check(&TokenKind::Comma) {
+                break;
+            }
+            self.advance();
+            if self.check(&TokenKind::Semicolon) || self.check(&TokenKind::RightBrace) {
+                break;
+            }
+        }
+        if self.check(&TokenKind::Semicolon) {
+            self.advance();
+        } else if !self.check(&TokenKind::RightBrace) {
+            return Err(Diagnostic::new(
+                "expected `;` after enum constants",
+                self.current().span,
+            ));
+        }
+        Ok(constants)
+    }
+
+    fn parse_initializer_block(&mut self) -> Result<InitializerBlock, Diagnostic> {
+        let (is_static, start) = if self.check(&TokenKind::Static) {
+            (true, self.advance().span)
+        } else {
+            (false, self.current().span)
+        };
+        let body = self.parse_block()?;
+        Ok(InitializerBlock {
+            is_static,
+            span: start.merge(body.span()),
+            body,
         })
     }
 
@@ -118,7 +216,7 @@ impl Parser {
         }
 
         let mut interfaces = Vec::new();
-        if kind == ClassKind::Class && self.check(&TokenKind::Implements) {
+        if kind != ClassKind::Interface && self.check(&TokenKind::Implements) {
             self.advance();
             loop {
                 interfaces.push(self.parse_named_type()?);
@@ -141,23 +239,7 @@ impl Parser {
             if spelling.eq_ignore_ascii_case(&class_name.spelling))
             && matches!(self.peek(1).kind, TokenKind::LeftParen)
         {
-            if let Some(annotation) = annotations.first() {
-                return Err(Diagnostic::new(
-                    "annotations are not supported on constructors",
-                    annotation.span,
-                ));
-            }
-            let name = self.expect_identifier("expected constructor name")?;
-            let parameters = self.parse_parameters()?;
-            let body = self.parse_block()?;
-            let span = name.span.merge(body.span());
-            return Ok(ClassMember::Constructor(ConstructorDeclaration {
-                modifiers,
-                name,
-                parameters,
-                body,
-                span,
-            }));
+            return self.parse_constructor(annotations, modifiers);
         }
 
         let (return_type, start) = self.parse_return_type()?;
@@ -212,6 +294,32 @@ impl Parser {
             name,
             initializer,
             span: start.merge(end.span),
+        }))
+    }
+
+    fn parse_constructor(
+        &mut self,
+        annotations: Vec<Annotation>,
+        modifiers: Vec<Modifier>,
+    ) -> Result<ClassMember, Diagnostic> {
+        if let Some(annotation) = annotations.first() {
+            return Err(Diagnostic::new(
+                "annotations are not supported on constructors",
+                annotation.span,
+            ));
+        }
+        let name = self.expect_identifier("expected constructor name")?;
+        let parameters = self.parse_parameters()?;
+        let mut body = self.parse_block()?;
+        let delegation = take_constructor_delegation(&mut body);
+        let span = name.span.merge(body.span());
+        Ok(ClassMember::Constructor(ConstructorDeclaration {
+            modifiers,
+            name,
+            parameters,
+            delegation,
+            body,
+            span,
         }))
     }
 
@@ -454,4 +562,34 @@ impl Parser {
                 | TokenKind::Final
         )
     }
+}
+
+fn take_constructor_delegation(body: &mut Statement) -> Option<ConstructorDelegation> {
+    let Statement::Block { statements, .. } = body else {
+        return None;
+    };
+    let Statement::Expression {
+        expression:
+            Expression::FunctionCall {
+                name,
+                arguments,
+                span,
+            },
+        ..
+    } = statements.first()?
+    else {
+        return None;
+    };
+    let kind = match name.canonical.as_str() {
+        "this" => ConstructorDelegationKind::This,
+        "super" => ConstructorDelegationKind::Super,
+        _ => return None,
+    };
+    let delegation = ConstructorDelegation {
+        kind,
+        arguments: arguments.clone(),
+        span: *span,
+    };
+    statements.remove(0);
+    Some(delegation)
 }

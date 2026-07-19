@@ -44,7 +44,7 @@ pub(super) fn build_dependency_graph(
                 .ast
                 .classes
                 .iter()
-                .map(|class| (class.name.canonical.clone(), file.path.clone()))
+                .map(|class| (class.qualified_name.canonical.clone(), file.path.clone()))
                 .collect::<Vec<_>>()
         })
         .collect::<HashMap<_, _>>();

@@ -153,6 +153,7 @@ pub fn walk_class_member<'ast, V: Visitor<'ast> + ?Sized>(
             visitor.visit_constructor_declaration(constructor);
         }
         ClassMember::Method(method) => visitor.visit_method_declaration(method),
+        ClassMember::Initializer(initializer) => visitor.visit_statement(&initializer.body),
     }
 }
 
@@ -194,6 +195,11 @@ pub fn walk_constructor_declaration<'ast, V: Visitor<'ast> + ?Sized>(
     visitor.visit_identifier(&constructor.name);
     for parameter in &constructor.parameters {
         visitor.visit_parameter(parameter);
+    }
+    if let Some(delegation) = &constructor.delegation {
+        for argument in &delegation.arguments {
+            visitor.visit_expression(argument);
+        }
     }
     visitor.visit_statement(&constructor.body);
 }
@@ -359,6 +365,7 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
         Expression::Soql(query) => walk_soql_query(visitor, query),
         Expression::Sosl(query) => walk_sosl_query(visitor, query),
         Expression::Variable(identifier) => visitor.visit_identifier(identifier),
+        Expression::TypeLiteral { ty, .. } => visitor.visit_type_name(ty),
         Expression::Assignment { target, value, .. } => {
             visitor.visit_assignment_target(target);
             visitor.visit_expression(value);
@@ -546,7 +553,9 @@ pub fn walk_map_entry<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, entry: &
 pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'ast TypeName) {
     match ty {
         TypeName::Custom(named_type) => visitor.visit_named_type(named_type),
-        TypeName::List(element) | TypeName::Set(element) => visitor.visit_type_name(element),
+        TypeName::List(element) | TypeName::Set(element) | TypeName::Iterable(element) => {
+            visitor.visit_type_name(element)
+        }
         TypeName::Map(key, value) => {
             visitor.visit_type_name(key);
             visitor.visit_type_name(value);
@@ -584,7 +593,8 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::QueryException
         | TypeName::DmlException
         | TypeName::AsyncException
-        | TypeName::AggregateResult => {}
+        | TypeName::AggregateResult
+        | TypeName::Type => {}
     }
 }
 

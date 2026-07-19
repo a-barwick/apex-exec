@@ -16,6 +16,7 @@ mod types;
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    pending_types: Vec<crate::ast::ClassDeclaration>,
 }
 
 /// Stable categories for malformed raw token streams supplied to [`Parser`].
@@ -84,7 +85,11 @@ impl Parser {
     /// Validates and accepts one ordered, single-source, terminal-EOF token stream.
     pub fn new(tokens: Vec<Token>) -> Result<Self, TokenStreamError> {
         validate_token_stream(&tokens)?;
-        Ok(Self { tokens, cursor: 0 })
+        Ok(Self {
+            tokens,
+            cursor: 0,
+            pending_types: Vec::new(),
+        })
     }
 
     pub fn parse_program(mut self) -> Result<Program, Diagnostic> {
@@ -97,6 +102,7 @@ impl Parser {
                 triggers.push(self.parse_trigger_declaration()?);
             } else if self.is_class_declaration_start() {
                 classes.push(self.parse_class_declaration()?);
+                classes.append(&mut self.pending_types);
             } else if self.is_method_declaration_start() {
                 methods.push(self.parse_method_declaration()?);
             } else {

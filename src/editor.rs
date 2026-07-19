@@ -228,7 +228,7 @@ impl<'program> IndexBuilder<'program> {
                 .classes
                 .iter()
                 .enumerate()
-                .map(|(index, class)| (class.name.canonical.clone(), index))
+                .map(|(index, class)| (class.qualified_name.canonical.clone(), index))
                 .collect(),
             occurrences: Vec::new(),
             definitions: HashMap::new(),
@@ -282,6 +282,9 @@ impl<'program> IndexBuilder<'program> {
                         if let Some(body) = &method.body {
                             self.visit_statement(body);
                         }
+                    }
+                    ClassMember::Initializer(initializer) => {
+                        self.visit_statement(&initializer.body);
                     }
                 }
             }

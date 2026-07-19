@@ -173,15 +173,21 @@ value-less `return`.
 
 ## User-defined types
 
-**Implemented for M5, simplified.** A class may extend one class and implement
-interfaces. User types are invariant by name but participate in assignment and
-overload selection through their checked superclass/interface relationships.
+**Implemented through M20, simplified.** A top-level or qualified nested class
+may extend one class and implement interfaces. User types are invariant by
+canonical qualified name but participate in assignment and overload selection
+through their checked superclass/interface relationships.
 Abstract/virtual/override rules and interface obligations are validated before
-execution. Member lookup covers constructors, fields, properties, and methods,
-with public/private/protected/global and static/instance checks.
+execution. Member lookup covers constructors, fields, properties, methods, and
+source-ordered static/instance initializer blocks, with
+public/private/protected/global and static/instance checks.
 
-Nested types, enums, explicit superclass-constructor calls, and generic user
-types are not yet supported.
+Enums provide constants, identity/equality, `name`, `ordinal`, `values`, and
+`valueOf`. Explicit `this(...)` and `super(...)` constructor delegation is
+checked before execution. Custom exception subclasses inherit the supported
+zero- and one-String constructor surface. Arbitrary generic syntax is retained
+losslessly, while runtime generic behavior remains limited to the documented
+collection and `Iterable<T>` surface.
 
 ## Explicit casts
 

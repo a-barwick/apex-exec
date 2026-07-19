@@ -60,17 +60,19 @@ for the documented case.
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
 | `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot |
+| `Iterable<T>` | Yes | Yes | Yes | Simplified | Accepts supported List/Set values and enhanced iteration; arbitrary user implementations are not modeled |
 | Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction validates and supports primitive, `Object`, known custom-class, and core-exception elements |
+| Type literals | Yes | Yes | Yes | Simplified | Qualified, array, and generic `.class` forms preserve canonical type identity |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
 | User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
 | Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts, structurally disambiguated from grouped member/index/postfix expressions; invalid runtime casts throw `TypeException` |
-| Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
+| Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, core exceptions, and custom subclasses with inherited zero-/one-String construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
-| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, `interface extends`, cycle-checked hierarchy edges, and visited iterative subtype traversal |
-| Nested types and enums | No | No | No | Unsupported | Qualified nested identities, enums, and type literals are planned in M20 |
+| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level and nested classes/interfaces, qualified identity, construction, object identity, member calls, `interface extends`, cycle-checked hierarchy edges, and visited iterative subtype traversal |
+| Nested types and enums | Yes | Yes | Yes | Simplified | Qualified nested access/dispatch plus enum constants, equality, `name`, `ordinal`, `values`, and `valueOf` |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
@@ -81,7 +83,7 @@ for the documented case.
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
-| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
+| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, source-ordered initializer blocks, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, method-only `@TestSetup`, and correct `Test.isRunningTest()` mode in tests and their queued work; `SeeAllData=true` is explicit |
@@ -163,10 +165,11 @@ The implemented exception types are `Exception`, `NullPointerException`,
 `IllegalArgumentException`, `FinalException`, `AssertException`,
 `QueryException`, `DmlException`, and `AsyncException`. They support zero- or one-String-argument
 construction and `getMessage()`, `getTypeName()`, and
-`getStackTraceString()`. Catch matching recognizes each concrete type and the
-`Exception` root. Custom exception classes, causes, a broader built-in
-hierarchy, and Salesforce-exact message and stack formatting are not yet
-claimed.
+`getStackTraceString()`. Catch matching recognizes each concrete type, custom
+classes extending `Exception`, and the `Exception` root. Custom subclasses
+inherit zero- and one-String construction; explicit custom constructors,
+causes, a broader built-in hierarchy, and Salesforce-exact message and stack
+formatting are not yet claimed.
 
 `Object` is a checked widening, overload, runtime-cast, and `toString` carrier.
 Casts include identical types, `Object` up/downcasts, the core exception root,
@@ -177,14 +180,15 @@ implemented.
 
 ## M5 classes and project compilation
 
-Top-level class and interface names are case-insensitive and participate in
-cross-file resolution. Supported class members are constructors, fields,
-properties, and methods. Fields receive typed null before explicit
+Top-level and qualified nested class, interface, and enum names are
+case-insensitive and participate in cross-file resolution. Supported class
+members are constructors, fields, properties, methods, and static/instance
+initializer blocks. Fields receive typed null before explicit
 initialization; static state belongs to the interpreter and initializes lazily
 per class, while instance state uses object identity. Static fields and auto
 properties are all allocated to typed null before source-order field
 initializers run. Base classes initialize first; successful and failed outcomes
-are cached. Cross-class dependency cycles and chains deeper than 64 active
+are cached. Cross-class dependency cycles and chains deeper than 32 active
 classes raise catchable `TypeException` values. Auto properties use
 interpreter-owned backing storage, while custom accessors execute checked
 bodies. `this`, `super`, static access, and bare member access resolve at
@@ -198,9 +202,10 @@ extend interfaces; an `implements` clause on an interface is rejected as
 invalid syntax before contract traversal. User types participate in assignment,
 overload ranking, and related up/downcasts through a visited iterative subtype
 walk. Access checks cover public, private, protected, and global members,
-including accessor-specific property visibility. Nested types, enums, explicit
-superclass-constructor calls, custom exception classes, and the full Apex
-conversion system remain unsupported.
+including accessor-specific property visibility and private nested-type
+ownership. Explicit `this(...)` and `super(...)` delegation is checked for
+overloads, access, and cycles. The full Apex conversion system remains
+unsupported.
 Sharing modifiers parse so class declarations remain structurally inspectable,
 but semantic checking rejects them because sharing/security behavior is
 deferred rather than silently ignored.
@@ -669,12 +674,13 @@ language or Salesforce compatibility claim.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-M19 reproduces 7 of 14 passing goals (50.00%): all 7 lexer goals and 0 of 7
-parser goals, up from the 1-of-14 Phase 2 baseline. Lexer goals now run in the
-ordinary suite; the remaining first diagnostics are unsupported annotations
-and nested declarations. M21 requires 14 of 14 passing against the unchanged
-corpus and removes the seven parser goals' `#[ignore]`. These are syntax
-indicators only, not runtime or Salesforce compatibility percentages.
+M20 reproduces 8 of 14 passing goals (57.14%): all 7 lexer goals and 1 of 7
+parser goals, up from the 1-of-14 Phase 2 baseline. `JSONParse.cls` now parses
+completely; the six remaining parser goals first stop at unsupported
+annotations, external-ID DML syntax, or uninitialized locals. M21 requires 14
+of 14 passing against the unchanged corpus and removes the seven parser goals'
+`#[ignore]`. These are syntax indicators only, not runtime or Salesforce
+compatibility percentages.
 
 ## Updating this document
 

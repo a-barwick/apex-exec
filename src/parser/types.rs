@@ -1,26 +1,15 @@
 use super::Parser;
 use crate::{
-    ast::{NamedType, ReturnType, TypeArgument, TypeName},
+    ast::{NamedType, ReturnType, TypeArgument, TypeName, TypeRef},
     diagnostic::Diagnostic,
     token::TokenKind,
 };
 
 impl Parser {
     pub(super) fn parse_type_name(&mut self) -> Result<(TypeName, crate::span::Span), Diagnostic> {
-        let (mut ty, mut span) = self.parse_base_type_name()?;
-        if self.check(&TokenKind::LeftBracket) {
-            self.advance();
-            let end = self.expect_simple(TokenKind::RightBracket, "expected `]` in array type")?;
-            ty = TypeName::List(Box::new(ty));
-            span = span.merge(end.span);
-            if self.check(&TokenKind::LeftBracket) {
-                return Err(Diagnostic::new(
-                    "only one array suffix is supported",
-                    self.current().span,
-                ));
-            }
-        }
-        Ok((ty, span))
+        let syntax = self.parse_type_ref()?;
+        let span = syntax.span;
+        Ok((type_name_from_ref(&syntax)?, span))
     }
 
     pub(super) fn parse_return_type(
@@ -34,89 +23,58 @@ impl Parser {
         Ok((ReturnType::Value(ty), span))
     }
 
-    pub(super) fn parse_base_type_name(
-        &mut self,
-    ) -> Result<(TypeName, crate::span::Span), Diagnostic> {
-        let identifier = self.expect_identifier("expected a type name")?;
-        let mut spelling = identifier.spelling.clone();
-        let mut canonical = identifier.canonical.clone();
-        let mut qualified_span = identifier.span;
-        if self.check(&TokenKind::Dot) {
-            self.advance();
-            let nested = self.expect_identifier("expected a type name after `.`")?;
-            spelling.push('.');
-            spelling.push_str(&nested.spelling);
-            canonical.push('.');
-            canonical.push_str(&nested.canonical);
-            qualified_span = qualified_span.merge(nested.span);
+    pub(super) fn parse_named_type(&mut self) -> Result<NamedType, Diagnostic> {
+        let syntax = self.parse_type_ref()?;
+        if let Some(span) = syntax.array_suffixes.first() {
+            return Err(Diagnostic::new(
+                "hierarchy and trigger types cannot use array suffixes",
+                *span,
+            ));
         }
-        match canonical.as_str() {
-            "list" | "set" => {
-                self.expect_simple(TokenKind::Less, "expected `<` after collection type name")?;
-                let (element, _) = self.parse_type_name()?;
-                let end = self.expect_type_greater("expected `>` after collection element type")?;
-                let ty = if identifier.canonical == "list" {
-                    TypeName::List(Box::new(element))
-                } else {
-                    TypeName::Set(Box::new(element))
-                };
-                Ok((ty, identifier.span.merge(end.span)))
-            }
-            "map" => {
-                self.expect_simple(TokenKind::Less, "expected `<` after `Map`")?;
-                let (key, _) = self.parse_type_name()?;
-                self.expect_simple(TokenKind::Comma, "expected `,` after map key type")?;
-                let (value, _) = self.parse_type_name()?;
-                let end = self.expect_type_greater("expected `>` after map value type")?;
-                Ok((
-                    TypeName::Map(Box::new(key), Box::new(value)),
-                    identifier.span.merge(end.span),
-                ))
-            }
-            _ if TypeName::from_apex_name(&canonical).is_some() => Ok((
-                TypeName::from_apex_name(&canonical).expect("type presence was checked"),
-                qualified_span,
-            )),
-            _ => Ok((
-                TypeName::Custom(NamedType::new(spelling, qualified_span)),
-                qualified_span,
-            )),
-        }
+        named_type_from_ref(syntax)
     }
 
-    pub(super) fn parse_named_type(&mut self) -> Result<NamedType, Diagnostic> {
-        let identifier = self.expect_identifier("expected a type name")?;
-        let mut spelling = identifier.spelling;
-        let mut span = identifier.span;
-        if self.check(&TokenKind::Dot) {
+    pub(super) fn parse_type_ref(&mut self) -> Result<TypeRef, Diagnostic> {
+        let first = self.expect_identifier("expected a type name")?;
+        let mut span = first.span;
+        let mut segments = vec![first];
+        while self.check(&TokenKind::Dot) && matches!(self.peek(1).kind, TokenKind::Identifier(_)) {
             self.advance();
-            let nested = self.expect_identifier("expected an interface name after `.`")?;
-            spelling.push('.');
-            spelling.push_str(&nested.spelling);
-            span = span.merge(nested.span);
+            let segment = self.expect_identifier("expected a type name after `.`")?;
+            span = span.merge(segment.span);
+            segments.push(segment);
         }
+
         let mut type_arguments = Vec::new();
         if self.check(&TokenKind::Less) {
             self.advance();
             loop {
-                let (ty, argument_span) = self.parse_type_name()?;
-                type_arguments.push(TypeArgument {
-                    ty,
-                    span: argument_span,
-                });
+                type_arguments.push(self.parse_type_ref()?);
                 if !self.check(&TokenKind::Comma) {
                     break;
                 }
                 self.advance();
             }
-            let end = self.expect_type_greater("expected `>` after interface type argument")?;
+            let end = self.expect_type_greater("expected `>` after type argument")?;
             span = span.merge(end.span);
         }
-        Ok(NamedType::with_type_arguments(
-            spelling,
+
+        let mut array_suffixes = Vec::new();
+        while self.check(&TokenKind::LeftBracket)
+            && matches!(self.peek(1).kind, TokenKind::RightBracket)
+        {
+            let start = self.advance().span;
+            let end = self.advance().span;
+            let suffix = start.merge(end);
+            span = span.merge(suffix);
+            array_suffixes.push(suffix);
+        }
+        Ok(TypeRef {
+            segments,
             type_arguments,
+            array_suffixes,
             span,
-        ))
+        })
     }
 
     pub(super) fn is_declaration_start(&self) -> bool {
@@ -124,12 +82,6 @@ impl Parser {
         match probe.parse_type_name() {
             Ok(_) => matches!(probe.current().kind, TokenKind::Identifier(_)),
             Err(error) if error.message == "only one array suffix is supported" => {
-                while probe.check(&TokenKind::LeftBracket)
-                    && matches!(probe.peek(1).kind, TokenKind::RightBracket)
-                {
-                    probe.advance();
-                    probe.advance();
-                }
                 matches!(probe.current().kind, TokenKind::Identifier(_))
             }
             Err(_) => false,
@@ -171,6 +123,9 @@ impl Parser {
         matches!(
             self.token_at(cursor).kind,
             TokenKind::Class | TokenKind::Interface
+        ) || matches!(
+            &self.token_at(cursor).kind,
+            TokenKind::Identifier(spelling) if spelling.eq_ignore_ascii_case("enum")
         )
     }
 
@@ -213,11 +168,7 @@ impl Parser {
         let Ok((candidate, _)) = probe.parse_type_name() else {
             return false;
         };
-        if !matches!(probe.current().kind, TokenKind::RightParen)
-            || matches!(&candidate, TypeName::Custom(name) if name.canonical.contains('.'))
-        {
-            // Arbitrary qualified custom types are outside the current grammar,
-            // so `(receiver.member)` remains an expression rather than a cast.
+        if !matches!(probe.current().kind, TokenKind::RightParen) {
             return false;
         }
         probe.advance();
@@ -322,4 +273,72 @@ fn is_unary_expression_start(kind: &TokenKind) -> bool {
             | TokenKind::Bang
             | TokenKind::Tilde
     )
+}
+
+fn named_type_from_ref(syntax: TypeRef) -> Result<NamedType, Diagnostic> {
+    let type_arguments = syntax
+        .type_arguments
+        .iter()
+        .map(|argument| {
+            Ok(TypeArgument {
+                syntax: argument.clone(),
+                ty: type_name_from_ref(argument)?,
+                span: argument.span,
+            })
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
+    Ok(NamedType::from_type_ref(syntax, type_arguments))
+}
+
+fn type_name_from_ref(syntax: &TypeRef) -> Result<TypeName, Diagnostic> {
+    if syntax.array_suffixes.len() > 1 {
+        return Err(Diagnostic::new(
+            "only one array suffix is supported",
+            syntax.array_suffixes[1],
+        ));
+    }
+    let canonical = syntax.canonical();
+    let arguments = syntax
+        .type_arguments
+        .iter()
+        .map(type_name_from_ref)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ty = match canonical.as_str() {
+        "list" | "set" | "iterable" => {
+            let [element] = arguments.as_slice() else {
+                return Err(Diagnostic::new(
+                    format!("{} requires exactly one type argument", syntax.spelling()),
+                    syntax.span,
+                ));
+            };
+            match canonical.as_str() {
+                "list" => TypeName::List(Box::new(element.clone())),
+                "set" => TypeName::Set(Box::new(element.clone())),
+                _ => TypeName::Iterable(Box::new(element.clone())),
+            }
+        }
+        "map" => {
+            let [key, value] = arguments.as_slice() else {
+                return Err(Diagnostic::new(
+                    "Map requires exactly two type arguments",
+                    syntax.span,
+                ));
+            };
+            TypeName::Map(Box::new(key.clone()), Box::new(value.clone()))
+        }
+        _ if TypeName::from_apex_name(&canonical).is_some() => {
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!("{} does not accept type arguments", syntax.spelling()),
+                    syntax.span,
+                ));
+            }
+            TypeName::from_apex_name(&canonical).expect("type presence was checked")
+        }
+        _ => TypeName::Custom(named_type_from_ref(syntax.clone())?),
+    };
+    for _ in &syntax.array_suffixes {
+        ty = TypeName::List(Box::new(ty));
+    }
+    Ok(ty)
 }

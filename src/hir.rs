@@ -30,9 +30,11 @@ pub struct Program {
     places: HashMap<Span, PlaceTarget>,
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
+    type_literals: HashMap<Span, ast::TypeName>,
     queries: HashMap<Span, CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
+    class_metadata: Vec<ClassRuntimeMetadata>,
     schema: SchemaCatalog,
 }
 
@@ -46,10 +48,12 @@ impl Program {
             places,
             binary_operations,
             unary_operations,
+            type_literals,
             queries,
             null_aware_queries,
             async_contracts,
         } = facts;
+        let class_metadata = build_class_metadata(&ast);
         Self {
             ast,
             expression_types,
@@ -59,9 +63,11 @@ impl Program {
             places,
             binary_operations,
             unary_operations,
+            type_literals,
             queries,
             null_aware_queries,
             async_contracts,
+            class_metadata,
             schema,
         }
     }
@@ -98,6 +104,10 @@ impl Program {
         self.unary_operations.get(&span).copied()
     }
 
+    pub(crate) fn type_literal(&self, span: Span) -> Option<&ast::TypeName> {
+        self.type_literals.get(&span)
+    }
+
     pub fn checked_query(&self, span: Span) -> Option<&CheckedQuery> {
         self.queries.get(&span)
     }
@@ -110,8 +120,139 @@ impl Program {
         self.async_contracts.get(&class_id)
     }
 
+    pub(crate) fn class_metadata(&self, class_id: ClassId) -> &ClassRuntimeMetadata {
+        &self.class_metadata[class_id.index()]
+    }
+
     pub fn schema(&self) -> &SchemaCatalog {
         &self.schema
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClassRuntimeMetadata {
+    pub parent: Option<ClassId>,
+    pub lineage_base_first: Vec<ClassId>,
+    pub static_slots: Vec<ClassMemberId>,
+    pub static_steps: Vec<ClassInitializationStep>,
+    pub instance_slots: Vec<ClassMemberId>,
+    pub instance_steps: Vec<ClassInitializationStep>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClassInitializationStep {
+    Field(ClassMemberId),
+    Block(ClassMemberId),
+}
+
+fn build_class_metadata(program: &ast::Program) -> Vec<ClassRuntimeMetadata> {
+    let mut qualified = HashMap::new();
+    let mut short = HashMap::<String, Vec<usize>>::new();
+    for (class_id, class) in program.classes.iter().enumerate() {
+        qualified.insert(class.qualified_name.canonical.clone(), class_id);
+        short
+            .entry(class.name.canonical.clone())
+            .or_default()
+            .push(class_id);
+    }
+    let parents = program
+        .classes
+        .iter()
+        .map(|class| {
+            class
+                .superclass
+                .as_ref()
+                .and_then(|name| resolve_class_id(name, &qualified, &short))
+                .map(ClassId::from_index)
+        })
+        .collect::<Vec<_>>();
+
+    program
+        .classes
+        .iter()
+        .enumerate()
+        .map(|(class_id, class)| class_runtime_metadata(class_id, class, &parents))
+        .collect()
+}
+
+fn resolve_class_id(
+    name: &ast::NamedType,
+    qualified: &HashMap<String, usize>,
+    short: &HashMap<String, Vec<usize>>,
+) -> Option<usize> {
+    qualified.get(&name.canonical).copied().or_else(|| {
+        short
+            .get(&name.canonical)
+            .and_then(|ids| <&[usize; 1]>::try_from(ids.as_slice()).ok())
+            .map(|ids| ids[0])
+    })
+}
+
+fn class_runtime_metadata(
+    class_id: usize,
+    class: &ast::ClassDeclaration,
+    parents: &[Option<ClassId>],
+) -> ClassRuntimeMetadata {
+    let mut lineage_base_first = Vec::new();
+    let mut cursor = Some(ClassId::from_index(class_id));
+    let mut remaining = parents.len();
+    while let Some(current) = cursor
+        && remaining > 0
+    {
+        lineage_base_first.push(current);
+        cursor = parents[current.index()];
+        remaining -= 1;
+    }
+    lineage_base_first.reverse();
+    let mut metadata = ClassRuntimeMetadata {
+        parent: parents[class_id],
+        lineage_base_first,
+        ..ClassRuntimeMetadata::default()
+    };
+    for (member_id, member) in class.members.iter().enumerate() {
+        record_runtime_member(&mut metadata, class_id, member_id, member);
+    }
+    metadata
+}
+
+fn record_runtime_member(
+    metadata: &mut ClassRuntimeMetadata,
+    class_id: usize,
+    member_id: usize,
+    member: &ast::ClassMember,
+) {
+    let target = ClassMemberId {
+        class_id,
+        member_id,
+    };
+    match member {
+        ast::ClassMember::Field(field) => {
+            let (slots, steps) = if field.modifiers.contains(&ast::Modifier::Static) {
+                (&mut metadata.static_slots, &mut metadata.static_steps)
+            } else {
+                (&mut metadata.instance_slots, &mut metadata.instance_steps)
+            };
+            slots.push(target);
+            if field.initializer.is_some() {
+                steps.push(ClassInitializationStep::Field(target));
+            }
+        }
+        ast::ClassMember::Property(property) => {
+            if property.modifiers.contains(&ast::Modifier::Static) {
+                metadata.static_slots.push(target);
+            } else {
+                metadata.instance_slots.push(target);
+            }
+        }
+        ast::ClassMember::Initializer(initializer) => {
+            let steps = if initializer.is_static {
+                &mut metadata.static_steps
+            } else {
+                &mut metadata.instance_steps
+            };
+            steps.push(ClassInitializationStep::Block(target));
+        }
+        ast::ClassMember::Constructor(_) | ast::ClassMember::Method(_) => {}
     }
 }
 
@@ -123,6 +264,7 @@ pub(crate) struct ProgramFacts {
     pub places: HashMap<Span, PlaceTarget>,
     pub binary_operations: HashMap<Span, CheckedBinaryOperation>,
     pub unary_operations: HashMap<Span, CheckedUnaryOperation>,
+    pub type_literals: HashMap<Span, ast::TypeName>,
     pub queries: HashMap<Span, CheckedQuery>,
     pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
@@ -183,6 +325,9 @@ pub enum CallTarget {
         class_id: usize,
         member_id: Option<usize>,
     },
+    CustomExceptionConstructor {
+        class_id: ClassId,
+    },
     SObjectConstructor {
         object_id: Option<usize>,
     },
@@ -190,7 +335,32 @@ pub enum CallTarget {
     SObjectPut,
     DatabaseDml(ast::DmlOperation),
     AggregateResultGet,
+    EnumMethod {
+        class_id: ClassId,
+        method: EnumMethod,
+    },
     PlatformConstructor(PlatformConstructor),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnumMethod {
+    Name,
+    Ordinal,
+    Values,
+    ValueOf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ClassId(usize);
+
+impl ClassId {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -292,6 +462,13 @@ pub enum MemberTarget {
         target_object_id: usize,
     },
     TriggerContext(TriggerContextVariable),
+    EnumConstant {
+        class_id: ClassId,
+        ordinal: usize,
+    },
+    TypeReference {
+        class_id: ClassId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

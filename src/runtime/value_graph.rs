@@ -297,6 +297,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::AggregateResult(id) => {
                 self.render_aggregate(*id, traversal, output, cycle_behavior)
             }
+            Value::Enum { class_id, ordinal } => {
+                let class = &self.classes()[class_id.index()];
+                traversal.write(
+                    output,
+                    &format!(
+                        "{}.{}",
+                        class.qualified_name.spelling, class.enum_constants[*ordinal].spelling
+                    ),
+                )
+            }
             Value::Exception(exception) => render_exception(exception, traversal, output),
             _ => render_leaf(value, traversal, output),
         };
@@ -572,6 +582,7 @@ fn render_leaf(
             traversal.write(output, &value.format("%Y-%m-%d %H:%M:%S").to_string())
         }
         Value::Time(value) => traversal.write(output, &value.format("%H:%M:%S%.3f").to_string()),
+        Value::TypeLiteral(ty) => traversal.write(output, &ty.apex_name()),
         Value::Null(_) => traversal.write(output, "null"),
         Value::Void => traversal.write(output, "void"),
         _ => unreachable!("non-leaf values are dispatched before leaf rendering"),
@@ -777,6 +788,17 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
                 return;
             }
             (Value::Object(left), Value::Object(right)) => left == right,
+            (
+                Value::Enum {
+                    class_id: left_class,
+                    ordinal: left_ordinal,
+                },
+                Value::Enum {
+                    class_id: right_class,
+                    ordinal: right_ordinal,
+                },
+            ) => left_class == right_class && left_ordinal == right_ordinal,
+            (Value::TypeLiteral(left), Value::TypeLiteral(right)) => left == right,
             (Value::SObject(left), Value::SObject(right)) => left == right,
             (Value::Exception(left), Value::Exception(right)) => left == right,
             (Value::Null(_), Value::Null(_)) => true,
