@@ -1,5 +1,6 @@
 use apex_exec::{check, execute, parse, test_runner::TestOptions, tokenize};
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::{self, BufRead, BufReader, IsTerminal},
     path::{Path, PathBuf},
@@ -73,20 +74,12 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    if command == "oracle" {
-        return run_oracle(args);
-    }
-
-    if command == "ci" {
-        return run_ci(args);
-    }
-
-    if command == "hybrid" {
-        return run_hybrid(args);
-    }
-
-    if command == "enterprise" {
-        return run_enterprise(args);
+    match command.as_str() {
+        "oracle" => return run_oracle(args),
+        "ci" => return run_ci(args),
+        "hybrid" => return run_hybrid(args),
+        "enterprise" => return run_enterprise(args),
+        _ => {}
     }
 
     let path = args.next().ok_or_else(usage)?;
@@ -456,210 +449,210 @@ fn run_ci(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
 fn run_enterprise(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     let subcommand = args.next().ok_or_else(usage)?;
     match subcommand.as_str() {
-        "manifest" => {
-            let project = PathBuf::from(args.next().ok_or_else(usage)?);
-            let mut name = None;
-            let mut repository = None;
-            let mut commit = None;
-            let mut tag = None;
-            let mut api_version = None;
-            let mut output = None;
-            let mut package_roots = Vec::new();
-            let mut test_roots = Vec::new();
-            while let Some(argument) = args.next() {
-                match argument.as_str() {
-                    "--name" => set_once(
-                        &mut name,
-                        required_value(&mut args, "--name")?,
-                        "`--name` was provided more than once",
-                    )?,
-                    "--repository" => set_once(
-                        &mut repository,
-                        required_value(&mut args, "--repository")?,
-                        "`--repository` was provided more than once",
-                    )?,
-                    "--commit" => set_once(
-                        &mut commit,
-                        required_value(&mut args, "--commit")?,
-                        "`--commit` was provided more than once",
-                    )?,
-                    "--tag" => set_once(
-                        &mut tag,
-                        required_value(&mut args, "--tag")?,
-                        "`--tag` was provided more than once",
-                    )?,
-                    "--api-version" => set_once(
-                        &mut api_version,
-                        required_value(&mut args, "--api-version")?,
-                        "`--api-version` was provided more than once",
-                    )?,
-                    "--package-root" => {
-                        package_roots
-                            .push(PathBuf::from(required_value(&mut args, "--package-root")?));
-                    }
-                    "--test-root" => {
-                        test_roots.push(PathBuf::from(required_value(&mut args, "--test-root")?));
-                    }
-                    "--output" => set_once(
-                        &mut output,
-                        PathBuf::from(required_value(&mut args, "--output")?),
-                        "`--output` was provided more than once",
-                    )?,
-                    _ => {
-                        return Err(format!(
-                            "unknown enterprise manifest option `{argument}`\n\n{}",
-                            usage()
-                        ));
-                    }
-                }
-            }
-            package_roots.sort();
-            test_roots.sort();
-            let candidate = apex_exec::enterprise::CandidateIdentity {
-                name: name.ok_or_else(|| "`enterprise manifest` requires `--name`".to_owned())?,
-                repository: repository
-                    .ok_or_else(|| "`enterprise manifest` requires `--repository`".to_owned())?,
-                git_commit: commit
-                    .ok_or_else(|| "`enterprise manifest` requires `--commit`".to_owned())?,
-                git_tag: tag.ok_or_else(|| "`enterprise manifest` requires `--tag`".to_owned())?,
-                api_version: api_version
-                    .ok_or_else(|| "`enterprise manifest` requires `--api-version`".to_owned())?,
-            };
-            let output =
-                output.ok_or_else(|| "`enterprise manifest` requires `--output`".to_owned())?;
-            let manifest = apex_exec::enterprise::EnterpriseManifest::generate(
-                project,
-                candidate,
-                package_roots,
-                test_roots,
-            )?;
-            manifest.write(&output)?;
-            println!(
-                "Wrote enterprise manifest {} ({} inputs)",
-                output.display(),
-                manifest.inputs.len()
-            );
-            Ok(ExitCode::SUCCESS)
-        }
-        "capture" => {
-            let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
-            let mut target_org = None;
-            let mut output = None;
-            let mut salesforce_cli = None;
-            let mut wait_minutes = 60_u32;
-            let mut wait_set = false;
-            while let Some(argument) = args.next() {
-                match argument.as_str() {
-                    "--target-org" => set_once(
-                        &mut target_org,
-                        required_value(&mut args, "--target-org")?,
-                        "`--target-org` was provided more than once",
-                    )?,
-                    "--output" => set_once(
-                        &mut output,
-                        PathBuf::from(required_value(&mut args, "--output")?),
-                        "`--output` was provided more than once",
-                    )?,
-                    "--sf" => set_once(
-                        &mut salesforce_cli,
-                        required_value(&mut args, "--sf")?,
-                        "`--sf` was provided more than once",
-                    )?,
-                    "--wait" => {
-                        if wait_set {
-                            return Err("`--wait` was provided more than once".to_owned());
-                        }
-                        let value = required_value(&mut args, "--wait")?;
-                        wait_minutes = value
-                            .parse::<u32>()
-                            .ok()
-                            .filter(|wait| *wait > 0)
-                            .ok_or_else(|| {
-                                "`--wait` requires a positive integer number of minutes".to_owned()
-                            })?;
-                        wait_set = true;
-                    }
-                    _ => {
-                        return Err(format!(
-                            "unknown enterprise capture option `{argument}`\n\n{}",
-                            usage()
-                        ));
-                    }
-                }
-            }
-            let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
-            let options = apex_exec::enterprise::SalesforceCaptureOptions {
-                target_org: target_org
-                    .ok_or_else(|| "`enterprise capture` requires `--target-org`".to_owned())?,
-                wait_minutes,
-            };
-            let output =
-                output.ok_or_else(|| "`enterprise capture` requires `--output`".to_owned())?;
-            let cli = salesforce_cli.map_or_else(
-                apex_exec::enterprise::EnterpriseSalesforceCli::default,
-                apex_exec::enterprise::EnterpriseSalesforceCli::new,
-            );
-            let capture = cli.capture(&manifest, &options)?;
-            capture.write(&output)?;
-            println!(
-                "Wrote Salesforce RunLocalTests capture {} ({} tests: {} passed, {} failed)",
-                output.display(),
-                capture.tests.len(),
-                capture.passed(),
-                capture.failed()
-            );
-            Ok(ExitCode::SUCCESS)
-        }
-        "run" => {
-            let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
-            let mut salesforce_path = None;
-            let mut output = None;
-            while let Some(argument) = args.next() {
-                match argument.as_str() {
-                    "--salesforce" => set_once(
-                        &mut salesforce_path,
-                        PathBuf::from(required_value(&mut args, "--salesforce")?),
-                        "`--salesforce` was provided more than once",
-                    )?,
-                    "--output" => set_once(
-                        &mut output,
-                        PathBuf::from(required_value(&mut args, "--output")?),
-                        "`--output` was provided more than once",
-                    )?,
-                    _ => {
-                        return Err(format!(
-                            "unknown enterprise run option `{argument}`\n\n{}",
-                            usage()
-                        ));
-                    }
-                }
-            }
-            let salesforce_path = salesforce_path
-                .ok_or_else(|| "`enterprise run` requires `--salesforce`".to_owned())?;
-            let output = output.ok_or_else(|| "`enterprise run` requires `--output`".to_owned())?;
-            let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
-            let capture = apex_exec::enterprise::SalesforceCapture::load(salesforce_path)?;
-            let report = apex_exec::enterprise::run(
-                &manifest,
-                &capture,
-                &apex_exec::enterprise::EnterpriseRunOptions::default(),
-            )?;
-            report.write(&output)?;
-            println!(
-                "Wrote enterprise baseline {} (strict compatibility: {}/{}; {} matching passes, {} matching failures)",
-                output.display(),
-                report.counts.strict_compatible.count,
-                report.raw_denominator,
-                report.counts.matching_passes,
-                report.counts.matching_failures
-            );
-            Ok(ExitCode::SUCCESS)
-        }
+        "manifest" => run_enterprise_manifest(args),
+        "capture" => run_enterprise_capture(args),
+        "run" => run_enterprise_measure(args),
         _ => Err(format!(
             "unknown enterprise subcommand `{subcommand}`\n\n{}",
             usage()
         )),
     }
+}
+
+fn run_enterprise_manifest(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let project = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut values = BTreeMap::new();
+    let mut package_roots = Vec::new();
+    let mut test_roots = Vec::new();
+    while let Some(argument) = args.next() {
+        record_manifest_option(
+            &argument,
+            &mut args,
+            &mut values,
+            &mut package_roots,
+            &mut test_roots,
+        )?;
+    }
+    package_roots.sort();
+    test_roots.sort();
+    let mut required = |name: &str| {
+        values
+            .remove(name)
+            .ok_or_else(|| format!("`enterprise manifest` requires `{name}`"))
+    };
+    let candidate = apex_exec::enterprise::CandidateIdentity {
+        name: required("--name")?,
+        repository: required("--repository")?,
+        git_commit: required("--commit")?,
+        git_tag: required("--tag")?,
+        api_version: required("--api-version")?,
+    };
+    let output = PathBuf::from(required("--output")?);
+    let manifest = apex_exec::enterprise::EnterpriseManifest::generate(
+        project,
+        candidate,
+        package_roots,
+        test_roots,
+    )?;
+    manifest.write(&output)?;
+    println!(
+        "Wrote enterprise manifest {} ({} inputs)",
+        output.display(),
+        manifest.inputs.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn record_manifest_option(
+    argument: &str,
+    args: &mut impl Iterator<Item = String>,
+    values: &mut BTreeMap<String, String>,
+    package_roots: &mut Vec<PathBuf>,
+    test_roots: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !matches!(
+        argument,
+        "--package-root"
+            | "--test-root"
+            | "--name"
+            | "--repository"
+            | "--commit"
+            | "--tag"
+            | "--api-version"
+            | "--output"
+    ) {
+        return Err(unknown_enterprise_option("manifest", argument));
+    }
+    let value = required_value(args, argument)?;
+    match argument {
+        "--package-root" => package_roots.push(PathBuf::from(value)),
+        "--test-root" => test_roots.push(PathBuf::from(value)),
+        "--name" | "--repository" | "--commit" | "--tag" | "--api-version" | "--output" => {
+            if values.insert(argument.to_owned(), value).is_some() {
+                return Err(format!("`{argument}` was provided more than once"));
+            }
+        }
+        _ => unreachable!("enterprise manifest option was prevalidated"),
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct EnterpriseCaptureArgs {
+    target_org: Option<String>,
+    output: Option<String>,
+    salesforce_cli: Option<String>,
+    wait_minutes: Option<String>,
+}
+
+impl EnterpriseCaptureArgs {
+    fn record(
+        &mut self,
+        argument: &str,
+        args: &mut impl Iterator<Item = String>,
+    ) -> Result<(), String> {
+        match argument {
+            "--target-org" => set_option(&mut self.target_org, args, argument),
+            "--output" => set_option(&mut self.output, args, argument),
+            "--sf" => set_option(&mut self.salesforce_cli, args, argument),
+            "--wait" => set_option(&mut self.wait_minutes, args, argument),
+            _ => Err(unknown_enterprise_option("capture", argument)),
+        }
+    }
+}
+
+fn run_enterprise_capture(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut parsed = EnterpriseCaptureArgs::default();
+    while let Some(argument) = args.next() {
+        parsed.record(&argument, &mut args)?;
+    }
+    let wait_minutes = parsed.wait_minutes.map_or(Ok(60), |value| {
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|wait| *wait > 0)
+            .ok_or_else(|| "`--wait` requires a positive integer number of minutes".to_owned())
+    })?;
+    let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+    let options = apex_exec::enterprise::SalesforceCaptureOptions {
+        target_org: parsed
+            .target_org
+            .ok_or_else(|| "`enterprise capture` requires `--target-org`".to_owned())?,
+        wait_minutes,
+    };
+    let output = PathBuf::from(
+        parsed
+            .output
+            .ok_or_else(|| "`enterprise capture` requires `--output`".to_owned())?,
+    );
+    let cli = parsed.salesforce_cli.map_or_else(
+        apex_exec::enterprise::EnterpriseSalesforceCli::default,
+        apex_exec::enterprise::EnterpriseSalesforceCli::new,
+    );
+    let capture = cli.capture(&manifest, &options)?;
+    capture.write(&output)?;
+    println!(
+        "Wrote Salesforce RunLocalTests capture {} ({} tests: {} passed, {} failed)",
+        output.display(),
+        capture.tests.len(),
+        capture.passed(),
+        capture.failed()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_enterprise_measure(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let manifest_path = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut salesforce_path = None;
+    let mut output = None;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--salesforce" => set_option(&mut salesforce_path, &mut args, &argument)?,
+            "--output" => set_option(&mut output, &mut args, &argument)?,
+            _ => return Err(unknown_enterprise_option("run", &argument)),
+        }
+    }
+    let salesforce_path =
+        salesforce_path.ok_or_else(|| "`enterprise run` requires `--salesforce`".to_owned())?;
+    let output =
+        PathBuf::from(output.ok_or_else(|| "`enterprise run` requires `--output`".to_owned())?);
+    let manifest = apex_exec::enterprise::EnterpriseManifest::load(manifest_path)?;
+    let capture = apex_exec::enterprise::SalesforceCapture::load(salesforce_path)?;
+    let report = apex_exec::enterprise::run(
+        &manifest,
+        &capture,
+        &apex_exec::enterprise::EnterpriseRunOptions::default(),
+    )?;
+    report.write(&output)?;
+    println!(
+        "Wrote enterprise baseline {} (strict compatibility: {}/{}; {} matching passes, {} matching failures)",
+        output.display(),
+        report.counts.strict_compatible.count,
+        report.raw_denominator,
+        report.counts.matching_passes,
+        report.counts.matching_failures
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn set_option(
+    target: &mut Option<String>,
+    args: &mut impl Iterator<Item = String>,
+    name: &str,
+) -> Result<(), String> {
+    set_once(
+        target,
+        required_value(args, name)?,
+        &format!("`{name}` was provided more than once"),
+    )
+}
+
+fn unknown_enterprise_option(command: &str, argument: &str) -> String {
+    format!(
+        "unknown enterprise {command} option `{argument}`\n\n{}",
+        usage()
+    )
 }
 
 fn run_hybrid(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {

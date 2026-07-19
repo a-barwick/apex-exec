@@ -151,52 +151,69 @@ impl SalesforceCapture {
         }
         validate_sha256(&self.manifest_sha256, "manifest")?;
         validate_sha256(&self.snapshot_sha256, "snapshot")?;
-        if self.target_org.trim().is_empty() || self.salesforce_cli_version.trim().is_empty() {
-            return Err("enterprise Salesforce identity fields cannot be empty".to_owned());
-        }
-        if self.org_id.len() != 18
-            || !self.org_id.starts_with("00D")
-            || !self.org_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        {
-            return Err("enterprise Salesforce org ID must be an 18-character 00D ID".to_owned());
-        }
-        if self.test_level != "RunLocalTests" {
-            return Err("enterprise Salesforce capture must use RunLocalTests".to_owned());
-        }
-        DateTime::parse_from_rfc3339(&self.captured_at)
-            .map_err(|error| format!("invalid enterprise capture timestamp: {error}"))?;
-        validate_sorted_unique(&self.source_test_classes, "source test classes")?;
-        if self.tests.len() < 100 {
-            return Err(format!(
-                "enterprise Salesforce denominator has {} tests; at least 100 are required",
-                self.tests.len()
-            ));
-        }
-        let names = self
-            .tests
-            .iter()
-            .map(|test| test.name.clone())
-            .collect::<Vec<_>>();
-        validate_sorted_unique(&names, "Salesforce tests")?;
-        for test in &self.tests {
-            if !matches!(test.outcome.as_str(), "pass" | "fail") {
-                return Err(format!(
-                    "enterprise Salesforce test `{}` has unsupported outcome `{}`",
-                    test.name, test.outcome
-                ));
-            }
-        }
-        let mut unsigned = self.clone();
-        unsigned.snapshot_sha256.clear();
-        let expected = sha256(
-            serde_json::to_vec(&unsigned)
-                .map_err(|error| format!("failed to verify Salesforce capture seal: {error}"))?,
-        );
-        if expected != self.snapshot_sha256 {
-            return Err("enterprise Salesforce capture digest mismatch".to_owned());
-        }
+        validate_capture_identity(self)?;
+        validate_capture_tests(self)?;
+        validate_capture_seal(self)?;
         Ok(())
     }
+}
+
+fn validate_capture_identity(capture: &SalesforceCapture) -> Result<(), String> {
+    if capture.target_org.trim().is_empty() || capture.salesforce_cli_version.trim().is_empty() {
+        return Err("enterprise Salesforce identity fields cannot be empty".to_owned());
+    }
+    if capture.org_id.len() != 18
+        || !capture.org_id.starts_with("00D")
+        || !capture
+            .org_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err("enterprise Salesforce org ID must be an 18-character 00D ID".to_owned());
+    }
+    if capture.test_level != "RunLocalTests" {
+        return Err("enterprise Salesforce capture must use RunLocalTests".to_owned());
+    }
+    DateTime::parse_from_rfc3339(&capture.captured_at)
+        .map_err(|error| format!("invalid enterprise capture timestamp: {error}"))?;
+    validate_sorted_unique(&capture.source_test_classes, "source test classes")
+}
+
+fn validate_capture_tests(capture: &SalesforceCapture) -> Result<(), String> {
+    if capture.tests.len() < 100 {
+        return Err(format!(
+            "enterprise Salesforce denominator has {} tests; at least 100 are required",
+            capture.tests.len()
+        ));
+    }
+    let names = capture
+        .tests
+        .iter()
+        .map(|test| test.name.clone())
+        .collect::<Vec<_>>();
+    validate_sorted_unique(&names, "Salesforce tests")?;
+    for test in &capture.tests {
+        if !matches!(test.outcome.as_str(), "pass" | "fail") {
+            return Err(format!(
+                "enterprise Salesforce test `{}` has unsupported outcome `{}`",
+                test.name, test.outcome
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_capture_seal(capture: &SalesforceCapture) -> Result<(), String> {
+    let mut unsigned = capture.clone();
+    unsigned.snapshot_sha256.clear();
+    let expected = sha256(
+        serde_json::to_vec(&unsigned)
+            .map_err(|error| format!("failed to verify Salesforce capture seal: {error}"))?,
+    );
+    if expected != capture.snapshot_sha256 {
+        return Err("enterprise Salesforce capture digest mismatch".to_owned());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -239,80 +256,10 @@ impl EnterpriseSalesforceCli {
             return Err("enterprise Salesforce wait must be at least one minute".to_owned());
         }
         let source_test_classes = source_test_classes(manifest)?;
-        let version = self.command_text(manifest.project_root(), &[OsString::from("--version")])?;
-        let salesforce_cli_version = version
-            .split_whitespace()
-            .next()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "Salesforce CLI version response omitted its version".to_owned())?
-            .to_owned();
-        let org = self.command_json(
-            manifest.project_root(),
-            &[
-                OsString::from("org"),
-                OsString::from("display"),
-                OsString::from("--target-org"),
-                OsString::from(&options.target_org),
-                OsString::from("--json"),
-            ],
-        )?;
-        if find_u64(&org, "status") != Some(0) {
-            return Err("Salesforce CLI could not resolve the enterprise target org".to_owned());
-        }
-        let org_id = find_string(&org, "id")
-            .ok_or_else(|| "Salesforce org display omitted the org ID".to_owned())?
-            .to_owned();
-        if let Some(status) = find_string(&org, "connectedStatus")
-            && !status.eq_ignore_ascii_case("connected")
-        {
-            return Err(format!(
-                "Salesforce target org is not connected (status `{status}`)"
-            ));
-        }
-        let test_response = self.command_json(
-            manifest.project_root(),
-            &[
-                OsString::from("apex"),
-                OsString::from("run"),
-                OsString::from("test"),
-                OsString::from("--target-org"),
-                OsString::from(&options.target_org),
-                OsString::from("--test-level"),
-                OsString::from("RunLocalTests"),
-                OsString::from("--wait"),
-                OsString::from(options.wait_minutes.to_string()),
-                OsString::from("--result-format"),
-                OsString::from("json"),
-                OsString::from("--api-version"),
-                OsString::from(&manifest.candidate.api_version),
-                OsString::from("--json"),
-            ],
-        )?;
-        let tests = parse_test_outcomes(&test_response)?;
-        let allowed = source_test_classes
-            .iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect::<BTreeSet<_>>();
-        let unexpected = tests
-            .iter()
-            .filter_map(|test| {
-                let class = test.name.split_once('.').map_or("", |(class, _)| class);
-                (!allowed.contains(&class.to_ascii_lowercase())).then(|| test.name.clone())
-            })
-            .collect::<Vec<_>>();
-        if !unexpected.is_empty() {
-            return Err(format!(
-                "Salesforce discovered tests outside the pinned test roots: {}",
-                unexpected.join(", ")
-            ));
-        }
-        if tests.len() < manifest.minimum_test_methods {
-            return Err(format!(
-                "Salesforce discovered {} candidate tests; at least {} are required",
-                tests.len(),
-                manifest.minimum_test_methods
-            ));
-        }
+        let salesforce_cli_version = self.resolve_version(manifest.project_root())?;
+        let org_id = self.resolve_org(manifest.project_root(), &options.target_org)?;
+        let tests = self.run_local_tests(manifest, options)?;
+        validate_captured_tests(manifest, &source_test_classes, &tests)?;
         let captured_at =
             DateTime::<Utc>::from(SystemTime::now()).to_rfc3339_opts(SecondsFormat::Secs, true);
         let mut capture = SalesforceCapture {
@@ -331,6 +278,69 @@ impl EnterpriseSalesforceCli {
         capture.seal()?;
         capture.validate()?;
         Ok(capture)
+    }
+
+    fn resolve_version(&self, current_dir: &Path) -> Result<String, String> {
+        let version = self.command_text(current_dir, &[OsString::from("--version")])?;
+        version
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| "Salesforce CLI version response omitted its version".to_owned())
+    }
+
+    fn resolve_org(&self, current_dir: &Path, target_org: &str) -> Result<String, String> {
+        let org = self.command_json(
+            current_dir,
+            &[
+                OsString::from("org"),
+                OsString::from("display"),
+                OsString::from("--target-org"),
+                OsString::from(target_org),
+                OsString::from("--json"),
+            ],
+        )?;
+        if find_u64(&org, "status") != Some(0) {
+            return Err("Salesforce CLI could not resolve the enterprise target org".to_owned());
+        }
+        if let Some(status) = find_string(&org, "connectedStatus")
+            && !status.eq_ignore_ascii_case("connected")
+        {
+            return Err(format!(
+                "Salesforce target org is not connected (status `{status}`)"
+            ));
+        }
+        find_string(&org, "id")
+            .map(str::to_owned)
+            .ok_or_else(|| "Salesforce org display omitted the org ID".to_owned())
+    }
+
+    fn run_local_tests(
+        &self,
+        manifest: &EnterpriseManifest,
+        options: &SalesforceCaptureOptions,
+    ) -> Result<Vec<SalesforceTestOutcome>, String> {
+        let response = self.command_json(
+            manifest.project_root(),
+            &[
+                OsString::from("apex"),
+                OsString::from("run"),
+                OsString::from("test"),
+                OsString::from("--target-org"),
+                OsString::from(&options.target_org),
+                OsString::from("--test-level"),
+                OsString::from("RunLocalTests"),
+                OsString::from("--wait"),
+                OsString::from(options.wait_minutes.to_string()),
+                OsString::from("--result-format"),
+                OsString::from("json"),
+                OsString::from("--api-version"),
+                OsString::from(&manifest.candidate.api_version),
+                OsString::from("--json"),
+            ],
+        )?;
+        parse_test_outcomes(&response)
     }
 
     fn command_json(&self, current_dir: &Path, arguments: &[OsString]) -> Result<Value, String> {
@@ -382,6 +392,38 @@ impl EnterpriseSalesforceCli {
         String::from_utf8(output.stdout)
             .map_err(|error| format!("Salesforce CLI version output was not UTF-8: {error}"))
     }
+}
+
+fn validate_captured_tests(
+    manifest: &EnterpriseManifest,
+    source_test_classes: &[String],
+    tests: &[SalesforceTestOutcome],
+) -> Result<(), String> {
+    let allowed = source_test_classes
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let unexpected = tests
+        .iter()
+        .filter_map(|test| {
+            let class = test.name.split_once('.').map_or("", |(class, _)| class);
+            (!allowed.contains(&class.to_ascii_lowercase())).then(|| test.name.clone())
+        })
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(format!(
+            "Salesforce discovered tests outside the pinned test roots: {}",
+            unexpected.join(", ")
+        ));
+    }
+    if tests.len() < manifest.minimum_test_methods {
+        return Err(format!(
+            "Salesforce discovered {} candidate tests; at least {} are required",
+            tests.len(),
+            manifest.minimum_test_methods
+        ));
+    }
+    Ok(())
 }
 
 fn source_test_classes(manifest: &EnterpriseManifest) -> Result<Vec<String>, String> {

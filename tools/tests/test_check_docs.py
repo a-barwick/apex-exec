@@ -54,6 +54,16 @@ class DocumentationCheckTests(unittest.TestCase):
         self.assertEqual(result.problems, [])
         self.assertEqual(result.local_links, 0)
 
+    def test_nested_repository_documents_are_not_project_documents(self):
+        self.write("README.md", "# Home\n")
+        self.write("vendor/project/.git", "gitdir: elsewhere\n")
+        self.write("vendor/project/BROKEN.md", "third-party formatting")
+
+        result = check_docs.validate_documents(self.root)
+
+        self.assertEqual(result.problems, [])
+        self.assertEqual(result.documents, 1)
+
     def test_formatting_hygiene_is_enforced(self):
         self.write("README.md", "# Home \t\n\nText without final newline")
 

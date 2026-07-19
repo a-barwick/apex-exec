@@ -21,6 +21,9 @@ cargo run -- hybrid examples/milestone15-project/apex-exec-ci.json \
   --expected-target-org staging \
   --expected-org-id 00D000000000001 \
   --replay
+cargo run -- enterprise run benchmarks/milestone22/manifest.json \
+  --salesforce evidence/milestone22/salesforce.json \
+  --output /tmp/apex-exec-m22-report.json
 cargo run -- repl
 cargo run -- lsp .
 cargo run -- dap
@@ -33,6 +36,14 @@ or auth URLs. Authenticated capture requires a cacheable M14 result and performs
 two scoped retrievals. Replay requires `--replay`, the recorded alias and org
 ID, the same maximum-age policy, and the recorded Salesforce CLI version. See
 `docs/specifications/hybrid-validation-evidence.md` for the exact contract.
+
+The frozen M22 Nebula Logger candidate, Salesforce denominator, and
+three-rerun report are under `benchmarks/milestone22/` and
+`evidence/milestone22/`. Replaying `enterprise run` is credential-free.
+Refreshing `salesforce.json` requires a disposable org containing the
+byte-identical package and Nebula's pinned Salesforce CLI; freeze that capture
+before inspecting local results. See
+`docs/specifications/enterprise-baseline.md`.
 
 The VS Code thin client is under `editors/vscode`; see its README for local
 extension-host instructions.

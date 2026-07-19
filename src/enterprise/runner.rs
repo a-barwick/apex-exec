@@ -228,118 +228,9 @@ struct Inventory {
 
 impl Inventory {
     fn load(manifest: &EnterpriseManifest) -> Result<Self, String> {
-        let mut sources = BTreeMap::new();
-        let mut owners = BTreeMap::new();
-        for input in &manifest.inputs {
-            if !is_apex(&input.path) {
-                continue;
-            }
-            let absolute = manifest.project_root().join(&input.path);
-            let source = fs::read_to_string(&absolute).map_err(|error| {
-                format!(
-                    "failed to read pinned Apex source `{}`: {error}",
-                    input.path.display()
-                )
-            })?;
-            let owner = input
-                .path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    format!(
-                        "pinned Apex source `{}` has a non-Unicode name",
-                        input.path.display()
-                    )
-                })?
-                .to_ascii_lowercase();
-            if owners.insert(owner.clone(), input.path.clone()).is_some() {
-                return Err(format!(
-                    "enterprise candidate declares duplicate Apex owner `{owner}`"
-                ));
-            }
-            sources.insert(
-                input.path.clone(),
-                SourceFile {
-                    path: absolute,
-                    source,
-                },
-            );
-        }
-        if sources.is_empty() {
-            return Err("enterprise candidate contains no Apex source".to_owned());
-        }
-
-        let mut parse_failures = BTreeMap::new();
-        let mut dependencies = BTreeMap::new();
-        for (path, file) in &sources {
-            let tokens = match crate::tokenize(&file.source) {
-                Ok(tokens) => tokens,
-                Err(diagnostic) => {
-                    let (line, column) = source_line_column(&file.source, diagnostic.span.start);
-                    parse_failures.insert(
-                        path.clone(),
-                        source_blocker(
-                            "parse",
-                            "syntax.lexer",
-                            diagnostic.message,
-                            path.clone(),
-                            line,
-                            column,
-                        ),
-                    );
-                    dependencies.insert(path.clone(), BTreeSet::new());
-                    continue;
-                }
-            };
-            if let Err(diagnostic) = crate::parse(&file.source) {
-                let (line, column) = source_line_column(&file.source, diagnostic.span.start);
-                parse_failures.insert(
-                    path.clone(),
-                    source_blocker(
-                        "parse",
-                        "syntax.parser",
-                        diagnostic.message,
-                        path.clone(),
-                        line,
-                        column,
-                    ),
-                );
-            }
-            let references = tokens
-                .into_iter()
-                .filter_map(|token| match token.kind {
-                    TokenKind::Identifier(name) => Some(name.to_ascii_lowercase()),
-                    _ => None,
-                })
-                .filter_map(|name| owners.get(&name).cloned())
-                .filter(|dependency| dependency != path)
-                .collect();
-            dependencies.insert(path.clone(), references);
-        }
-
-        let mut test_classes = BTreeMap::new();
-        let mut implicit_sources = Vec::new();
-        for path in sources.keys() {
-            if path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("trigger"))
-            {
-                implicit_sources.push(path.clone());
-            }
-            if manifest
-                .test_roots
-                .iter()
-                .any(|root| path.starts_with(root))
-            {
-                let class = path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .expect("source inventory already validated Unicode file names")
-                    .to_ascii_lowercase();
-                test_classes.insert(class, path.clone());
-            }
-        }
+        let (sources, owners) = load_sources(manifest)?;
+        let (parse_failures, dependencies) = analyze_sources(&sources, &owners);
+        let (test_classes, implicit_sources) = index_test_and_implicit_sources(manifest, &sources);
         Ok(Self {
             sources,
             test_classes,
@@ -368,6 +259,138 @@ impl Inventory {
     }
 }
 
+fn load_sources(
+    manifest: &EnterpriseManifest,
+) -> Result<(BTreeMap<PathBuf, SourceFile>, BTreeMap<String, PathBuf>), String> {
+    let mut sources = BTreeMap::new();
+    let mut owners = BTreeMap::new();
+    for input in &manifest.inputs {
+        if !is_apex(&input.path) {
+            continue;
+        }
+        let absolute = manifest.project_root().join(&input.path);
+        let source = fs::read_to_string(&absolute).map_err(|error| {
+            format!(
+                "failed to read pinned Apex source `{}`: {error}",
+                input.path.display()
+            )
+        })?;
+        let owner = input
+            .path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                format!(
+                    "pinned Apex source `{}` has a non-Unicode name",
+                    input.path.display()
+                )
+            })?
+            .to_ascii_lowercase();
+        if owners.insert(owner.clone(), input.path.clone()).is_some() {
+            return Err(format!(
+                "enterprise candidate declares duplicate Apex owner `{owner}`"
+            ));
+        }
+        sources.insert(
+            input.path.clone(),
+            SourceFile {
+                path: absolute,
+                source,
+            },
+        );
+    }
+    if sources.is_empty() {
+        return Err("enterprise candidate contains no Apex source".to_owned());
+    }
+    Ok((sources, owners))
+}
+
+fn analyze_sources(
+    sources: &BTreeMap<PathBuf, SourceFile>,
+    owners: &BTreeMap<String, PathBuf>,
+) -> (
+    BTreeMap<PathBuf, EnterpriseBlocker>,
+    BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+) {
+    let mut parse_failures = BTreeMap::new();
+    let mut dependencies = BTreeMap::new();
+    for (path, file) in sources {
+        let tokens = match crate::tokenize(&file.source) {
+            Ok(tokens) => tokens,
+            Err(diagnostic) => {
+                record_source_failure(&mut parse_failures, path, file, "syntax.lexer", diagnostic);
+                dependencies.insert(path.clone(), BTreeSet::new());
+                continue;
+            }
+        };
+        if let Err(diagnostic) = crate::parse(&file.source) {
+            record_source_failure(&mut parse_failures, path, file, "syntax.parser", diagnostic);
+        }
+        let references = tokens
+            .into_iter()
+            .filter_map(|token| match token.kind {
+                TokenKind::Identifier(name) => Some(name.to_ascii_lowercase()),
+                _ => None,
+            })
+            .filter_map(|name| owners.get(&name).cloned())
+            .filter(|dependency| dependency != path)
+            .collect();
+        dependencies.insert(path.clone(), references);
+    }
+    (parse_failures, dependencies)
+}
+
+fn record_source_failure(
+    failures: &mut BTreeMap<PathBuf, EnterpriseBlocker>,
+    path: &Path,
+    file: &SourceFile,
+    family: &str,
+    diagnostic: crate::diagnostic::Diagnostic,
+) {
+    let (line, column) = source_line_column(&file.source, diagnostic.span.start);
+    failures.insert(
+        path.to_path_buf(),
+        source_blocker(
+            "parse",
+            family,
+            diagnostic.message,
+            path.to_path_buf(),
+            line,
+            column,
+        ),
+    );
+}
+
+fn index_test_and_implicit_sources(
+    manifest: &EnterpriseManifest,
+    sources: &BTreeMap<PathBuf, SourceFile>,
+) -> (BTreeMap<String, PathBuf>, Vec<PathBuf>) {
+    let mut test_classes = BTreeMap::new();
+    let mut implicit_sources = Vec::new();
+    for path in sources.keys() {
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("trigger"))
+        {
+            implicit_sources.push(path.clone());
+        }
+        if manifest
+            .test_roots
+            .iter()
+            .any(|root| path.starts_with(root))
+        {
+            let class = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .expect("source inventory already validated Unicode file names")
+                .to_ascii_lowercase();
+            test_classes.insert(class, path.clone());
+        }
+    }
+    (test_classes, implicit_sources)
+}
+
 fn measure_once(
     manifest: &EnterpriseManifest,
     capture: &SalesforceCapture,
@@ -378,161 +401,195 @@ fn measure_once(
     capture
         .tests
         .iter()
-        .map(|salesforce| {
-            let class_name = salesforce
-                .name
-                .split_once('.')
-                .map_or("", |(class, _)| class)
-                .to_ascii_lowercase();
-            let Some(test_path) = inventory.test_classes.get(&class_name) else {
-                return failed_measurement(
-                    &salesforce.name,
-                    &salesforce.outcome,
-                    Vec::new(),
-                    false,
-                    false,
-                    vec![blocker(
-                        "discovery",
-                        "source.test-class-missing",
-                        "Salesforce test class is absent from the pinned test roots",
-                        None,
-                    )],
-                );
-            };
-            let closure = inventory.closure(test_path);
-            let parse_failures = closure
-                .iter()
-                .filter_map(|path| inventory.parse_failures.get(path).cloned())
-                .collect::<Vec<_>>();
-            if !parse_failures.is_empty() {
-                return failed_measurement(
-                    &salesforce.name,
-                    &salesforce.outcome,
-                    closure,
-                    true,
-                    false,
-                    parse_failures,
-                );
-            }
-            let schema = match schema {
-                Ok(schema) => schema,
-                Err(message) => {
-                    return failed_measurement(
-                        &salesforce.name,
-                        &salesforce.outcome,
-                        closure,
-                        true,
-                        true,
-                        vec![blocker("check", "platform.metadata", message.clone(), None)],
-                    );
-                }
-            };
-            let compilation = cache.entry(closure.clone()).or_insert_with(|| {
-                let files = closure
-                    .iter()
-                    .map(|path| inventory.sources[path].clone())
-                    .collect::<Vec<_>>();
-                compile_source_subset(manifest.project_root().to_path_buf(), &files, schema)
-                    .map_err(|error| {
-                        let path = error.path().map(|path| {
-                            path.strip_prefix(manifest.project_root())
-                                .unwrap_or(path)
-                                .to_path_buf()
-                        });
-                        blocker("check", "semantic.unsupported", error.to_string(), path)
-                    })
-            });
-            let compilation = match compilation {
-                Ok(compilation) => compilation,
-                Err(failure) => {
-                    return failed_measurement(
-                        &salesforce.name,
-                        &salesforce.outcome,
-                        closure,
-                        true,
-                        true,
-                        vec![failure.clone()],
-                    );
-                }
-            };
-            let selected = BTreeSet::from([salesforce.name.clone()]);
-            let execution = test_runner::run_selected(
-                compilation,
-                &TestOptions {
-                    filter: None,
-                    jobs: 1,
-                },
-                &selected,
+        .map(|salesforce| measure_test(manifest, salesforce, inventory, schema, cache))
+        .collect()
+}
+
+fn measure_test(
+    manifest: &EnterpriseManifest,
+    salesforce: &super::SalesforceTestOutcome,
+    inventory: &Inventory,
+    schema: Result<&platform::SchemaCatalog, &String>,
+    cache: &mut BTreeMap<Vec<PathBuf>, Result<Compilation, EnterpriseBlocker>>,
+) -> EnterpriseTestMeasurement {
+    let class_name = salesforce
+        .name
+        .split_once('.')
+        .map_or("", |(class, _)| class)
+        .to_ascii_lowercase();
+    let Some(test_path) = inventory.test_classes.get(&class_name) else {
+        return failed_measurement(
+            &salesforce.name,
+            &salesforce.outcome,
+            Vec::new(),
+            false,
+            false,
+            vec![blocker(
+                "discovery",
+                "source.test-class-missing",
+                "Salesforce test class is absent from the pinned test roots",
+                None,
+            )],
+        );
+    };
+    let closure = inventory.closure(test_path);
+    let parse_failures = closure
+        .iter()
+        .filter_map(|path| inventory.parse_failures.get(path).cloned())
+        .collect::<Vec<_>>();
+    if !parse_failures.is_empty() {
+        return failed_measurement(
+            &salesforce.name,
+            &salesforce.outcome,
+            closure,
+            true,
+            false,
+            parse_failures,
+        );
+    }
+    let compilation = match compile_test_closure(manifest, inventory, schema, cache, &closure) {
+        Ok(compilation) => compilation,
+        Err(blockers) => {
+            return failed_measurement(
+                &salesforce.name,
+                &salesforce.outcome,
+                closure,
+                true,
+                true,
+                blockers,
             );
-            let report = match execution {
-                Ok(report) if report.tests.len() == 1 => report,
-                Ok(report) => {
-                    return failed_measurement(
-                        &salesforce.name,
-                        &salesforce.outcome,
-                        closure,
-                        true,
-                        true,
-                        vec![blocker(
-                            "execution",
-                            "runner.test-not-discovered",
-                            format!(
-                                "Apex Exec selected {} terminal results; expected exactly one",
-                                report.tests.len()
-                            ),
-                            Some(test_path.clone()),
-                        )],
-                    );
-                }
-                Err(message) => {
-                    return failed_measurement(
-                        &salesforce.name,
-                        &salesforce.outcome,
-                        closure,
-                        true,
-                        true,
-                        vec![blocker(
-                            "execution",
-                            "runner.error",
-                            message,
-                            Some(test_path.clone()),
-                        )],
-                    );
-                }
-            };
-            let local_outcome = if report.tests[0].failure.is_none() {
+        }
+    };
+    execute_measurement(salesforce, test_path, closure, &compilation)
+}
+
+fn compile_test_closure(
+    manifest: &EnterpriseManifest,
+    inventory: &Inventory,
+    schema: Result<&platform::SchemaCatalog, &String>,
+    cache: &mut BTreeMap<Vec<PathBuf>, Result<Compilation, EnterpriseBlocker>>,
+    closure: &[PathBuf],
+) -> Result<Compilation, Vec<EnterpriseBlocker>> {
+    let schema = schema
+        .map_err(|message| vec![blocker("check", "platform.metadata", message.clone(), None)])?;
+    let result = cache.entry(closure.to_vec()).or_insert_with(|| {
+        let files = closure
+            .iter()
+            .map(|path| inventory.sources[path].clone())
+            .collect::<Vec<_>>();
+        compile_source_subset(manifest.project_root().to_path_buf(), &files, schema).map_err(
+            |error| {
+                let path = error.path().map(|path| {
+                    path.strip_prefix(manifest.project_root())
+                        .unwrap_or(path)
+                        .to_path_buf()
+                });
+                blocker("check", "semantic.unsupported", error.to_string(), path)
+            },
+        )
+    });
+    result.clone().map_err(|failure| vec![failure])
+}
+
+fn execute_measurement(
+    salesforce: &super::SalesforceTestOutcome,
+    test_path: &Path,
+    closure: Vec<PathBuf>,
+    compilation: &Compilation,
+) -> EnterpriseTestMeasurement {
+    let selected = BTreeSet::from([salesforce.name.clone()]);
+    let report = test_runner::run_selected(
+        compilation,
+        &TestOptions {
+            filter: None,
+            jobs: 1,
+        },
+        &selected,
+    );
+    let local_outcome = match report {
+        Ok(report) if report.tests.len() == 1 => {
+            if report.tests[0].failure.is_none() {
                 "pass"
             } else {
                 "fail"
-            };
-            let outcome_agrees = local_outcome == salesforce.outcome;
-            EnterpriseTestMeasurement {
-                name: salesforce.name.clone(),
-                salesforce_outcome: salesforce.outcome.clone(),
-                required_source_closure: closure,
-                discovered: true,
-                parsed: true,
-                checked: true,
-                executed: true,
-                local_outcome: Some(local_outcome.to_owned()),
-                outcome_agrees,
-                strict_compatible: outcome_agrees,
-                blockers: if outcome_agrees {
-                    Vec::new()
-                } else {
-                    vec![blocker(
-                        "agreement",
-                        "outcome.mismatch",
-                        format!(
-                            "Salesforce outcome `{}` differs from local outcome `{local_outcome}`",
-                            salesforce.outcome
-                        ),
-                        Some(test_path.clone()),
-                    )]
-                },
             }
+        }
+        Ok(report) => {
+            let detail = format!(
+                "Apex Exec selected {} terminal results; expected exactly one",
+                report.tests.len()
+            );
+            return execution_failure(
+                salesforce,
+                test_path,
+                closure,
+                "runner.test-not-discovered",
+                detail,
+            );
+        }
+        Err(message) => {
+            return execution_failure(salesforce, test_path, closure, "runner.error", message);
+        }
+    };
+    completed_measurement(salesforce, test_path, closure, local_outcome)
+}
+
+fn execution_failure(
+    salesforce: &super::SalesforceTestOutcome,
+    test_path: &Path,
+    closure: Vec<PathBuf>,
+    family: &str,
+    detail: impl Into<String>,
+) -> EnterpriseTestMeasurement {
+    failed_measurement(
+        &salesforce.name,
+        &salesforce.outcome,
+        closure,
+        true,
+        true,
+        vec![blocker(
+            "execution",
+            family,
+            detail,
+            Some(test_path.to_path_buf()),
+        )],
+    )
+}
+
+fn completed_measurement(
+    salesforce: &super::SalesforceTestOutcome,
+    test_path: &Path,
+    closure: Vec<PathBuf>,
+    local_outcome: &str,
+) -> EnterpriseTestMeasurement {
+    let outcome_agrees = local_outcome == salesforce.outcome;
+    let blockers = (!outcome_agrees)
+        .then(|| {
+            blocker(
+                "agreement",
+                "outcome.mismatch",
+                format!(
+                    "Salesforce outcome `{}` differs from local outcome `{local_outcome}`",
+                    salesforce.outcome
+                ),
+                Some(test_path.to_path_buf()),
+            )
         })
-        .collect()
+        .into_iter()
+        .collect();
+    EnterpriseTestMeasurement {
+        name: salesforce.name.clone(),
+        salesforce_outcome: salesforce.outcome.clone(),
+        required_source_closure: closure,
+        discovered: true,
+        parsed: true,
+        checked: true,
+        executed: true,
+        local_outcome: Some(local_outcome.to_owned()),
+        outcome_agrees,
+        strict_compatible: outcome_agrees,
+        blockers,
+    }
 }
 
 fn failed_measurement(
@@ -684,7 +741,12 @@ fn is_apex(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::enterprise::{CandidateIdentity, SalesforceTestOutcome};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn reports_strict_agreement_matching_failures_closures_and_warm_reruns() {
@@ -819,8 +881,9 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "apex-exec-enterprise-runner-{}-{unique}",
-            std::process::id()
+            "apex-exec-enterprise-runner-{}-{unique}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
         let classes = root.join("force-app/main/default/classes");
         fs::create_dir_all(&classes).unwrap();
