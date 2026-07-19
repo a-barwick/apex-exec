@@ -21,10 +21,11 @@ release-confidence gate.
 Apex identifiers, types, and method names are case-insensitive.
 
 M16 completes checked ternary and `instanceof` expressions, and M17 records
-reviewed candidate-bound live Salesforce evidence. Phase 2 is now active at
-the bounded S0 stabilization gate. M18 null-aware expression work remains
-gated until the recorded process-safety, correctness, instrumentation, and
-maintainability criteria pass. The primary syntax gate remains all 14 pinned
+reviewed candidate-bound live Salesforce evidence. The bounded S0 stabilization
+gate is complete after its process-safety, correctness, instrumentation, and
+maintainability criteria passed independent review. M18 null-aware expression
+work is the next planned milestone and has not started. The primary syntax gate
+remains all 14 pinned
 North Star lexer/parser indicators passing; the current frontier is 5 of 14.
 The phase then carries that syntax foundation into a representative 60–80%
 enterprise test benchmark, broader metadata accounting, selected platform
@@ -204,7 +205,7 @@ release blockers, not implied permissions or hidden TODOs. See
 - [Vision](docs/VISION.md) — north star, enterprise value, and product principles
 - [Roadmap](ROADMAP.md) — milestones and their exit criteria
 - [Phase 2 baseline](docs/PHASE_2_BASELINE.md) — audited gaps and reproducible evidence
-- [Stabilization](docs/STABILIZATION.md) — active S0 gate, packages, and owner decisions
+- [Stabilization](docs/STABILIZATION.md) — completed S0 gate, packages, and owner decisions
 - [Current status](docs/STATUS.md) — completed work and immediate next target
 - [Architecture](docs/ARCHITECTURE.md) — current and target system design
 - [Compatibility](docs/COMPATIBILITY.md) — supported Apex surface and fidelity

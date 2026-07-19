@@ -39,7 +39,7 @@ const roadmap = [
   },
   {
     milestone: "S0",
-    state: "Active",
+    state: "Complete",
     title: "Stabilization gate",
     description:
       "Process safety, explicit instrumentation, runtime graph safety, execution context, and enforceable release gates.",
@@ -104,7 +104,7 @@ export default function Home() {
         <div className="hero-copy">
           <div className="eyebrow">
             <span className="status-dot" aria-hidden="true" />
-            S0 active · Phase 2 stabilization
+            S0 complete · Phase 2 stabilized
           </div>
           <h1>
             Move the Apex
@@ -350,8 +350,8 @@ export default function Home() {
             </h2>
             <p>
               Apex Exec has a working local feedback loop and reviewed live
-              validation evidence. The active investment closes bounded
-              stabilization before M18 feature work resumes.
+              validation evidence. Bounded stabilization is complete, and M18
+              feature work is the next planned milestone.
             </p>
           </div>
           <div className="decision-actions">

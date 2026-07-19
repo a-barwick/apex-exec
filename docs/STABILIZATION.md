@@ -69,7 +69,7 @@ package.
 | S0-03 | Cycle-safe runtime value traversal | Complete (`8f3ce51`; review approved at `b8b190e`; merged as `c7f78e1`) | S0-02 merged | S0-01, S0-05 |
 | S0-04 | Execution context and lazy class initialization | Complete (`ed830f2`; setup-mode evidence `53585f8`; reviews approved at `ad08c4c`; merged as `c847fb2`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
-| S0-GATE | Integrated S0 verification and owner review | Review (technical verification and integrated-diff review approved at `a7ac474`; owner merge approval pending) | S0-01–S0-05 complete | Nothing |
+| S0-GATE | Integrated S0 verification and owner review | Complete (reviewed candidate `8a360ac`; merged to `main` as `556d485`) | S0-01–S0-05 complete | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
 | S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
@@ -310,10 +310,10 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
 - A fresh read-only review approved immutable evidence checkpoint `a7ac474`
   with no blocking findings after independently sampling the complete diff,
   all four CLI reproductions, 353 passing/14 ignored Rust tests, 31 focused S0
-  tests, seven cost/safety assertions, and the release/security gates. No
-  branch was pushed, `main` remains at `c70a528`, and license,
-  supported-public-API, S1 ADR, release, and deployment decisions remain
-  untouched.
+  tests, seven cost/safety assertions, and the release/security gates. The
+  owner approved reviewed candidate `8a360ac`, which was merged to `main` as
+  `556d485`. License, supported-public-API, S1 ADR, release, and deployment
+  decisions remain untouched.
 
 ## Roadmap gates
 

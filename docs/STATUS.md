@@ -2,25 +2,25 @@
 
 **Last updated:** 2026-07-18
 
-## Active program gate
+## Completed program gate
 
-S0 — Phase 2 stabilization
+S0 — Phase 2 stabilization — Complete
 
 The pre-open-source audit and execution strategy are now captured in
-[`docs/STABILIZATION.md`](STABILIZATION.md). M18 — null-aware expressions
-remains the next feature milestone, but feature implementation is gated until
-the bounded S0 process-safety and correctness criteria pass.
+[`docs/STABILIZATION.md`](STABILIZATION.md). The bounded S0 process-safety and
+correctness criteria have passed. M18 — null-aware expressions remains the next
+planned feature milestone and has not started.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
 fresh runtime review, one setup-context regression remediation, re-review, and
 an independent adversarial audit. The complete post-integration Rust,
 reproduction, website, editor, documentation, maintainability, and dependency
-matrix is green. S0-GATE is in Review pending the repository owner's merge
-decision. A fresh read-only review approved evidence checkpoint `a7ac474` with
-no blocking findings; therefore only the explicit owner merge decision
-remains. Package status, dependencies, acceptance criteria, branch rules, and
-the coordinator prompt live under `docs/stabilization/`.
+matrix is green. A fresh read-only review approved evidence checkpoint
+`a7ac474` with no blocking findings, and the owner-approved reviewed candidate
+`8a360ac` merged to `main` as `556d485`. Package status, dependencies,
+acceptance criteria, branch rules, and the coordinator prompt live under
+`docs/stabilization/`.
 
 ## Completed
 
@@ -368,9 +368,8 @@ the coordinator prompt live under `docs/stabilization/`.
 
 ## Immediate target
 
-Freeze the reviewed stabilization candidate and obtain explicit owner approval
-before merging it to `main`. M18 safe-navigation and null-coalescing work
-remains gated until that owner handoff completes. The package tracker is in
+M18 safe-navigation and null-coalescing is the next planned feature milestone;
+no implementation is active yet. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 

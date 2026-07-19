@@ -16,7 +16,8 @@ product and Rust API policy.
 
 ### Changed
 
-- Phase 2 feature work is gated on S0 stabilization before M18.
+- The independently reviewed S0 stabilization gate is complete; M18 remains
+  the next planned feature milestone.
 
 ### Security
 

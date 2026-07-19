@@ -423,7 +423,7 @@ failure blocks release, and altered or expired evidence cannot be replayed.
 
 ### S0 — Phase 2 stabilization gate
 
-**Status:** Active
+**Status:** Complete
 
 #### Scope
 
@@ -448,7 +448,7 @@ approves resuming M18.
 
 ### M18 — Null-aware expressions
 
-**Status:** Planned (gated by active S0)
+**Status:** Planned (S0 complete; not started)
 
 #### Scope
 
