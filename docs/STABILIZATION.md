@@ -10,9 +10,9 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Next feature milestone:** M20 — nested declarations, enums, and type literals
-- **Feature policy:** M18 and M19 are complete. M20 retains the additional
-  architecture prerequisites below.
+- **Next feature milestone:** M21 — North Star grammar closure
+- **Feature policy:** M18 through M20 are complete. M21 is the next language
+  milestone and retains the additional architecture prerequisites below.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.
@@ -71,8 +71,8 @@ package.
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Complete (reviewed candidate `8a360ac`; merged to `main` as `556d485`) | S0-01–S0-05 complete | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Complete (ADR 0023 owner-approved 2026-07-19) | S0-GATE | M18 implementation |
-| S1-02 | Lossless type syntax and typed identities | Ready (shared parser type grammar landed in M19; full TypeRef/identity slice remains) | S1-01 | No other AST/HIR work |
-| S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
+| S1-02 | Lossless type syntax and typed identities | Complete (`codex/milestone-20`; M20 integrated verification) | S1-01 | No other AST/HIR work |
+| S1-03 | Runtime image and lowered executable targets | Blocked (M20 typed-exception/class-initialization prerequisites complete) | S1-02 | No other HIR/runtime-image work |
 | S1-04 | `Place` and centralized numeric operations | Complete (M19 checked place/numeric vertical slice) | S1-01 and M19 typed identity slice | Disjoint docs/tooling work |
 | S1-05 | Intrinsic and compatibility-profile catalog | Blocked | S1-03 | Disjoint data work |
 | S1-06 | Structured diagnostic model | Blocked | S1-03, S1-05 | Nothing cross-cutting |
@@ -84,6 +84,19 @@ package.
 The first parallel wave was limited to S0-01, S0-02, and S0-05.
 
 ## Package review evidence
+
+### S1-02 and M20 prerequisites
+
+- `codex/milestone-20` implements one lossless qualified/generic/array type
+  grammar and typed `ClassId` targets for the new semantic/runtime identities.
+- Checked class metadata lowers lineage, slots, and source-ordered
+  initialization steps; typed exception kinds support custom exception
+  subclasses without rendered-message classification.
+- Verification passed `cargo fmt --check`, 390 ordinary Rust tests, Clippy with
+  warnings denied, documentation validation, and the Lizard complexity
+  ratchet. LLVM source-line coverage measured 85.22% overall and 84.81% across
+  M20-touched production modules. The M20 Apex fixture passes 2/2 tests with
+  12/12 production lines covered.
 
 ### S0-04 — Execution context and lazy class initialization
 

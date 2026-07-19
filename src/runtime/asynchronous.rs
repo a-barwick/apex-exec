@@ -461,6 +461,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             value @ (Value::Decimal(_) | Value::Date(_) | Value::Datetime(_)) => Ok(value),
             value @ (Value::Time(_) | Value::Id(_) | Value::Null(_)) => Ok(value),
+            value @ (Value::Enum { .. } | Value::TypeLiteral(_)) => Ok(value),
             Value::Collection(source) => {
                 if let Some(snapshot) = memo.collections.get(&source) {
                     return Ok(Value::Collection(*snapshot));

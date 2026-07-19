@@ -156,59 +156,7 @@ impl ProjectCompiler {
             let ast = crate::parse_with_source(&file.source, source_id).map_err(|diagnostic| {
                 ProjectError::diagnostic(Some(file.path.clone()), file.source.clone(), diagnostic)
             })?;
-            let expected_name = file
-                .path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
-            let extension = file
-                .path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default();
-            if extension.eq_ignore_ascii_case("trigger") {
-                if !ast.classes.is_empty()
-                    || !ast.methods.is_empty()
-                    || !ast.statements.is_empty()
-                    || ast.triggers.len() != 1
-                {
-                    return Err(ProjectError::message(format!(
-                        "`{}` must contain exactly one top-level Apex trigger",
-                        file.path.display()
-                    )));
-                }
-                if !ast.triggers[0]
-                    .name
-                    .spelling
-                    .eq_ignore_ascii_case(expected_name)
-                {
-                    return Err(ProjectError::message(format!(
-                        "trigger `{}` must be declared in `{expected_name}.trigger`",
-                        ast.triggers[0].name.spelling
-                    )));
-                }
-            } else {
-                if !ast.triggers.is_empty()
-                    || !ast.methods.is_empty()
-                    || !ast.statements.is_empty()
-                    || ast.classes.len() != 1
-                {
-                    return Err(ProjectError::message(format!(
-                        "`{}` must contain exactly one top-level Apex class or interface",
-                        file.path.display()
-                    )));
-                }
-                if !ast.classes[0]
-                    .name
-                    .spelling
-                    .eq_ignore_ascii_case(expected_name)
-                {
-                    return Err(ProjectError::message(format!(
-                        "type `{}` must be declared in `{expected_name}.cls`",
-                        ast.classes[0].name.spelling
-                    )));
-                }
-            }
+            validate_source_unit(&file.path, &ast)?;
             self.units.insert(
                 file.path.clone(),
                 CachedUnit {
@@ -252,6 +200,83 @@ impl ProjectCompiler {
         self.last_compilation = Some(compilation.clone());
         Ok(compilation)
     }
+}
+
+fn validate_source_unit(path: &Path, ast: &crate::ast::Program) -> Result<(), ProjectError> {
+    let expected_name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let is_trigger = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("trigger"));
+    if is_trigger {
+        validate_trigger_unit(path, ast, expected_name)
+    } else {
+        validate_type_unit(path, ast, expected_name)
+    }
+}
+
+fn validate_trigger_unit(
+    path: &Path,
+    ast: &crate::ast::Program,
+    expected_name: &str,
+) -> Result<(), ProjectError> {
+    if !ast.classes.is_empty()
+        || !ast.methods.is_empty()
+        || !ast.statements.is_empty()
+        || ast.triggers.len() != 1
+    {
+        return Err(ProjectError::message(format!(
+            "`{}` must contain exactly one top-level Apex trigger",
+            path.display()
+        )));
+    }
+    if !ast.triggers[0]
+        .name
+        .spelling
+        .eq_ignore_ascii_case(expected_name)
+    {
+        return Err(ProjectError::message(format!(
+            "trigger `{}` must be declared in `{expected_name}.trigger`",
+            ast.triggers[0].name.spelling
+        )));
+    }
+    Ok(())
+}
+
+fn validate_type_unit(
+    path: &Path,
+    ast: &crate::ast::Program,
+    expected_name: &str,
+) -> Result<(), ProjectError> {
+    let top_level_types = ast
+        .classes
+        .iter()
+        .filter(|class| class.enclosing_type.is_none())
+        .collect::<Vec<_>>();
+    if !ast.triggers.is_empty()
+        || !ast.methods.is_empty()
+        || !ast.statements.is_empty()
+        || top_level_types.len() != 1
+    {
+        return Err(ProjectError::message(format!(
+            "`{}` must contain exactly one top-level Apex class, interface, or enum",
+            path.display()
+        )));
+    }
+    if !top_level_types[0]
+        .name
+        .spelling
+        .eq_ignore_ascii_case(expected_name)
+    {
+        return Err(ProjectError::message(format!(
+            "type `{}` must be declared in `{expected_name}.cls`",
+            top_level_types[0].name.spelling
+        )));
+    }
+    Ok(())
 }
 
 pub fn compile(path: impl AsRef<Path>) -> Result<Compilation, ProjectError> {

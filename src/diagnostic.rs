@@ -7,11 +7,68 @@ pub struct StackFrame {
     pub span: Span,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ExceptionKind {
+    NullPointer,
+    List,
+    Math,
+    Type,
+    String,
+    IllegalArgument,
+    Final,
+    Assert,
+    Query,
+    Dml,
+    Async,
+    Callout,
+    UserDefined(String),
+}
+
+impl ExceptionKind {
+    pub fn from_apex_name(name: impl Into<String>) -> Self {
+        let name = name.into();
+        match name.to_ascii_lowercase().as_str() {
+            "nullpointerexception" => Self::NullPointer,
+            "listexception" => Self::List,
+            "mathexception" => Self::Math,
+            "typeexception" => Self::Type,
+            "stringexception" => Self::String,
+            "illegalargumentexception" => Self::IllegalArgument,
+            "finalexception" => Self::Final,
+            "assertexception" => Self::Assert,
+            "queryexception" => Self::Query,
+            "dmlexception" => Self::Dml,
+            "asyncexception" => Self::Async,
+            "calloutexception" => Self::Callout,
+            _ => Self::UserDefined(name),
+        }
+    }
+
+    pub fn apex_name(&self) -> &str {
+        match self {
+            Self::NullPointer => "NullPointerException",
+            Self::List => "ListException",
+            Self::Math => "MathException",
+            Self::Type => "TypeException",
+            Self::String => "StringException",
+            Self::IllegalArgument => "IllegalArgumentException",
+            Self::Final => "FinalException",
+            Self::Assert => "AssertException",
+            Self::Query => "QueryException",
+            Self::Dml => "DmlException",
+            Self::Async => "AsyncException",
+            Self::Callout => "CalloutException",
+            Self::UserDefined(name) => name,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub exception_type: Option<String>,
+    pub exception_kind: Option<ExceptionKind>,
     pub stack_trace: Vec<StackFrame>,
 }
 
@@ -21,6 +78,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             exception_type: None,
+            exception_kind: None,
             stack_trace: Vec::new(),
         }
     }
@@ -30,10 +88,12 @@ impl Diagnostic {
         message: impl Into<String>,
         span: Span,
     ) -> Self {
+        let exception_kind = ExceptionKind::from_apex_name(exception_type);
         Self {
             message: message.into(),
             span,
-            exception_type: Some(exception_type.into()),
+            exception_type: Some(exception_kind.apex_name().to_owned()),
+            exception_kind: Some(exception_kind),
             stack_trace: Vec::new(),
         }
     }

@@ -959,6 +959,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 JsonValue::String(value.format("%Y-%m-%dT%H:%M:%S.000Z").to_string())
             }
             Value::Time(value) => JsonValue::String(value.format("%H:%M:%S%.3f").to_string()),
+            Value::Enum { class_id, ordinal } => JsonValue::String(
+                self.classes()[class_id.index()].enum_constants[*ordinal]
+                    .spelling
+                    .clone(),
+            ),
+            Value::TypeLiteral(ty) => JsonValue::String(ty.apex_name()),
             Value::Collection(id) => {
                 return self.collection_to_json(*id, span, depth, traversal);
             }
