@@ -1,13 +1,14 @@
 use super::*;
 use crate::ast::{
     AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Program, ReturnType,
-    Statement, TypeName,
+    Statement, TypeName, UnaryOperator,
 };
 use crate::lexer::Lexer;
 use crate::span::SourceId;
 
 fn parse(source: &str) -> Program {
     Parser::new(Lexer::new(source).tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap()
 }
@@ -20,6 +21,7 @@ fn preserves_source_identity_through_constructed_spans() {
             .tokenize()
             .unwrap(),
     )
+    .unwrap()
     .parse_program()
     .unwrap();
 
@@ -139,6 +141,7 @@ fn instanceof_binds_as_a_comparison_and_preserves_generic_target() {
 #[test]
 fn conditional_requires_a_false_branch_in_the_parser() {
     let error = Parser::new(Lexer::new("Integer value = true ? 1;").tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap_err();
 
@@ -410,6 +413,7 @@ fn rejects_more_than_one_array_suffix_explicitly() {
             .tokenize()
             .unwrap(),
     )
+    .unwrap()
     .parse_program()
     .unwrap_err();
 
@@ -534,6 +538,7 @@ fn parses_try_finally_without_a_catch() {
 #[test]
 fn requires_a_catch_or_finally_after_try() {
     let error = Parser::new(Lexer::new("try {}").tokenize().unwrap())
+        .unwrap()
         .parse_program()
         .unwrap_err();
 
@@ -594,6 +599,105 @@ fn distinguishes_casts_from_grouped_expressions() {
             operator: BinaryOperator::Multiply,
             ..
         } if matches!(left.as_ref(), Expression::Binary { operator: BinaryOperator::Add, .. })
+    ));
+}
+
+#[test]
+fn grouped_postfix_continuations_and_signed_operators_do_not_become_casts() {
+    let program = parse(
+        "public class Box { public Integer value; } \
+         Box box = new Box(); \
+         Integer other = 2; \
+         Integer[] values = new Integer[] { 1 }; \
+         Integer member = (box.value) + other; \
+         Integer indexed = (values)[0]; \
+         (box.value)++; \
+         Integer plus = (other) + -other; \
+         Integer minus = (other) - +other; \
+         Object boxed = box; \
+         Box customCast = (Box) boxed; \
+         Integer signedCast = (Integer) -other;",
+    );
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[3] else {
+        panic!("expected grouped member declaration");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Binary {
+            left,
+            operator: BinaryOperator::Add,
+            ..
+        } if matches!(left.as_ref(), Expression::MemberAccess { .. })
+    ));
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[4] else {
+        panic!("expected grouped index declaration");
+    };
+    assert!(matches!(initializer, Expression::Index { .. }));
+
+    let Statement::Expression { expression, .. } = &program.statements[5] else {
+        panic!("expected grouped member postfix expression");
+    };
+    assert!(matches!(
+        expression,
+        Expression::Postfix { operand, .. }
+            if matches!(operand.as_ref(), Expression::MemberAccess { .. })
+    ));
+
+    for (index, operator, unary) in [
+        (6, BinaryOperator::Add, UnaryOperator::Negate),
+        (7, BinaryOperator::Subtract, UnaryOperator::Positive),
+    ] {
+        let Statement::VariableDeclaration { initializer, .. } = &program.statements[index] else {
+            panic!("expected signed grouped expression");
+        };
+        assert!(matches!(
+            initializer,
+            Expression::Binary {
+                left,
+                operator: actual_operator,
+                right,
+                ..
+            } if *actual_operator == operator
+                && matches!(left.as_ref(), Expression::Variable(_))
+                && matches!(
+                    right.as_ref(),
+                    Expression::Unary {
+                        operator: actual_unary,
+                        ..
+                    } if *actual_unary == unary
+                )
+        ));
+    }
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[9] else {
+        panic!("expected genuine custom cast");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Cast {
+            ty: TypeName::Custom(name),
+            ..
+        } if name.canonical == "box"
+    ));
+
+    let Statement::VariableDeclaration { initializer, .. } = &program.statements[10] else {
+        panic!("expected genuine signed core cast");
+    };
+    assert!(matches!(
+        initializer,
+        Expression::Cast {
+            ty: TypeName::Integer,
+            expression,
+            ..
+        } if matches!(
+            expression.as_ref(),
+            Expression::Unary {
+                operator: UnaryOperator::Negate,
+                ..
+            }
+        )
     ));
 }
 

@@ -590,9 +590,12 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
 }
 
 pub fn walk_named_type<'ast, V: Visitor<'ast> + ?Sized>(
-    _visitor: &mut V,
-    _named_type: &'ast NamedType,
+    visitor: &mut V,
+    named_type: &'ast NamedType,
 ) {
+    for argument in &named_type.type_arguments {
+        visitor.visit_type_name(&argument.ty);
+    }
 }
 
 pub fn walk_identifier<'ast, V: Visitor<'ast> + ?Sized>(

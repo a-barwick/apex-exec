@@ -12,11 +12,11 @@ remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
 S0-02 runtime instrumentation and S0-05 release gates are integrated. S0-01
-frontend safety is in final Review. S0-03 runtime graph safety is active while
-a review blocker is corrected; S0-04 execution context/lazy class
-initialization remains blocked until S0-03 integrates. Package status,
-dependencies, acceptance criteria, branch rules, and the coordinator prompt
-live under `docs/stabilization/`.
+frontend safety has passed independent review and is in integrated
+verification. S0-03 runtime graph safety is active while a review blocker is
+corrected; S0-04 execution context/lazy class initialization remains blocked
+until S0-03 integrates. Package status, dependencies, acceptance criteria,
+branch rules, and the coordinator prompt live under `docs/stabilization/`.
 
 ## Completed
 
@@ -45,7 +45,9 @@ live under `docs/stabilization/`.
 - Recursive `List<T>`, `Set<T>`, and `Map<K,V>` types, including nested
   collections
 - One-dimensional `T[]` syntax as an alias for `List<T>`
-- Empty, copy, literal, and sized-array construction
+- Empty, copy, literal, and sized-array construction, including custom,
+  `Object`, and core-exception element types, with complete constructed-element
+  type validation
 - List indexing, indexed assignment, and indexed increment/decrement
 - Collection reference aliasing with independent shallow copies from copy
   constructors and `clone()`
@@ -63,12 +65,17 @@ live under `docs/stabilization/`.
 - `try`, typed `catch`, `finally`, `throw`, and catchable core exception values
 - Minimal `Object` assignment and explicit casts, including catchable invalid
   downcasts
+- Structural cast/group disambiguation for parenthesized member access,
+  indexing, postfix mutation, signed operators, and supported genuine casts
 - Catchable `NullPointerException`, `ListException`, `MathException`,
   `TypeException`, `StringException`, `IllegalArgumentException`, and
   `FinalException` behavior
 - Source-mapped runtime call stacks and exception type/message/accessor support
 - `tokens`, `ast`, `check`, and `run` CLI commands
 - Source-span compile and runtime diagnostics
+- Public raw-token parser construction that rejects empty, malformed-EOF,
+  mixed-source, reversed, overlapping, and non-monotonic streams before
+  lookahead
 - Focused compiler/runtime unit tests and public-pipeline integration tests
 - Disk-backed scenarios run through every compiler stage and the CLI
 - The unchanged M3 acceptance program executes from both the library and CLI
@@ -88,7 +95,8 @@ live under `docs/stabilization/`.
 - Public, private, protected, and global member access checks, including
   accessor-specific visibility
 - Class inheritance, abstract/virtual methods, overrides, interfaces, subtype
-  assignment, and contract validation
+  assignment, iterative cycle validation across every hierarchy edge, and
+  visited iterative subtype and interface-contract traversal
 - Object identity, inherited storage, class casts, and source-mapped class call
   execution
 - SFDX `packageDirectories` discovery, recursive `.cls` loading, filename/type
@@ -204,7 +212,8 @@ live under `docs/stabilization/`.
   coverage, plus ten Rust integration tests covering success, failure,
   determinism, mocking, checking, and runtime boundaries
 - Checked platform contracts for `Queueable`, `Database.Batchable<T>`, and
-  `Schedulable`, including their context parameter types and required methods
+  `Schedulable`, including preserved declared batch element types, matching
+  start/execute signatures, context parameter types, and required methods
 - Checked `@future` methods with public/global static void signatures and
   serializable primitive or primitive-collection parameters
 - Deterministic `System.enqueueJob`, `Database.executeBatch`, and
@@ -237,8 +246,8 @@ live under `docs/stabilization/`.
   frames, scopes, variables, stepping, continue, terminate, and disconnect for
   both anonymous scripts and project `Class.method` entry points
 - Checked project symbol indexing for class/member go-to-definition,
-  references, case-insensitive rename edits, and source-mapped inline
-  diagnostics
+  hierarchy generic-argument definitions, references, case-insensitive rename
+  edits, and source-mapped inline diagnostics
 - Per-executable-line coverage data and an LSP `apex/coverage` request that
   preserves covered/uncovered state rather than aggregate counts alone
 - A stdio Language Server Protocol server covering initialization,
@@ -334,7 +343,7 @@ live under `docs/stabilization/`.
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 302 ordinary tests pass with no failures (14 separate North Star goal tests
+- 320 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)

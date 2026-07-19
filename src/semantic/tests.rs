@@ -397,3 +397,116 @@ fn method_local_names_do_not_resolve_anonymous_or_other_frame_locals() {
         .unwrap_err();
     assert_eq!(error.message, "duplicate variable `VALUE`");
 }
+
+#[test]
+fn interface_method_collection_tracks_visited_nodes_even_for_cyclic_raw_ast_edges() {
+    let mut program =
+        crate::parse("public interface A { void a(); } public interface B { void b(); }").unwrap();
+    let a_span = program.classes[0].name.span;
+    let b_span = program.classes[1].name.span;
+    program.classes[0]
+        .interfaces
+        .push(crate::ast::NamedType::new("B".to_owned(), b_span));
+    program.classes[1]
+        .interfaces
+        .push(crate::ast::NamedType::new("A".to_owned(), a_span));
+
+    let mut checker = Checker::new(SchemaCatalog::new());
+    checker.collect_classes(&program).unwrap();
+    let mut required = Vec::new();
+    let mut visited = vec![false; checker.classes.len()];
+    checker.collect_interface_methods(checker.class_ids["a"], &mut required, &mut visited);
+
+    assert_eq!(required.len(), 2);
+    assert!(visited[checker.class_ids["a"]]);
+    assert!(visited[checker.class_ids["b"]]);
+}
+
+#[test]
+fn hierarchy_cycle_validation_examines_each_acyclic_edge_once() {
+    let mut source = String::from("public interface I0 {}");
+    for index in 1..256 {
+        source.push_str(&format!(
+            " public interface I{index} extends I{} {{}}",
+            index - 1
+        ));
+    }
+    source.push_str(" public class Implementation implements I255 {}");
+    let program = crate::parse(&source).unwrap();
+    let mut checker = Checker::new(SchemaCatalog::new());
+    checker.collect_classes(&program).unwrap();
+    let mut graph = HierarchyGraph::new(checker.classes.len());
+    for (class_id, class) in checker.classes.iter().enumerate() {
+        checker.validate_type_declaration_header(class).unwrap();
+        graph.add_edges(class_id, checker.validated_hierarchy_edges(class).unwrap());
+    }
+
+    let traversal = graph.validate_acyclic(&checker.classes).unwrap();
+    assert_eq!(traversal.nodes_started, checker.classes.len());
+    assert_eq!(traversal.edges_examined, graph.edge_count());
+}
+
+#[test]
+fn subtype_traversal_is_iterative_and_bounded_by_the_reachable_hierarchy() {
+    let mut source = String::from("public interface I0 {}");
+    for index in 1..512 {
+        source.push_str(&format!(
+            " public interface I{index} extends I{} {{}}",
+            index - 1
+        ));
+    }
+    source.push_str(
+        " public class Implementation implements I511 {} \
+         public interface Unrelated {}",
+    );
+    let program = crate::parse(&source).unwrap();
+    let mut checker = Checker::new(SchemaCatalog::new());
+    checker.collect_classes(&program).unwrap();
+    checker.validate_class_hierarchy().unwrap();
+
+    let implementation_id = checker.class_ids["implementation"];
+    let root_id = checker.class_ids["i0"];
+    let traversal = checker.class_inheritance_traversal(implementation_id, root_id);
+    assert_eq!(
+        traversal,
+        InheritanceTraversal {
+            matched: true,
+            nodes_visited: 513,
+            edges_examined: 512,
+        }
+    );
+
+    let unrelated_id = checker.class_ids["unrelated"];
+    let traversal = checker.class_inheritance_traversal(implementation_id, unrelated_id);
+    assert_eq!(
+        traversal,
+        InheritanceTraversal {
+            matched: false,
+            nodes_visited: 513,
+            edges_examined: 512,
+        }
+    );
+
+    let mut cyclic =
+        crate::parse("public interface A {} public interface B {} public interface C {}").unwrap();
+    let a_span = cyclic.classes[0].name.span;
+    let b_span = cyclic.classes[1].name.span;
+    cyclic.classes[0]
+        .interfaces
+        .push(crate::ast::NamedType::new("B".to_owned(), b_span));
+    cyclic.classes[1]
+        .interfaces
+        .push(crate::ast::NamedType::new("A".to_owned(), a_span));
+    let mut checker = Checker::new(SchemaCatalog::new());
+    checker.collect_classes(&cyclic).unwrap();
+    let traversal =
+        checker.class_inheritance_traversal(checker.class_ids["a"], checker.class_ids["c"]);
+    assert_eq!(
+        traversal,
+        InheritanceTraversal {
+            matched: false,
+            nodes_visited: 2,
+            edges_examined: 2,
+        }
+    );
+}
