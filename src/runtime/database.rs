@@ -26,6 +26,8 @@ use crate::{
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use std::collections::BTreeMap;
 
+const MAX_PARTIAL_DML_ATTEMPTS: usize = 3;
+
 struct CollectedDmlRows {
     input_count: usize,
     handles: BTreeMap<usize, SObjectId>,
@@ -521,6 +523,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         all_or_none: bool,
         span: Span,
     ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        if !all_or_none {
+            return self.execute_partial_dml_group(operation, group, handles, schema, span);
+        }
         let group_handles = group
             .iter()
             .map(|record| handles[&record.input_index])
@@ -538,9 +543,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         match self.finish_transaction(result, span) {
             Ok(outcomes) => {
-                if all_or_none
-                    && let Some(failed) = outcomes.iter().find(|outcome| !outcome.is_success())
-                {
+                if let Some(failed) = outcomes.iter().find(|outcome| !outcome.is_success()) {
                     Err(dml_outcome_exception(failed, span))
                 } else {
                     for (record, (handle, original)) in group.iter().zip(&originals) {
@@ -553,14 +556,101 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Ok(outcomes)
                 }
             }
-            Err(error) if all_or_none => Err(error),
-            Err(error) => {
-                let failure = trigger_failure_error(&error);
-                Ok(group
-                    .iter()
-                    .map(|record| DmlRowOutcome::failure(record.input_index, vec![failure.clone()]))
-                    .collect())
+            Err(error) => Err(error),
+        }
+    }
+
+    fn execute_partial_dml_group(
+        &mut self,
+        operation: DmlOperation,
+        group: &[PreparedDmlRecord],
+        handles: &BTreeMap<usize, SObjectId>,
+        schema: &crate::platform::SchemaCatalog,
+        span: Span,
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        self.host.begin_dml_retry_scope();
+        let result = self.execute_partial_dml_attempt(operation, group, handles, schema, 1, span);
+        self.host.end_dml_retry_scope();
+        result
+    }
+
+    fn execute_partial_dml_attempt(
+        &mut self,
+        operation: DmlOperation,
+        group: &[PreparedDmlRecord],
+        handles: &BTreeMap<usize, SObjectId>,
+        schema: &crate::platform::SchemaCatalog,
+        attempt: usize,
+        span: Span,
+    ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
+        let group_handles = group
+            .iter()
+            .map(|record| handles[&record.input_index])
+            .collect::<Vec<_>>();
+        let originals = self.capture_sobject_images(&group_handles);
+        self.begin_transaction(span)?;
+        let first = self.execute_dml_group_inner(operation, group, &group_handles, schema, span);
+        let outcomes = match first {
+            Ok(outcomes) if outcomes.iter().all(DmlRowOutcome::is_success) => {
+                return self.finish_transaction(Ok(outcomes), span);
             }
+            Ok(outcomes) => outcomes,
+            Err(error) => {
+                self.restore_sobject_images(&originals);
+                self.rollback_transaction(span)?;
+                if attempt == MAX_PARTIAL_DML_ATTEMPTS {
+                    return Err(partial_dml_retry_exception(span));
+                }
+                return Ok(group_failure_outcomes(group, &error));
+            }
+        };
+        self.restore_sobject_images(&originals);
+        self.rollback_transaction(span)?;
+        if attempt == MAX_PARTIAL_DML_ATTEMPTS {
+            return Err(partial_dml_retry_exception(span));
+        }
+        let mut final_outcomes = outcomes
+            .iter()
+            .filter(|outcome| !outcome.is_success())
+            .cloned()
+            .collect::<Vec<_>>();
+        let retry_group = group
+            .iter()
+            .filter(|record| {
+                outcomes.iter().any(|outcome| {
+                    outcome.input_index == record.input_index && outcome.is_success()
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !retry_group.is_empty() {
+            self.host.reset_dml_retry_limits();
+            final_outcomes.extend(self.execute_partial_dml_attempt(
+                operation,
+                &retry_group,
+                handles,
+                schema,
+                attempt + 1,
+                span,
+            )?);
+        }
+        final_outcomes.sort_by_key(|outcome| outcome.input_index);
+        Ok(final_outcomes)
+    }
+
+    fn capture_sobject_images(
+        &self,
+        handles: &[SObjectId],
+    ) -> Vec<(SObjectId, super::SObjectInstance)> {
+        handles
+            .iter()
+            .map(|handle| (*handle, self.store.sobject(*handle).clone()))
+            .collect()
+    }
+
+    fn restore_sobject_images(&mut self, images: &[(SObjectId, super::SObjectInstance)]) {
+        for (handle, original) in images {
+            *self.store.sobject_mut(*handle) = original.clone();
         }
     }
 
@@ -1773,6 +1863,22 @@ fn trigger_failure_error(error: &Diagnostic) -> DmlError {
         DmlStatus::CannotInsertUpdateActivateEntity,
         error.message.clone(),
         [],
+    )
+}
+
+fn group_failure_outcomes(group: &[PreparedDmlRecord], error: &Diagnostic) -> Vec<DmlRowOutcome> {
+    let failure = trigger_failure_error(error);
+    group
+        .iter()
+        .map(|record| DmlRowOutcome::failure(record.input_index, vec![failure.clone()]))
+        .collect()
+}
+
+fn partial_dml_retry_exception(span: Span) -> Diagnostic {
+    runtime_exception(
+        "DmlException",
+        "Too many batch retries in the presence of Apex triggers and partial failures.",
+        span,
     )
 }
 

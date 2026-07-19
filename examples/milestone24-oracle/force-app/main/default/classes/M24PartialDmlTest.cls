@@ -5,7 +5,7 @@ private class M24PartialDmlTest {
         M24DmlAudit.beforeRows = 0;
         M24DmlAudit.afterRows = 0;
         M24Result__c first = row('First', 1, null);
-        M24Result__c invalid = row(null, 2, null);
+        M24Result__c invalid = row('Invalid', null, null);
         M24Result__c third = row('Third', 3, null);
         Integer statementsBefore = Limits.getDmlStatements();
 
@@ -26,10 +26,10 @@ private class M24PartialDmlTest {
         Database.Error error = results[1].getErrors()[0];
         System.assertEquals(StatusCode.REQUIRED_FIELD_MISSING, error.getStatusCode());
         System.assert(error.getMessage().length() > 0);
-        System.assertEquals(new List<String>{'Name'}, error.getFields());
+        System.assertEquals(new List<String>{'Amount__c'}, error.getFields());
         System.assertEquals(statementsBefore + 1, Limits.getDmlStatements());
-        System.assertEquals(3, M24DmlAudit.beforeRows);
-        System.assertEquals(2, M24DmlAudit.afterRows);
+        System.assertEquals(5, M24DmlAudit.beforeRows);
+        System.assertEquals(4, M24DmlAudit.afterRows);
         System.assertEquals(2, [
             SELECT COUNT() FROM M24Result__c
         ]);

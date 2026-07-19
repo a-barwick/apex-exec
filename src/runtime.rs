@@ -633,6 +633,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn rollback_transaction(&mut self, span: Span) -> Result<(), Diagnostic> {
+        self.host
+            .rollback_unit()
+            .map_err(|error| runtime_exception("DmlException", error.to_string(), span))
+    }
+
     fn image(&self) -> RuntimeImage<'program> {
         self.image
             .expect("execution always has an immutable runtime image")

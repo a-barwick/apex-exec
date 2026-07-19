@@ -205,6 +205,12 @@ pub trait PlatformHost {
 
     fn record_dml(&mut self, _event: DmlEvent) {}
 
+    fn begin_dml_retry_scope(&mut self) {}
+
+    fn reset_dml_retry_limits(&mut self) {}
+
+    fn end_dml_retry_scope(&mut self) {}
+
     fn begin_unit(&mut self, _schema: &SchemaCatalog) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -300,6 +306,18 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).record_dml(event);
     }
 
+    fn begin_dml_retry_scope(&mut self) {
+        (**self).begin_dml_retry_scope();
+    }
+
+    fn reset_dml_retry_limits(&mut self) {
+        (**self).reset_dml_retry_limits();
+    }
+
+    fn end_dml_retry_scope(&mut self) {
+        (**self).end_dml_retry_scope();
+    }
+
     fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
         (**self).begin_unit(schema)
     }
@@ -358,6 +376,7 @@ pub struct RecordingHost {
     output: Vec<String>,
     database: Option<LocalDatabase>,
     queries: Vec<QueryEvent>,
+    query_statements: usize,
     dml: Vec<DmlEvent>,
     dml_statements: usize,
     triggers: Vec<TriggerEvent>,
@@ -370,6 +389,7 @@ pub struct RecordingHost {
     http_responses: VecDeque<HttpResponseData>,
     callout_requests: Vec<HttpRequestData>,
     callouts: i64,
+    dml_retry_limit_baselines: Vec<(usize, i64)>,
     test_window_baseline: Option<LimitUsage>,
 }
 
@@ -433,6 +453,7 @@ impl Default for RecordingHost {
             output: Vec::new(),
             database: None,
             queries: Vec::new(),
+            query_statements: 0,
             dml: Vec::new(),
             dml_statements: 0,
             triggers: Vec::new(),
@@ -445,6 +466,7 @@ impl Default for RecordingHost {
             http_responses: VecDeque::new(),
             callout_requests: Vec::new(),
             callouts: 0,
+            dml_retry_limit_baselines: Vec::new(),
             test_window_baseline: None,
         }
     }
@@ -464,6 +486,7 @@ impl PlatformHost for RecordingHost {
         schema: &SchemaCatalog,
         request: &SoqlRequest,
     ) -> Result<QueryOutcome, DatabaseError> {
+        self.query_statements += 1;
         let database = self.database(schema)?;
         let result = database.execute_soql(request);
         let object_scans = database.last_query_object_scans();
@@ -483,6 +506,7 @@ impl PlatformHost for RecordingHost {
         schema: &SchemaCatalog,
         request: &SoslRequest,
     ) -> Result<QueryOutcome, DatabaseError> {
+        self.query_statements += 1;
         let result = self.database(schema)?.execute_sosl(request);
         let rows = result.as_ref().map_or(0, outcome_rows);
         self.queries.push(QueryEvent {
@@ -575,6 +599,24 @@ impl PlatformHost for RecordingHost {
         self.dml_statements += 1;
     }
 
+    fn begin_dml_retry_scope(&mut self) {
+        self.dml_retry_limit_baselines
+            .push((self.query_statements, self.callouts));
+    }
+
+    fn reset_dml_retry_limits(&mut self) {
+        if let Some((queries, callouts)) = self.dml_retry_limit_baselines.last().copied() {
+            self.query_statements = queries;
+            self.callouts = callouts;
+        }
+    }
+
+    fn end_dml_retry_scope(&mut self) {
+        self.dml_retry_limit_baselines
+            .pop()
+            .expect("DML retry scopes are balanced");
+    }
+
     fn begin_unit(&mut self, schema: &SchemaCatalog) -> Result<(), DatabaseError> {
         let snapshot = self.database(schema)?.snapshot()?;
         self.checkpoints.push(snapshot);
@@ -643,7 +685,7 @@ impl PlatformHost for RecordingHost {
 
     fn limit_usage(&self) -> LimitUsage {
         let absolute = LimitUsage {
-            queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
+            queries: i64::try_from(self.query_statements).unwrap_or(i64::MAX),
             dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
             callouts: self.callouts,
         };
@@ -657,7 +699,7 @@ impl PlatformHost for RecordingHost {
 
     fn begin_test_window(&mut self) {
         self.test_window_baseline = Some(LimitUsage {
-            queries: i64::try_from(self.queries.len()).unwrap_or(i64::MAX),
+            queries: i64::try_from(self.query_statements).unwrap_or(i64::MAX),
             dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
             callouts: self.callouts,
         });

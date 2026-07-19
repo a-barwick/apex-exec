@@ -74,9 +74,11 @@ public class PartialInsertDemo {
             "2",
         ]
     );
-    assert_eq!(host.dml_events().len(), 1);
+    assert_eq!(host.dml_events().len(), 2);
     assert_eq!(host.dml_events()[0].successful_records, 2);
     assert_eq!(host.dml_events()[0].failed_records, 1);
+    assert_eq!(host.dml_events()[1].successful_records, 2);
+    assert_eq!(host.dml_events()[1].failed_records, 0);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -313,6 +315,7 @@ public class TriggerBoundaryDemo {
         System.debug(invalid.Amount__c);
         System.debug(results[0].isSuccess());
         System.debug(results[1].isSuccess());
+        System.debug(Limits.getQueries());
     }
 }
 "#;
@@ -324,6 +327,7 @@ public class M24TriggerAudit {
 "#;
     let trigger = r#"
 trigger M24RowTrigger on M24Row__c (before insert, after insert) {
+    Integer observed = [SELECT COUNT() FROM M24Row__c];
     if (Trigger.isBefore) {
         M24TriggerAudit.beforeRows += Trigger.size;
         for (M24Row__c row : Trigger.new) {
@@ -345,7 +349,90 @@ trigger M24RowTrigger on M24Row__c (before insert, after insert) {
     let compilation = project::compile(&root).unwrap();
     assert_eq!(
         compilation.invoke("TriggerBoundaryDemo.run").unwrap(),
-        ["2", "1", "2", "2", "true", "false"]
+        ["3", "2", "2", "2", "true", "false", "2"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn partial_dml_retries_at_most_three_attempts_and_then_rolls_back() {
+    let source = r#"
+public class RetryLimitDemo {
+    public static void run() {
+        M24Row__c first = row('First', 1);
+        M24Row__c second = row('Second', 2);
+        M24Row__c third = row('Third', 3);
+        try {
+            Database.insert(new List<M24Row__c>{first, second, third}, false);
+        } catch (DmlException error) {
+            System.debug(error.getTypeName());
+            System.debug(error.getMessage());
+        }
+        System.debug(M24RetryAudit.beforeRows);
+        System.debug(M24RetryAudit.afterRows);
+        System.debug(first.Id == null);
+        System.debug(second.Id == null);
+        System.debug(third.Id == null);
+        System.debug([SELECT COUNT() FROM M24Row__c]);
+        System.debug(Limits.getDmlStatements());
+    }
+
+    private static M24Row__c row(String name, Integer amount) {
+        M24Row__c value = new M24Row__c();
+        value.Name = name;
+        value.Amount__c = amount;
+        return value;
+    }
+}
+"#;
+    let audit = r#"
+public class M24RetryAudit {
+    public static Integer attempt = 0;
+    public static Integer beforeRows = 0;
+    public static Integer afterRows = 0;
+}
+"#;
+    let trigger = r#"
+trigger M24RetryTrigger on M24Row__c (before insert, after insert) {
+    if (Trigger.isBefore) {
+        M24RetryAudit.attempt++;
+        M24RetryAudit.beforeRows += Trigger.size;
+        for (M24Row__c row : Trigger.new) {
+            if (
+                (M24RetryAudit.attempt == 1 && row.Name == 'First')
+                || (M24RetryAudit.attempt == 2 && row.Name == 'Second')
+                || (M24RetryAudit.attempt == 3 && row.Name == 'Third')
+            ) {
+                row.Amount__c = null;
+            }
+        }
+    } else {
+        M24RetryAudit.afterRows += Trigger.size;
+    }
+}
+"#;
+    let root = test_project(
+        "RetryLimitDemo",
+        source,
+        &[
+            ("classes/M24RetryAudit.cls", audit),
+            ("triggers/M24RetryTrigger.trigger", trigger),
+        ],
+    );
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("RetryLimitDemo.run").unwrap(),
+        [
+            "DmlException",
+            "Too many batch retries in the presence of Apex triggers and partial failures.",
+            "6",
+            "3",
+            "true",
+            "true",
+            "true",
+            "0",
+            "1",
+        ]
     );
     fs::remove_dir_all(root).unwrap();
 }
