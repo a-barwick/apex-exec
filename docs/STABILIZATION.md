@@ -67,7 +67,7 @@ package.
 | S0-01 | Frontend process safety and correctness | Complete (`c7d4ac7`, `2a8635d`; review approved; merged as `1b16312`, `ae3bf27`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
 | S0-03 | Cycle-safe runtime value traversal | Complete (`8f3ce51`; review approved at `b8b190e`; merged as `c7f78e1`) | S0-02 merged | S0-01, S0-05 |
-| S0-04 | Execution context and lazy class initialization | Active (`codex/stab-execution-context`; `s0_04_execution_context`; review remediation from `111de58`) | S0-02 and S0-03 merged | S0-01, S0-05 |
+| S0-04 | Execution context and lazy class initialization | Review (`ed830f2`; setup-mode evidence `53585f8`; `codex/stab-execution-context`; `s0_04_execution_context`) | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
@@ -87,8 +87,9 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
 
 ### S0-04 — Execution context and lazy class initialization
 
-- Implementation `ed830f2` on `codex/stab-execution-context`; pending fresh
-  read-only runtime review and integration.
+- Implementation `ed830f2` and setup-mode evidence remediation `53585f8` on
+  `codex/stab-execution-context`; ready for fresh read-only runtime review and
+  integration.
 - Fail-before CLI evidence at claim `9b8aead` reproduced both F-P0-06 cases:
   ordinary `Test.isRunningTest()` printed `true`, and an unused class with
   `static Integer broken = 1 / 0` terminated unrelated execution with a
@@ -97,8 +98,12 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   independently of instrumentation. Queued work captures the submitting
   context, installs it for execution, and restores the caller's context after
   both successful and failed jobs. Ordinary and debugger entry points report
-  non-test mode; test methods and async work submitted by tests report test
-  mode.
+  non-test mode; test setup methods, test methods, and async work submitted by
+  tests report test mode.
+- The checked-in Apex fixture has an `@TestSetup` method that asserts
+  `Test.isRunningTest()` and records a static setup-observed flag; the existing
+  test method asserts that flag. This closes the setup-mode evidence gap
+  without adding a Rust test, so the focused binary remains at nine tests.
 - Static slots are allocated to typed null lazily for one active class, then
   field initializers run once in source order through explicit
   `Uninitialized`, `Initializing`, `Initialized`, and `Failed` states.
@@ -114,10 +119,11 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   superclass ordering, and the depth stress case. A deterministic private cost
   assertion proves that two reads of one used class among 128 unused failing
   classes create exactly one initialized-class state and one static slot.
-- Full branch verification passed: `cargo fmt --check`; `cargo test --locked
-  --no-fail-fast` (353 passed, 14 ignored North Star indicators); `cargo clippy
-  --locked --all-targets -- -D warnings`; the exact CLI reproductions; and the
-  immutable Lizard ratchet with 64 current violations against 73 debt caps.
+- Full remediation verification in a fresh isolated build target passed:
+  `cargo fmt --check`; `cargo test --locked --no-fail-fast` (353 passed, 14
+  ignored North Star indicators); `cargo clippy --locked --all-targets -- -D
+  warnings`; the exact CLI reproductions; and the immutable Lizard ratchet with
+  64 current violations against 73 debt caps.
   Relevant hotspot extractions reduced `call_platform` from 589/124 NLOC/CCN
   to 577/120, `evaluate_new_object` from 101/20 to 27/6, and
   `write_class_member` from 66/16 to 35/10.
