@@ -517,6 +517,7 @@ pub struct SoqlQuery {
     pub from: Identifier,
     pub where_clause: Option<SoqlCondition>,
     pub group_by: Vec<FieldPath>,
+    pub having: Option<SoqlCondition>,
     pub order_by: Vec<SoqlOrderBy>,
     pub limit: Option<SoqlValue>,
     pub offset: Option<SoqlValue>,
@@ -526,6 +527,10 @@ pub struct SoqlQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SoqlSelectItem {
     Field(FieldPath),
+    Subquery {
+        query: Box<SoqlQuery>,
+        span: Span,
+    },
     Aggregate {
         function: SoqlAggregateFunction,
         field: Option<FieldPath>,
@@ -550,6 +555,13 @@ pub struct FieldPath {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SoqlCondition {
+    AggregateComparison {
+        function: SoqlAggregateFunction,
+        field: Option<FieldPath>,
+        operator: SoqlComparisonOperator,
+        right: SoqlValue,
+        span: Span,
+    },
     Comparison {
         left: FieldPath,
         operator: SoqlComparisonOperator,
@@ -577,7 +589,8 @@ pub enum SoqlCondition {
 impl SoqlCondition {
     pub fn span(&self) -> Span {
         match self {
-            Self::Comparison { span, .. }
+            Self::AggregateComparison { span, .. }
+            | Self::Comparison { span, .. }
             | Self::In { span, .. }
             | Self::Not { span, .. }
             | Self::Logical { span, .. } => *span,
@@ -613,6 +626,7 @@ pub enum SoqlValue {
     String(String, Span),
     Boolean(bool, Span),
     Integer(i64, Span),
+    DateLiteral(SoqlDateLiteral),
     Null(Span),
     Bind(Box<Expression>, Span),
 }
@@ -625,8 +639,34 @@ impl SoqlValue {
             | Self::Integer(_, span)
             | Self::Null(span)
             | Self::Bind(_, span) => *span,
+            Self::DateLiteral(literal) => literal.span,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoqlDateLiteral {
+    pub kind: SoqlDateLiteralKind,
+    pub amount: Option<i64>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoqlDateLiteralKind {
+    Yesterday,
+    Today,
+    Tomorrow,
+    LastNDays,
+    NextNDays,
+    ThisWeek,
+    LastWeek,
+    NextWeek,
+    ThisMonth,
+    LastMonth,
+    NextMonth,
+    ThisYear,
+    LastYear,
+    NextYear,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -805,6 +845,7 @@ pub enum TypeName {
     HttpResponse,
     QueueableContext,
     BatchableContext,
+    QueryLocator,
     SchedulableContext,
     SObjectType,
     DescribeSObjectResult,
@@ -850,6 +891,7 @@ impl TypeName {
             "httpresponse" => Some(Self::HttpResponse),
             "queueablecontext" | "system.queueablecontext" => Some(Self::QueueableContext),
             "batchablecontext" | "database.batchablecontext" => Some(Self::BatchableContext),
+            "querylocator" | "database.querylocator" => Some(Self::QueryLocator),
             "schedulablecontext" | "system.schedulablecontext" => Some(Self::SchedulableContext),
             "sobjecttype" | "schema.sobjecttype" => Some(Self::SObjectType),
             "describesobjectresult" | "schema.describesobjectresult" => {
@@ -911,6 +953,7 @@ impl TypeName {
             Self::HttpResponse => "HttpResponse".to_owned(),
             Self::QueueableContext => "System.QueueableContext".to_owned(),
             Self::BatchableContext => "Database.BatchableContext".to_owned(),
+            Self::QueryLocator => "Database.QueryLocator".to_owned(),
             Self::SchedulableContext => "System.SchedulableContext".to_owned(),
             Self::SObjectType => "Schema.SObjectType".to_owned(),
             Self::DescribeSObjectResult => "Schema.DescribeSObjectResult".to_owned(),

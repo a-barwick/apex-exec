@@ -8,7 +8,7 @@ use crate::{
     hir::{
         CallTarget, CheckedCondition, CheckedFieldPath, CheckedInValues, CheckedOrderBy,
         CheckedQuery, CheckedRelationship, CheckedSelectItem, CheckedSoqlQuery, CheckedSoslQuery,
-        CheckedSoslReturning, CheckedValue, ExpressionType, QueryResultKind,
+        CheckedSoslReturning, CheckedValue, DatabaseQueryKind, ExpressionType, QueryResultKind,
     },
     platform::{DataValue, FieldType},
 };
@@ -50,12 +50,64 @@ impl Checker {
         ));
         let mut select = Vec::new();
         let mut has_aggregate = false;
+        let mut has_subquery = false;
         for (index, item) in query.select.iter().enumerate() {
             match item {
                 SoqlSelectItem::Field(field) => {
                     select.push(CheckedSelectItem::Field(
                         self.check_query_field(object_id, field)?,
                     ));
+                }
+                SoqlSelectItem::Subquery { query: child, span } => {
+                    has_subquery = true;
+                    if child
+                        .select
+                        .iter()
+                        .any(|item| matches!(item, SoqlSelectItem::Subquery { .. }))
+                    {
+                        return Err(Diagnostic::new(
+                            "nested child SOQL subqueries are not supported",
+                            *span,
+                        ));
+                    }
+                    let (child_object_id, reference_field_id) = self
+                        .schema
+                        .child_relationship(object_id, &child.from.spelling)
+                        .ok_or_else(|| {
+                            Diagnostic::new(
+                                format!(
+                                    "unknown or ambiguous child relationship `{}`",
+                                    child.from.spelling
+                                ),
+                                child.from.span,
+                            )
+                        })?;
+                    let child_object = self
+                        .schema
+                        .object_at(child_object_id)
+                        .expect("checked child object index is valid");
+                    let mut normalized = (**child).clone();
+                    normalized.from =
+                        Identifier::new(child_object.api_name().to_owned(), child.from.span);
+                    self.soql_type(&normalized, None)?;
+                    let Some(CheckedQuery::Soql(checked)) = self.queries.remove(&normalized.span)
+                    else {
+                        return Err(Diagnostic::new(
+                            "child SOQL query did not produce a checked plan",
+                            *span,
+                        ));
+                    };
+                    if checked.result != QueryResultKind::Records {
+                        return Err(Diagnostic::new(
+                            "child SOQL subqueries must return records",
+                            *span,
+                        ));
+                    }
+                    select.push(CheckedSelectItem::Subquery {
+                        relationship: child.from.spelling.clone(),
+                        reference_field_id,
+                        query: checked,
+                    });
                 }
                 SoqlSelectItem::Aggregate {
                     function,
@@ -103,6 +155,12 @@ impl Checker {
                 query.span,
             ));
         }
+        if has_aggregate && has_subquery {
+            return Err(Diagnostic::new(
+                "aggregate SOQL queries cannot select child subqueries",
+                query.span,
+            ));
+        }
 
         let group_by = query
             .group_by
@@ -130,8 +188,22 @@ impl Checker {
         let condition = query
             .where_clause
             .as_ref()
-            .map(|condition| self.check_query_condition(object_id, condition))
+            .map(|condition| self.check_query_condition(object_id, condition, None))
             .transpose()?;
+        let having = query
+            .having
+            .as_ref()
+            .map(|condition| self.check_query_condition(object_id, condition, Some(&select)))
+            .transpose()?;
+        if having.is_some() && !has_aggregate {
+            return Err(Diagnostic::new(
+                "`HAVING` requires an aggregate select item",
+                query.having.as_ref().expect("having is present").span(),
+            ));
+        }
+        if let Some(having) = &having {
+            ensure_having_fields_are_grouped(having, &group_by, query.span)?;
+        }
         let order_by = query
             .order_by
             .iter()
@@ -193,6 +265,7 @@ impl Checker {
                 select,
                 condition,
                 group_by,
+                having,
                 order_by,
                 limit,
                 offset,
@@ -225,7 +298,7 @@ impl Checker {
             let condition = clause
                 .where_clause
                 .as_ref()
-                .map(|condition| self.check_query_condition(object_id, condition))
+                .map(|condition| self.check_query_condition(object_id, condition, None))
                 .transpose()?;
             let order_by = clause
                 .order_by
@@ -271,107 +344,144 @@ impl Checker {
         root_object_id: usize,
         path: &FieldPath,
     ) -> Result<CheckedFieldPath, Diagnostic> {
-        let root = self
-            .schema
-            .object_at(root_object_id)
-            .expect("checked root object index is valid");
-        match path.segments.as_slice() {
-            [field] => {
-                let field_id = root.field_index(&field.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!(
-                            "unknown field `{}` on SObject `{}`",
-                            field.spelling,
-                            root.api_name()
-                        ),
-                        field.span,
-                    )
-                })?;
-                let schema = root
-                    .field_at(field_id)
-                    .expect("checked field index is valid");
-                Ok(CheckedFieldPath {
-                    root_object_id,
-                    relationship: None,
-                    field_id,
-                    field_type: schema.data_type().clone(),
-                })
-            }
-            [relationship, field] => {
-                let reference_name =
-                    relationship_field_name(&relationship.spelling).ok_or_else(|| {
-                        Diagnostic::new(
-                            "parent relationship paths must use a `__r` relationship name",
-                            relationship.span,
-                        )
-                    })?;
-                let reference_field_id = root.field_index(&reference_name).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!(
-                            "unknown relationship `{}` on SObject `{}`",
-                            relationship.spelling,
-                            root.api_name()
-                        ),
-                        relationship.span,
-                    )
-                })?;
-                let reference = root
-                    .field_at(reference_field_id)
-                    .expect("checked relationship field index is valid");
-                let FieldType::Reference { target_object } = reference.data_type() else {
-                    return Err(Diagnostic::new(
-                        format!("field `{reference_name}` is not a relationship"),
-                        relationship.span,
-                    ));
-                };
-                let target_object_id =
-                    self.schema.object_index(target_object).ok_or_else(|| {
-                        Diagnostic::new(
-                            format!("unknown relationship target SObject `{target_object}`"),
-                            relationship.span,
-                        )
-                    })?;
-                let target = self
-                    .schema
-                    .object_at(target_object_id)
-                    .expect("checked relationship target index is valid");
-                let field_id = target.field_index(&field.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!(
-                            "unknown field `{}` on related SObject `{}`",
-                            field.spelling,
-                            target.api_name()
-                        ),
-                        field.span,
-                    )
-                })?;
-                let schema = target
-                    .field_at(field_id)
-                    .expect("checked related field index is valid");
-                Ok(CheckedFieldPath {
-                    root_object_id,
-                    relationship: Some(CheckedRelationship {
-                        reference_field_id,
-                        target_object_id,
-                        spelling: relationship.spelling.clone(),
-                    }),
-                    field_id,
-                    field_type: schema.data_type().clone(),
-                })
-            }
-            _ => Err(Diagnostic::new(
-                "only direct fields and one parent relationship level are supported",
+        let Some((field, relationship_segments)) = path.segments.split_last() else {
+            return Err(Diagnostic::new(
+                "query field path cannot be empty",
                 path.span,
-            )),
+            ));
+        };
+        if relationship_segments.len() > 5 {
+            return Err(Diagnostic::new(
+                "parent relationship paths are limited to five levels",
+                path.span,
+            ));
         }
+        let mut object_id = root_object_id;
+        let mut relationships = Vec::with_capacity(relationship_segments.len());
+        for relationship in relationship_segments {
+            let object = self
+                .schema
+                .object_at(object_id)
+                .expect("checked relationship object index is valid");
+            let reference_name =
+                relationship_field_name(&relationship.spelling).ok_or_else(|| {
+                    Diagnostic::new(
+                        "custom parent relationship paths must use a `__r` relationship name",
+                        relationship.span,
+                    )
+                })?;
+            let reference_field_id = object.field_index(&reference_name).ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown relationship `{}` on SObject `{}`",
+                        relationship.spelling,
+                        object.api_name()
+                    ),
+                    relationship.span,
+                )
+            })?;
+            let reference = object
+                .field_at(reference_field_id)
+                .expect("checked relationship field index is valid");
+            let FieldType::Reference { target_object } = reference.data_type() else {
+                return Err(Diagnostic::new(
+                    format!("field `{reference_name}` is not a relationship"),
+                    relationship.span,
+                ));
+            };
+            let target_object_id = self.schema.object_index(target_object).ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown relationship target SObject `{target_object}`"),
+                    relationship.span,
+                )
+            })?;
+            relationships.push(CheckedRelationship {
+                reference_field_id,
+                target_object_id,
+                spelling: relationship.spelling.clone(),
+            });
+            object_id = target_object_id;
+        }
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("checked query field object is valid");
+        let field_id = object.field_index(&field.spelling).ok_or_else(|| {
+            Diagnostic::new(
+                format!(
+                    "unknown field `{}` on SObject `{}`",
+                    field.spelling,
+                    object.api_name()
+                ),
+                field.span,
+            )
+        })?;
+        let schema = object
+            .field_at(field_id)
+            .expect("checked query field index is valid");
+        Ok(CheckedFieldPath {
+            root_object_id,
+            relationships,
+            field_id,
+            field_type: schema.data_type().clone(),
+        })
     }
 
     fn check_query_condition(
         &mut self,
         object_id: usize,
         condition: &SoqlCondition,
+        aggregates: Option<&[CheckedSelectItem]>,
     ) -> Result<CheckedCondition, Diagnostic> {
         match condition {
+            SoqlCondition::AggregateComparison {
+                function,
+                field,
+                operator,
+                right,
+                span,
+            } => {
+                let Some(aggregates) = aggregates else {
+                    return Err(Diagnostic::new(
+                        "aggregate expressions are only supported in `HAVING`",
+                        *span,
+                    ));
+                };
+                let field = field
+                    .as_ref()
+                    .map(|field| self.check_query_field(object_id, field))
+                    .transpose()?;
+                let alias = aggregates
+                    .iter()
+                    .find_map(|item| match item {
+                        CheckedSelectItem::Aggregate {
+                            function: selected_function,
+                            field: selected_field,
+                            alias,
+                        } if selected_function == function && selected_field == &field => {
+                            Some(alias.clone())
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "`HAVING` aggregate expressions must also appear in `SELECT`",
+                            *span,
+                        )
+                    })?;
+                if matches!(operator, crate::ast::SoqlComparisonOperator::Like) {
+                    return Err(Diagnostic::new(
+                        "`LIKE` is not valid for aggregate `HAVING` expressions",
+                        *span,
+                    ));
+                }
+                let right = self.check_query_value(right, &FieldType::Integer)?;
+                Ok(CheckedCondition::AggregateComparison {
+                    alias,
+                    operator: *operator,
+                    right,
+                })
+            }
             SoqlCondition::Comparison {
                 left,
                 operator,
@@ -428,7 +538,17 @@ impl Checker {
                                 expression.span(),
                             ));
                         }
-                        CheckedInValues::Bind(Box::new((**expression).clone()))
+                        if self.dynamic_query {
+                            let Expression::Variable(identifier) = expression.as_ref() else {
+                                return Err(Diagnostic::new(
+                                    "dynamic SOQL collection binds must be simple variable names",
+                                    expression.span(),
+                                ));
+                            };
+                            CheckedInValues::DynamicBind(identifier.canonical.clone())
+                        } else {
+                            CheckedInValues::Bind(Box::new((**expression).clone()))
+                        }
                     }
                 };
                 Ok(CheckedCondition::In {
@@ -438,7 +558,7 @@ impl Checker {
                 })
             }
             SoqlCondition::Not { condition, .. } => Ok(CheckedCondition::Not(Box::new(
-                self.check_query_condition(object_id, condition)?,
+                self.check_query_condition(object_id, condition, aggregates)?,
             ))),
             SoqlCondition::Logical {
                 left,
@@ -446,9 +566,9 @@ impl Checker {
                 right,
                 ..
             } => Ok(CheckedCondition::Logical {
-                left: Box::new(self.check_query_condition(object_id, left)?),
+                left: Box::new(self.check_query_condition(object_id, left, aggregates)?),
                 operator: *operator,
-                right: Box::new(self.check_query_condition(object_id, right)?),
+                right: Box::new(self.check_query_condition(object_id, right, aggregates)?),
             }),
         }
     }
@@ -480,6 +600,12 @@ impl Checker {
                 }
                 CheckedValue::Literal(DataValue::Integer(*value))
             }
+            SoqlValue::DateLiteral(literal) => {
+                if !matches!(expected, FieldType::Date | FieldType::Datetime) {
+                    return Err(query_value_mismatch(expected, "date literal", literal.span));
+                }
+                CheckedValue::DateLiteral(*literal)
+            }
             SoqlValue::Null(_) => CheckedValue::Literal(DataValue::Null),
             SoqlValue::Bind(expression, _) => {
                 let actual = self.expression_type(expression)?;
@@ -495,7 +621,17 @@ impl Checker {
                         expression.span(),
                     ));
                 }
-                CheckedValue::Bind(Box::new((**expression).clone()))
+                if self.dynamic_query {
+                    let Expression::Variable(identifier) = expression.as_ref() else {
+                        return Err(Diagnostic::new(
+                            "dynamic SOQL binds must be simple variable names",
+                            expression.span(),
+                        ));
+                    };
+                    CheckedValue::DynamicBind(identifier.canonical.clone())
+                } else {
+                    CheckedValue::Bind(Box::new((**expression).clone()))
+                }
             }
         };
         Ok(checked)
@@ -534,7 +670,88 @@ impl Checker {
         method: &Identifier,
         arguments: &[Expression],
         span: crate::span::Span,
+        expected: Option<&TypeName>,
     ) -> Result<ExpressionType, Diagnostic> {
+        let query_kind = match method.canonical.as_str() {
+            "query" => Some(DatabaseQueryKind::Query),
+            "countquery" => Some(DatabaseQueryKind::Count),
+            "getquerylocator" => Some(DatabaseQueryKind::QueryLocator),
+            _ => None,
+        };
+        if let Some(kind) = query_kind {
+            if arguments.len() != 1 {
+                return Err(Diagnostic::new(
+                    format!(
+                        "Database.{} expects exactly one query argument",
+                        method.spelling
+                    ),
+                    method.span,
+                ));
+            }
+            let expected_object_id = match kind {
+                DatabaseQueryKind::Query => {
+                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+                    expected.and_then(|expected| {
+                        let TypeName::List(element) = expected else {
+                            return None;
+                        };
+                        let TypeName::Custom(name) = element.as_ref() else {
+                            return None;
+                        };
+                        self.schema.object_index(&name.spelling)
+                    })
+                }
+                DatabaseQueryKind::Count => {
+                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+                    None
+                }
+                DatabaseQueryKind::QueryLocator => {
+                    let actual = self.expression_type(&arguments[0])?;
+                    let valid = actual == ExpressionType::Value(TypeName::String)
+                        || matches!(
+                            actual,
+                            ExpressionType::Value(TypeName::List(ref element))
+                                if self.is_sobject_type(element)
+                                    || self.is_dynamic_sobject_type(element)
+                        );
+                    if !valid {
+                        return Err(Diagnostic::new(
+                            "Database.getQueryLocator requires a String or static SOQL record query",
+                            arguments[0].span(),
+                        ));
+                    }
+                    None
+                }
+            };
+            self.calls.insert(
+                span,
+                CallTarget::DatabaseQuery {
+                    kind,
+                    expected_object_id,
+                },
+            );
+            let result = match kind {
+                DatabaseQueryKind::Query => expected
+                    .filter(|expected| {
+                        matches!(
+                            expected,
+                            TypeName::List(element)
+                                if self.is_sobject_type(element)
+                                    || self.is_dynamic_sobject_type(element)
+                        )
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+                            "SObject".to_owned(),
+                            span,
+                        ))))
+                    }),
+                DatabaseQueryKind::Count => TypeName::Integer,
+                DatabaseQueryKind::QueryLocator => TypeName::QueryLocator,
+            };
+            return Ok(ExpressionType::Value(result));
+        }
         let operation = match method.canonical.as_str() {
             "insert" => crate::ast::DmlOperation::Insert,
             "update" => crate::ast::DmlOperation::Update,
@@ -573,6 +790,40 @@ fn relationship_field_name(relationship: &str) -> Option<String> {
         .map(|prefix| format!("{prefix}__c"))
 }
 
+fn ensure_having_fields_are_grouped(
+    condition: &CheckedCondition,
+    group_by: &[CheckedFieldPath],
+    span: crate::span::Span,
+) -> Result<(), Diagnostic> {
+    match condition {
+        CheckedCondition::AggregateComparison { .. } => {}
+        CheckedCondition::Comparison { left, .. } => {
+            if !group_by.contains(left) {
+                return Err(Diagnostic::new(
+                    "`HAVING` fields must appear in `GROUP BY`",
+                    span,
+                ));
+            }
+        }
+        CheckedCondition::In { field, .. } => {
+            if !group_by.contains(field) {
+                return Err(Diagnostic::new(
+                    "`HAVING` fields must appear in `GROUP BY`",
+                    span,
+                ));
+            }
+        }
+        CheckedCondition::Not(condition) => {
+            ensure_having_fields_are_grouped(condition, group_by, span)?;
+        }
+        CheckedCondition::Logical { left, right, .. } => {
+            ensure_having_fields_are_grouped(left, group_by, span)?;
+            ensure_having_fields_are_grouped(right, group_by, span)?;
+        }
+    }
+    Ok(())
+}
+
 fn query_value_mismatch(expected: &FieldType, actual: &str, span: crate::span::Span) -> Diagnostic {
     Diagnostic::new(
         format!(
@@ -588,6 +839,8 @@ fn field_type_name(field_type: &FieldType) -> &'static str {
         FieldType::Boolean => "Boolean",
         FieldType::Integer => "Integer",
         FieldType::String => "String",
+        FieldType::Date => "Date",
+        FieldType::Datetime => "Datetime",
         FieldType::Id => "Id",
         FieldType::Reference { .. } => "relationship",
     }

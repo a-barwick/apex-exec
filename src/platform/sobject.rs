@@ -1,4 +1,5 @@
 use super::{DataValue, FieldType, Record, RecordId, SchemaCatalog, SchemaError, SchemaProvider};
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use std::{collections::BTreeMap, error::Error, fmt};
 
 /// Schema-validated SObject value independent from the Apex interpreter and
@@ -195,18 +196,21 @@ fn validate_value(
     expected: &FieldType,
     value: &DataValue,
 ) -> Result<(), SObjectError> {
-    let compatible = matches!(
-        (expected, value),
+    let compatible = match (expected, value) {
         (_, DataValue::Null)
-            | (FieldType::Boolean, DataValue::Boolean(_))
-            | (FieldType::Integer, DataValue::Integer(_))
-            | (FieldType::String, DataValue::String(_))
-            | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
-            | (
-                FieldType::Reference { .. },
-                DataValue::Id(_) | DataValue::String(_)
-            )
-    );
+        | (FieldType::Boolean, DataValue::Boolean(_))
+        | (FieldType::Integer, DataValue::Integer(_))
+        | (FieldType::String, DataValue::String(_))
+        | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
+        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_)) => true,
+        (FieldType::Date, DataValue::Date(value)) => NaiveDate::from_ymd_opt(1970, 1, 1)
+            .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(*value))))
+            .is_some(),
+        (FieldType::Datetime, DataValue::Datetime(value)) => {
+            Utc.timestamp_millis_opt(*value).single().is_some()
+        }
+        _ => false,
+    };
     if compatible {
         Ok(())
     } else {
@@ -225,6 +229,8 @@ fn data_value_name(value: &DataValue) -> &'static str {
         DataValue::Boolean(_) => "Boolean",
         DataValue::Integer(_) => "Integer",
         DataValue::String(_) => "String",
+        DataValue::Date(_) => "Date",
+        DataValue::Datetime(_) => "Datetime",
         DataValue::Id(_) => "Id",
     }
 }

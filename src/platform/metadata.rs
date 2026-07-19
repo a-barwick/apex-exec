@@ -108,7 +108,11 @@ impl ObjectBuilder {
     fn new(api_name: String) -> Self {
         Self {
             api_name,
-            fields: vec![FieldSchema::new("Id", FieldType::Id, false)],
+            fields: vec![
+                FieldSchema::new("Id", FieldType::Id, false),
+                FieldSchema::new("CreatedDate", FieldType::Datetime, true),
+                FieldSchema::new("LastModifiedDate", FieldType::Datetime, true),
+            ],
         }
     }
 
@@ -256,6 +260,8 @@ fn parse_field(
         | "MultiselectPicklist"
         | "AutoNumber"
         | "EncryptedText" => FieldType::String,
+        "Date" => FieldType::Date,
+        "DateTime" => FieldType::Datetime,
         "Lookup" | "MasterDetail" => {
             let target_object = required_text(path, xml, "referenceTo")?;
             FieldType::Reference { target_object }
@@ -270,7 +276,12 @@ fn parse_field(
     };
     let required =
         tag_text(xml, "required").is_some_and(|value| value.eq_ignore_ascii_case("true"));
-    Ok(FieldSchema::new(api_name, data_type, !required))
+    let relationship_name = tag_text(xml, "relationshipName");
+    let field = FieldSchema::new(api_name, data_type, !required);
+    Ok(match relationship_name {
+        Some(name) => field.with_relationship_name(name),
+        None => field,
+    })
 }
 
 fn object_name_from_path(path: &Path) -> Result<String, MetadataError> {
@@ -359,7 +370,7 @@ mod tests {
 
         let schema = import_metadata([&root]).unwrap();
         let invoice = schema.object("invoice__C").unwrap();
-        assert_eq!(invoice.fields().len(), 4);
+        assert_eq!(invoice.fields().len(), 6);
         assert_eq!(
             invoice.field("Amount__c").unwrap().data_type(),
             &FieldType::Integer
@@ -388,15 +399,19 @@ mod tests {
         )
         .unwrap();
         let schema = import_metadata([&root]).unwrap();
-        assert_eq!(schema.object("Widget__c").unwrap().fields().len(), 3);
+        assert_eq!(schema.object("Widget__c").unwrap().fields().len(), 5);
 
         fs::write(
             objects.join("Bad__c.object"),
-            r#"<CustomObject><fields><fullName>When__c</fullName><type>Date</type></fields></CustomObject>"#,
+            r#"<CustomObject><fields><fullName>Where__c</fullName><type>Geolocation</type></fields></CustomObject>"#,
         )
         .unwrap();
         let error = import_metadata([&root]).unwrap_err();
-        assert!(error.to_string().contains("unsupported field type `Date`"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported field type `Geolocation`")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -131,6 +131,7 @@ enum PlatformValue {
         ty: TypeName,
         job_id: String,
     },
+    QueryLocator(CollectionId),
 }
 
 impl PlatformValue {
@@ -145,6 +146,7 @@ impl PlatformValue {
             Self::SObjectType(_) => TypeName::SObjectType,
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
             Self::AsyncContext { ty, .. } => ty.clone(),
+            Self::QueryLocator(_) => TypeName::QueryLocator,
         }
     }
 }
@@ -185,6 +187,7 @@ struct SObjectInstance {
     object_id: usize,
     fields: BTreeMap<usize, Value>,
     relationships: BTreeMap<usize, SObjectId>,
+    children: BTreeMap<String, CollectionId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1333,6 +1336,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::SObjectGet
                     | CallTarget::SObjectPut
                     | CallTarget::DatabaseDml(_)
+                    | CallTarget::DatabaseQuery { .. }
                     | CallTarget::AggregateResultGet => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
@@ -1499,6 +1503,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Some(CallTarget::DatabaseDml(operation)) => {
                 self.evaluate_database_dml_call(operation, arguments, span)
             }
+            Some(CallTarget::DatabaseQuery {
+                kind,
+                expected_object_id,
+            }) => self.evaluate_database_query_call(kind, expected_object_id, arguments, span),
             Some(CallTarget::AggregateResultGet) => {
                 self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
             }
@@ -1742,6 +1750,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 target_object_id,
                 span,
             ),
+            MemberTarget::SObjectChildRelationship {
+                object_id,
+                child_object_id,
+                relationship,
+            } => self.evaluate_sobject_child_relationship(
+                receiver,
+                evaluated_receiver,
+                object_id,
+                child_object_id,
+                &relationship,
+                span,
+            ),
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
             MemberTarget::EnumConstant { class_id, ordinal } => {
                 Ok(Value::Enum { class_id, ordinal })
@@ -1791,6 +1811,41 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     span,
                 ))))
             }))
+    }
+
+    fn evaluate_sobject_child_relationship(
+        &mut self,
+        expression: &Expression,
+        evaluated_receiver: Option<Value>,
+        object_id: usize,
+        child_object_id: usize,
+        relationship: &str,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = self.evaluate_sobject_receiver(expression, evaluated_receiver)?;
+        let instance = self.store.sobject(receiver);
+        if instance.object_id != object_id {
+            return Err(Diagnostic::new(
+                "SObject child relationship target does not match runtime object type",
+                span,
+            ));
+        }
+        if let Some(children) = instance.children.get(relationship).copied() {
+            return Ok(Value::Collection(children));
+        }
+        let child = self
+            .program()
+            .schema()
+            .object_at(child_object_id)
+            .expect("checked child relationship target is valid");
+        Ok(self.store.allocate_collection(Collection::List {
+            element_type: TypeName::Custom(crate::ast::NamedType::new(
+                child.api_name().to_owned(),
+                span,
+            )),
+            elements: Vec::new(),
+            iteration_depth: 0,
+        }))
     }
 
     fn trigger_context_value(
@@ -3892,6 +3947,8 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
         FieldType::Boolean => TypeName::Boolean,
         FieldType::Integer => TypeName::Integer,
         FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+        FieldType::Date => TypeName::Date,
+        FieldType::Datetime => TypeName::Datetime,
     }
 }
 

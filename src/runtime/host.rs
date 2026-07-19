@@ -86,6 +86,7 @@ pub struct QueryEvent {
     pub kind: QueryKind,
     pub objects: Vec<String>,
     pub rows: usize,
+    pub object_scans: usize,
     pub succeeded: bool,
 }
 
@@ -470,12 +471,15 @@ impl PlatformHost for RecordingHost {
         schema: &SchemaCatalog,
         request: &SoqlRequest,
     ) -> Result<QueryOutcome, DatabaseError> {
-        let result = self.database(schema)?.execute_soql(request);
+        let database = self.database(schema)?;
+        let result = database.execute_soql(request);
+        let object_scans = database.last_query_object_scans();
         let rows = result.as_ref().map_or(0, outcome_rows);
         self.queries.push(QueryEvent {
             kind: QueryKind::Soql,
             objects: vec![request.object.clone()],
             rows,
+            object_scans,
             succeeded: result.is_ok(),
         });
         result
@@ -496,6 +500,7 @@ impl PlatformHost for RecordingHost {
                 .map(|returning| returning.object.clone())
                 .collect(),
             rows,
+            object_scans: request.returning.len(),
             succeeded: result.is_ok(),
         });
         result
@@ -505,8 +510,38 @@ impl PlatformHost for RecordingHost {
         &mut self,
         schema: &SchemaCatalog,
         operation: DmlOperation,
-        records: Vec<SObject>,
+        mut records: Vec<SObject>,
     ) -> Result<Vec<SObject>, DatabaseError> {
+        for record in &mut records {
+            if operation == DmlOperation::Insert
+                && schema
+                    .field(record.object_api_name(), "CreatedDate")
+                    .is_ok()
+            {
+                record
+                    .set(
+                        schema,
+                        "CreatedDate",
+                        crate::platform::DataValue::Datetime(self.now_millis),
+                    )
+                    .map_err(|error| DatabaseError::new(error.to_string()))?;
+            }
+            if matches!(
+                operation,
+                DmlOperation::Insert | DmlOperation::Update | DmlOperation::Upsert
+            ) && schema
+                .field(record.object_api_name(), "LastModifiedDate")
+                .is_ok()
+            {
+                record
+                    .set(
+                        schema,
+                        "LastModifiedDate",
+                        crate::platform::DataValue::Datetime(self.now_millis),
+                    )
+                    .map_err(|error| DatabaseError::new(error.to_string()))?;
+            }
+        }
         let objects = records
             .iter()
             .map(|record| record.object_api_name().to_owned())

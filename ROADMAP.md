@@ -580,7 +580,7 @@ local evidence is checked in under `benchmarks/milestone22/` and
 
 ### M23 — Broader SOQL fidelity
 
-**Status:** Planned
+**Status:** Active on `codex/milestone-23-soql-fidelity`
 
 #### Scope
 

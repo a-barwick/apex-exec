@@ -117,6 +117,17 @@ impl Parser {
         })
     }
 
+    pub(crate) fn parse_soql_query(mut self) -> Result<crate::ast::SoqlQuery, Diagnostic> {
+        let query = self.parse_soql_body()?;
+        if !self.check(&TokenKind::Eof) {
+            return Err(Diagnostic::new(
+                "unexpected token after dynamic SOQL query",
+                self.current().span,
+            ));
+        }
+        Ok(query)
+    }
+
     fn expect_identifier(&mut self, message: &str) -> Result<Identifier, Diagnostic> {
         let token = self.current().clone();
         if let TokenKind::Identifier(spelling) = token.kind {

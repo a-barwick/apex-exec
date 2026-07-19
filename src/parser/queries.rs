@@ -2,8 +2,9 @@ use super::Parser;
 use crate::{
     ast::{
         Expression, FieldPath, NullsOrder, SoqlAggregateFunction, SoqlComparisonOperator,
-        SoqlCondition, SoqlInValues, SoqlLogicalOperator, SoqlOrderBy, SoqlQuery, SoqlSelectItem,
-        SoqlValue, SortDirection, SoslQuery, SoslReturning, SoslScope,
+        SoqlCondition, SoqlDateLiteral, SoqlDateLiteralKind, SoqlInValues, SoqlLogicalOperator,
+        SoqlOrderBy, SoqlQuery, SoqlSelectItem, SoqlValue, SortDirection, SoslQuery, SoslReturning,
+        SoslScope,
     },
     diagnostic::Diagnostic,
     token::TokenKind,
@@ -32,7 +33,7 @@ impl Parser {
         }
     }
 
-    fn parse_soql_body(&mut self) -> Result<SoqlQuery, Diagnostic> {
+    pub(super) fn parse_soql_body(&mut self) -> Result<SoqlQuery, Diagnostic> {
         let start = self.expect_keyword("select", "expected `SELECT`")?;
         let mut select = Vec::new();
         loop {
@@ -57,6 +58,12 @@ impl Parser {
         } else {
             Vec::new()
         };
+        let having = if self.check_keyword("having") {
+            self.advance();
+            Some(self.parse_soql_or()?)
+        } else {
+            None
+        };
         let order_by = self.parse_optional_order_by()?;
         let limit = self.parse_optional_value_clause("limit")?;
         let offset = self.parse_optional_value_clause("offset")?;
@@ -69,6 +76,7 @@ impl Parser {
             from,
             where_clause,
             group_by,
+            having,
             order_by,
             limit,
             offset,
@@ -77,6 +85,32 @@ impl Parser {
     }
 
     fn parse_select_item(&mut self) -> Result<SoqlSelectItem, Diagnostic> {
+        if self.check_keyword("typeof") {
+            return Err(Diagnostic::new(
+                "`TYPEOF` polymorphic SOQL is not supported by the active compatibility profile",
+                self.current().span,
+            ));
+        }
+        if self.check(&TokenKind::LeftParen) {
+            let start = self.advance();
+            if !self.check_keyword("select") {
+                return Err(Diagnostic::new(
+                    "expected `SELECT` after `(` in SOQL select list",
+                    self.current().span,
+                ));
+            }
+            let mut query = self.parse_soql_body()?;
+            let end = self.expect_simple(
+                TokenKind::RightParen,
+                "expected `)` after child SOQL subquery",
+            )?;
+            let span = start.span.merge(end.span);
+            query.span = span;
+            return Ok(SoqlSelectItem::Subquery {
+                query: Box::new(query),
+                span,
+            });
+        }
         if let TokenKind::Identifier(name) = &self.current().kind {
             let function = match name.to_ascii_lowercase().as_str() {
                 "count" => Some(SoqlAggregateFunction::Count),
@@ -195,6 +229,39 @@ impl Parser {
     }
 
     fn parse_soql_predicate(&mut self) -> Result<SoqlCondition, Diagnostic> {
+        if let TokenKind::Identifier(name) = &self.current().kind {
+            let function = match name.to_ascii_lowercase().as_str() {
+                "count" => Some(SoqlAggregateFunction::Count),
+                "sum" => Some(SoqlAggregateFunction::Sum),
+                "min" => Some(SoqlAggregateFunction::Min),
+                "max" => Some(SoqlAggregateFunction::Max),
+                _ => None,
+            };
+            if let Some(function) = function
+                && matches!(self.peek(1).kind, TokenKind::LeftParen)
+            {
+                let start = self.advance();
+                self.advance();
+                let field = if self.check(&TokenKind::RightParen) {
+                    None
+                } else {
+                    Some(self.parse_field_path()?)
+                };
+                self.expect_simple(
+                    TokenKind::RightParen,
+                    "expected `)` after HAVING aggregate argument",
+                )?;
+                let operator = self.parse_soql_comparison_operator()?;
+                let right = self.parse_soql_value()?;
+                return Ok(SoqlCondition::AggregateComparison {
+                    function,
+                    field,
+                    operator,
+                    span: start.span.merge(right.span()),
+                    right,
+                });
+            }
+        }
         let field = self.parse_field_path()?;
         let start = field.span;
         let negated_in = if self.check_keyword("not") && self.peek_keyword(1, "in") {
@@ -205,27 +272,7 @@ impl Parser {
             self.advance();
             false
         } else {
-            let operator = if self.check(&TokenKind::Equal) {
-                SoqlComparisonOperator::Equal
-            } else if self.check(&TokenKind::BangEqual) {
-                SoqlComparisonOperator::NotEqual
-            } else if self.check(&TokenKind::Less) {
-                SoqlComparisonOperator::Less
-            } else if self.check(&TokenKind::LessEqual) {
-                SoqlComparisonOperator::LessEqual
-            } else if self.check(&TokenKind::Greater) {
-                SoqlComparisonOperator::Greater
-            } else if self.check(&TokenKind::GreaterEqual) {
-                SoqlComparisonOperator::GreaterEqual
-            } else if self.check_keyword("like") {
-                SoqlComparisonOperator::Like
-            } else {
-                return Err(Diagnostic::new(
-                    "expected a SOQL comparison operator",
-                    self.current().span,
-                ));
-            };
-            self.advance();
+            let operator = self.parse_soql_comparison_operator()?;
             let right = self.parse_soql_value()?;
             let span = start.merge(right.span());
             return Ok(SoqlCondition::Comparison {
@@ -266,6 +313,31 @@ impl Parser {
         })
     }
 
+    fn parse_soql_comparison_operator(&mut self) -> Result<SoqlComparisonOperator, Diagnostic> {
+        let operator = if self.check(&TokenKind::Equal) {
+            SoqlComparisonOperator::Equal
+        } else if self.check(&TokenKind::BangEqual) {
+            SoqlComparisonOperator::NotEqual
+        } else if self.check(&TokenKind::Less) {
+            SoqlComparisonOperator::Less
+        } else if self.check(&TokenKind::LessEqual) {
+            SoqlComparisonOperator::LessEqual
+        } else if self.check(&TokenKind::Greater) {
+            SoqlComparisonOperator::Greater
+        } else if self.check(&TokenKind::GreaterEqual) {
+            SoqlComparisonOperator::GreaterEqual
+        } else if self.check_keyword("like") {
+            SoqlComparisonOperator::Like
+        } else {
+            return Err(Diagnostic::new(
+                "expected a SOQL comparison operator",
+                self.current().span,
+            ));
+        };
+        self.advance();
+        Ok(operator)
+    }
+
     fn parse_soql_value(&mut self) -> Result<SoqlValue, Diagnostic> {
         let token = self.current().clone();
         match token.kind {
@@ -280,6 +352,46 @@ impl Parser {
             TokenKind::IntegerLiteral(value) => {
                 self.advance();
                 Ok(SoqlValue::Integer(value, token.span))
+            }
+            TokenKind::Identifier(name) => {
+                let Some(kind) = soql_date_literal_kind(&name) else {
+                    return Err(Diagnostic::new(
+                        "expected a SOQL literal or bind expression",
+                        token.span,
+                    ));
+                };
+                self.advance();
+                let (amount, span) = if matches!(
+                    kind,
+                    SoqlDateLiteralKind::LastNDays | SoqlDateLiteralKind::NextNDays
+                ) {
+                    self.expect_simple(
+                        TokenKind::Colon,
+                        "expected `:` in relative SOQL date literal",
+                    )?;
+                    let amount = self.current().clone();
+                    let TokenKind::IntegerLiteral(value) = amount.kind else {
+                        return Err(Diagnostic::new(
+                            "expected a non-negative Integer in relative SOQL date literal",
+                            amount.span,
+                        ));
+                    };
+                    self.advance();
+                    if value < 0 {
+                        return Err(Diagnostic::new(
+                            "relative SOQL date literal amount cannot be negative",
+                            amount.span,
+                        ));
+                    }
+                    (Some(value), token.span.merge(amount.span))
+                } else {
+                    (None, token.span)
+                };
+                Ok(SoqlValue::DateLiteral(SoqlDateLiteral {
+                    kind,
+                    amount,
+                    span,
+                }))
             }
             TokenKind::Null => {
                 self.advance();
@@ -433,10 +545,30 @@ impl Parser {
 
     fn is_query_clause_keyword(&self) -> bool {
         [
-            "from", "where", "group", "order", "limit", "offset", "asc", "desc", "nulls", "and",
-            "or",
+            "from", "where", "group", "having", "order", "limit", "offset", "asc", "desc", "nulls",
+            "and", "or",
         ]
         .iter()
         .any(|keyword| self.check_keyword(keyword))
+    }
+}
+
+fn soql_date_literal_kind(name: &str) -> Option<SoqlDateLiteralKind> {
+    match name.to_ascii_lowercase().as_str() {
+        "yesterday" => Some(SoqlDateLiteralKind::Yesterday),
+        "today" => Some(SoqlDateLiteralKind::Today),
+        "tomorrow" => Some(SoqlDateLiteralKind::Tomorrow),
+        "last_n_days" => Some(SoqlDateLiteralKind::LastNDays),
+        "next_n_days" => Some(SoqlDateLiteralKind::NextNDays),
+        "this_week" => Some(SoqlDateLiteralKind::ThisWeek),
+        "last_week" => Some(SoqlDateLiteralKind::LastWeek),
+        "next_week" => Some(SoqlDateLiteralKind::NextWeek),
+        "this_month" => Some(SoqlDateLiteralKind::ThisMonth),
+        "last_month" => Some(SoqlDateLiteralKind::LastMonth),
+        "next_month" => Some(SoqlDateLiteralKind::NextMonth),
+        "this_year" => Some(SoqlDateLiteralKind::ThisYear),
+        "last_year" => Some(SoqlDateLiteralKind::LastYear),
+        "next_year" => Some(SoqlDateLiteralKind::NextYear),
+        _ => None,
     }
 }

@@ -73,6 +73,16 @@ interpreter SObjects and storage-neutral platform requests. Filtering,
 ordering, aggregates, relationship hydration, deterministic SOSL matching, and
 atomic DML validation live above SQLite in the platform database service.
 
+M23 extends that same plan boundary rather than adding a second query engine.
+Static child queries, multi-level parent paths, `HAVING`, and date literals are
+checked into bounded HIR shapes. Runtime `Database.query`, `countQuery`, and
+`getQueryLocator` text is parsed by the query parser, rechecked against the
+program schema and visible bind types, and lowered to the same
+`CheckedSoqlQuery` and `SoqlRequest`. The interpreter evaluates query text and
+bind values but does not classify or execute query strings. Child hydration
+groups one child-object scan by parent Id, and query events expose deterministic
+object-scan cost facts.
+
 M9 adds trigger declarations as project source units and typed trigger-context
 member targets in HIR. The interpreter owns trigger dispatch because it owns
 Apex values, handler calls, and recursive control flow. The platform database

@@ -347,6 +347,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     return Err(async_exception("Batchable.start must return a List", span));
                 }
             },
+            Value::Platform(id) => {
+                let PlatformValue::QueryLocator(collection) = self.store.platform(id) else {
+                    return Err(async_exception(
+                        "Batchable.start returned a non-QueryLocator platform value",
+                        span,
+                    ));
+                };
+                match self.store.collection(*collection) {
+                    Collection::List { elements, .. } => elements.clone(),
+                    _ => {
+                        return Err(async_exception(
+                            "Batchable.start QueryLocator must contain records",
+                            span,
+                        ));
+                    }
+                }
+            }
             Value::Null(_) => {
                 return Err(async_exception("Batchable.start returned null", span));
             }
@@ -582,9 +599,22 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         Ok((field, related))
                     })
                     .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
+                let children = instance
+                    .children
+                    .into_iter()
+                    .map(|(relationship, collection)| {
+                        let Value::Collection(collection) =
+                            self.clone_async_value(Value::Collection(collection), span, memo)?
+                        else {
+                            unreachable!()
+                        };
+                        Ok((relationship, collection))
+                    })
+                    .collect::<Result<BTreeMap<_, _>, Diagnostic>>()?;
                 let snapshot_instance = self.store.sobject_mut(snapshot);
                 snapshot_instance.fields = fields;
                 snapshot_instance.relationships = relationships;
+                snapshot_instance.children = children;
                 Ok(Value::SObject(snapshot))
             }
             Value::Platform(source) => match self.store.platform(source).clone() {

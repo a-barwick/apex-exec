@@ -89,7 +89,7 @@ impl Program {
     }
 
     pub fn member_target(&self, span: Span) -> Option<MemberTarget> {
-        self.members.get(&span).copied()
+        self.members.get(&span).cloned()
     }
 
     pub(crate) fn place_target(&self, span: Span) -> Option<PlaceTarget> {
@@ -335,12 +335,23 @@ pub enum CallTarget {
     SObjectGet,
     SObjectPut,
     DatabaseDml(ast::DmlOperation),
+    DatabaseQuery {
+        kind: DatabaseQueryKind,
+        expected_object_id: Option<usize>,
+    },
     AggregateResultGet,
     EnumMethod {
         class_id: ClassId,
         method: EnumMethod,
     },
     PlatformConstructor(PlatformConstructor),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatabaseQueryKind {
+    Query,
+    Count,
+    QueryLocator,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -449,7 +460,7 @@ pub enum ReferenceTarget {
     StaticMember(ClassMemberId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberTarget {
     Instance(ClassMemberId),
     Static(ClassMemberId),
@@ -461,6 +472,11 @@ pub enum MemberTarget {
         object_id: usize,
         reference_field_id: usize,
         target_object_id: usize,
+    },
+    SObjectChildRelationship {
+        object_id: usize,
+        child_object_id: usize,
+        relationship: String,
     },
     TriggerContext(TriggerContextVariable),
     EnumConstant {
@@ -500,6 +516,7 @@ pub struct CheckedSoqlQuery {
     pub select: Vec<CheckedSelectItem>,
     pub condition: Option<CheckedCondition>,
     pub group_by: Vec<CheckedFieldPath>,
+    pub having: Option<CheckedCondition>,
     pub order_by: Vec<CheckedOrderBy>,
     pub limit: Option<CheckedValue>,
     pub offset: Option<CheckedValue>,
@@ -517,6 +534,11 @@ pub enum QueryResultKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckedSelectItem {
     Field(CheckedFieldPath),
+    Subquery {
+        relationship: String,
+        reference_field_id: usize,
+        query: Box<CheckedSoqlQuery>,
+    },
     Aggregate {
         function: ast::SoqlAggregateFunction,
         field: Option<CheckedFieldPath>,
@@ -527,7 +549,7 @@ pub enum CheckedSelectItem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckedFieldPath {
     pub root_object_id: usize,
-    pub relationship: Option<CheckedRelationship>,
+    pub relationships: Vec<CheckedRelationship>,
     pub field_id: usize,
     pub field_type: FieldType,
 }
@@ -541,6 +563,11 @@ pub struct CheckedRelationship {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckedCondition {
+    AggregateComparison {
+        alias: String,
+        operator: ast::SoqlComparisonOperator,
+        right: CheckedValue,
+    },
     Comparison {
         left: CheckedFieldPath,
         operator: ast::SoqlComparisonOperator,
@@ -563,12 +590,15 @@ pub enum CheckedCondition {
 pub enum CheckedInValues {
     Values(Vec<CheckedValue>),
     Bind(Box<ast::Expression>),
+    DynamicBind(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckedValue {
     Literal(DataValue),
+    DateLiteral(ast::SoqlDateLiteral),
     Bind(Box<ast::Expression>),
+    DynamicBind(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

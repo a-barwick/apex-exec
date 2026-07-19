@@ -54,3 +54,5 @@ history.
 - [0022 — Gate Phase 2 through a stabilization program](0022-gate-phase-2-through-stabilization.md)
 - [0023 — Stage typed compiler and runtime substrate before M19](0023-stage-typed-compiler-runtime-substrate.md)
 - [0024 — Separate corpus grammar acceptance from executable support](0024-separate-grammar-acceptance-from-execution.md)
+- [0025 — Freeze enterprise compatibility by Salesforce test](0025-freeze-enterprise-compatibility-by-salesforce-test.md)
+- [0026 — Recheck dynamic SOQL into checked plans](0026-recheck-dynamic-soql-into-checked-plans.md)

@@ -36,6 +36,25 @@ pub fn check_with_schema(
     Checker::new(schema.clone()).check_program(program)
 }
 
+pub(crate) fn check_dynamic_soql(
+    query: &crate::ast::SoqlQuery,
+    schema: &SchemaCatalog,
+    expected: Option<&TypeName>,
+    bindings: HashMap<String, TypeName>,
+) -> Result<hir::CheckedSoqlQuery, Diagnostic> {
+    let mut checker = Checker::new(schema.clone());
+    checker.scopes[0] = bindings;
+    checker.dynamic_query = true;
+    checker.soql_type(query, expected)?;
+    match checker.queries.remove(&query.span) {
+        Some(hir::CheckedQuery::Soql(query)) => Ok(*query),
+        _ => Err(Diagnostic::new(
+            "dynamic SOQL did not produce a checked plan",
+            query.span,
+        )),
+    }
+}
+
 #[derive(Clone)]
 struct MethodSignature {
     id: usize,
@@ -178,6 +197,7 @@ struct Checker {
     current_static: bool,
     current_trigger_object: Option<usize>,
     schema: SchemaCatalog,
+    dynamic_query: bool,
 }
 
 impl Checker {
@@ -204,6 +224,7 @@ impl Checker {
             current_static: false,
             current_trigger_object: None,
             schema,
+            dynamic_query: false,
         }
     }
 
@@ -1186,11 +1207,13 @@ impl Checker {
             ));
         }
         let expected_start_return = ReturnType::Value(TypeName::List(Box::new(scope_type.clone())));
-        if start_method.return_type != expected_start_return {
+        if start_method.return_type != expected_start_return
+            && start_method.return_type != ReturnType::Value(TypeName::QueryLocator)
+        {
             return Err(async_contract_error(
                 &self.classes[class_id],
                 format!(
-                    "Batchable `start` must return {} to match the declared Database.Batchable type argument",
+                    "Batchable `start` must return {} or Database.QueryLocator to match the declared Database.Batchable type argument",
                     expected_start_return.apex_name()
                 ),
             ));
@@ -2336,7 +2359,18 @@ impl Checker {
         expression: &Expression,
         expected: &TypeName,
     ) -> Result<ExpressionType, Diagnostic> {
-        if let Expression::Soql(query) = expression {
+        if let Expression::MethodCall {
+            receiver,
+            method,
+            arguments,
+            span,
+            ..
+        } = expression
+            && is_database_receiver(receiver)
+            && method.canonical == "query"
+        {
+            self.database_method_type(method, arguments, *span, Some(expected))
+        } else if let Expression::Soql(query) = expression {
             let ty = self.soql_type(query, Some(expected))?;
             self.expression_types.insert(expression.span(), ty.clone());
             Ok(ty)
@@ -2984,6 +3018,34 @@ impl Checker {
                         crate::ast::NamedType::new(target.api_name().to_owned(), name.span),
                     )));
                 }
+                if let Some((child_object_id, _reference_field_id)) =
+                    self.schema.child_relationship(object_id, &name.spelling)
+                {
+                    if for_write {
+                        return Err(Diagnostic::new(
+                            "child relationship collections are read-only",
+                            name.span,
+                        ));
+                    }
+                    self.members.insert(
+                        span,
+                        MemberTarget::SObjectChildRelationship {
+                            object_id,
+                            child_object_id,
+                            relationship: name.canonical.clone(),
+                        },
+                    );
+                    let child = self
+                        .schema
+                        .object_at(child_object_id)
+                        .expect("child relationship object index is valid");
+                    return Ok(ExpressionType::Value(TypeName::List(Box::new(
+                        TypeName::Custom(crate::ast::NamedType::new(
+                            child.api_name().to_owned(),
+                            name.span,
+                        )),
+                    ))));
+                }
                 return Err(Diagnostic::new(
                     format!(
                         "unknown field `{}` on SObject `{}`",
@@ -3616,7 +3678,7 @@ impl Checker {
             ExpressionType::Value(ty) => ty,
             _ => unreachable!("member access always has a value type"),
         };
-        let place = match self.members.get(&span).copied() {
+        let place = match self.members.get(&span).cloned() {
             Some(MemberTarget::Static(target)) => PlaceTarget::StaticMember(target),
             Some(MemberTarget::Instance(target)) => PlaceTarget::InstanceMember(target),
             Some(MemberTarget::SObjectField {
@@ -3628,6 +3690,7 @@ impl Checker {
             },
             Some(
                 MemberTarget::SObjectRelationship { .. }
+                | MemberTarget::SObjectChildRelationship { .. }
                 | MemberTarget::TriggerContext(_)
                 | MemberTarget::EnumConstant { .. }
                 | MemberTarget::TypeReference { .. },
@@ -3661,6 +3724,14 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        if is_database_receiver(receiver)
+            && matches!(
+                method.canonical.as_str(),
+                "query" | "countquery" | "getquerylocator"
+            )
+        {
+            return self.database_method_type(method, arguments, span, None);
+        }
         if let Some(result) = self.qualified_type_method_call(receiver, method, arguments, span) {
             return result;
         }
@@ -3713,7 +3784,7 @@ impl Checker {
                             self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
                             result
                         }),
-                    "database" => self.database_method_type(method, arguments, span),
+                    "database" => self.database_method_type(method, arguments, span, None),
                     "string" | "math" | "system" => {
                         let checked = match identifier.canonical.as_str() {
                             "string" => self.static_string_method_type(method, arguments),
@@ -3785,7 +3856,7 @@ impl Checker {
             return Some(Err(error));
         }
         let MemberTarget::TypeReference { class_id } =
-            self.members.get(&receiver.span()).copied()?
+            self.members.get(&receiver.span()).cloned()?
         else {
             return None;
         };
@@ -3922,6 +3993,7 @@ impl Checker {
             | TypeName::HttpResponse
             | TypeName::QueueableContext
             | TypeName::BatchableContext
+            | TypeName::QueryLocator
             | TypeName::SchedulableContext
             | TypeName::SObjectType
             | TypeName::DescribeSObjectResult => {
@@ -4443,7 +4515,8 @@ impl Checker {
             | CallTarget::CustomExceptionConstructor { .. }
             | CallTarget::SObjectConstructor { .. }
             | CallTarget::PlatformConstructor(_)
-            | CallTarget::DatabaseDml(_) => false,
+            | CallTarget::DatabaseDml(_)
+            | CallTarget::DatabaseQuery { .. } => false,
             CallTarget::EnumMethod { method, .. } => {
                 matches!(method, hir::EnumMethod::Name | hir::EnumMethod::Ordinal)
             }
@@ -4868,6 +4941,13 @@ fn qualified_expression_name(expression: &Expression) -> Option<String> {
     }
 }
 
+fn is_database_receiver(expression: &Expression) -> bool {
+    matches!(
+        qualified_expression_name(expression).as_deref(),
+        Some("database" | "system.database")
+    )
+}
+
 fn outermost_type(qualified: &str) -> &str {
     qualified.split('.').next().unwrap_or(qualified)
 }
@@ -5135,6 +5215,8 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
         FieldType::Boolean => TypeName::Boolean,
         FieldType::Integer => TypeName::Integer,
         FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+        FieldType::Date => TypeName::Date,
+        FieldType::Datetime => TypeName::Datetime,
     }
 }
 
