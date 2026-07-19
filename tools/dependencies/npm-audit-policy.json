@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "audit_command": [
+    "npm",
+    "audit",
+    "--json"
+  ],
+  "allowances": [
+    {
+      "advisory_id": "GHSA-qx2v-qp2m-jg93",
+      "severity": "moderate",
+      "packages": [
+        "@unpic/react",
+        "next",
+        "postcss",
+        "vinext"
+      ],
+      "expires": "2026-08-18",
+      "rationale": "Next 16.2.10 embeds PostCSS below 8.5.10. npm offers only a forced downgrade to Next 9.3.3, which is a breaking and incompatible remediation for this existing vinext site. The site does not accept user-authored CSS, reducing exposure, but the advisory remains real and time-boxed rather than silently suppressed.",
+      "review_triggers": [
+        "Any change to website/package.json or website/package-lock.json",
+        "Any new Next, vinext, or PostCSS release",
+        "The expiry date, even if dependencies are otherwise unchanged"
+      ]
+    }
+  ]
+}

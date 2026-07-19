@@ -8,7 +8,8 @@ and transaction timelines.
 For local development:
 
 ```bash
-npm install
+npm ci
+npm test
 code .
 ```
 
@@ -19,3 +20,10 @@ package the directory with `npx @vscode/vsce package`. Set
 Project debugging requires a launch configuration with the SFDX project
 directory in `program` and a public static zero-argument `Class.method` in
 `target`. Script debugging uses the active `.apex` file as `program`.
+
+The committed lockfile and CI `npm ci` step make dependency installation
+reproducible. The current `npm test` command is deliberately a scoped syntax
+smoke test for this thin client. Behavioral activation, request, Unicode
+position, URI, and malformed-protocol tests remain owned by S2-03 after the
+structured diagnostic prerequisite; the smoke test is not presented as that
+future coverage.
