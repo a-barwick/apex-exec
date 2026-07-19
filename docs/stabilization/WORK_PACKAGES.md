@@ -260,6 +260,10 @@ Scope:
 - Replace raw cross-layer declaration/type identities in approved slices.
 - Build transactional lookahead from the same grammar rather than duplicating
   `type_end_at`.
+- Normalize hierarchy-edge identities and reject duplicate interface
+  declarations case-insensitively.
+- Validate inherited interface method contracts, including return types,
+  before deduplicating requirements.
 - Migrate in coherent vertical slices with compatibility tests.
 
 Do not combine persistent cache serialization or all HIR lowering into one PR.

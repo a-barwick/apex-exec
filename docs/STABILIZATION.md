@@ -71,7 +71,7 @@ package.
 | S0-05 | CI, complexity ratchet, and release-document gates | Active (`codex/stab-release-gates`; `s0_05_release_gates`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
-| S1-02 | Lossless type syntax and typed identities | Blocked | S1-01 | No other AST/HIR work |
+| S1-02 | Lossless type syntax and typed identities | Blocked (includes F-P1-14 and F-P1-15) | S1-01 | No other AST/HIR work |
 | S1-03 | Runtime image and lowered executable targets | Blocked | S1-02 | No other HIR/runtime-image work |
 | S1-04 | `Place` and centralized numeric operations | Blocked | S1-02 | Disjoint docs/tooling work |
 | S1-05 | Intrinsic and compatibility-profile catalog | Blocked | S1-03 | Disjoint data work |

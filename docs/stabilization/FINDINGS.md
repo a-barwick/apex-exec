@@ -307,6 +307,28 @@ and direct debug execution artifacts satisfy that package's contract. Propagate
 typed truncation through the debugger session and DAP, with an end-to-end
 exhaustion regression, in S2-03.
 
+### F-P1-14 — Conflicting inherited interface contracts are deduplicated
+
+Interface requirements are currently deduplicated by method name and parameter
+types without comparing return types. A class can therefore satisfy only one
+of two inherited methods with identical parameters and incompatible returns
+while semantic checking accepts both contracts.
+
+This is pre-existing behavior exposed by the independent S0-01 review, not a
+regression caused by its iterative interface traversal. Normalize and validate
+inherited contracts in S1-02 before deduplication rather than expanding S0-01.
+
+### F-P1-15 — Duplicate interface declarations are accepted
+
+Hierarchy validation rejects duplicate `Database.Batchable` declarations
+because their retained type arguments would otherwise be ambiguous, but still
+accepts duplicate user and other platform interfaces case-insensitively, such
+as `implements Work, wOrK` or repeated `Queueable`.
+
+Canonical hierarchy-edge identity and duplicate diagnostics belong in the
+lossless type/identity work in S1-02. S0-01 remains scoped to preserving and
+checking generic arguments plus process-safe hierarchy traversal.
+
 ## Scale and compatibility risks to benchmark
 
 - Deterministic Set and Map storage is vector-backed; lookup and structural
