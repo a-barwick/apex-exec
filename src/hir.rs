@@ -3,7 +3,10 @@ use crate::{
     platform::{DataValue, FieldType, SchemaCatalog},
     span::Span,
 };
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 mod intrinsic;
 
@@ -25,6 +28,7 @@ pub struct Program {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     queries: HashMap<Span, CheckedQuery>,
+    null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
     schema: SchemaCatalog,
 }
@@ -37,6 +41,7 @@ impl Program {
             references,
             members,
             queries,
+            null_aware_queries,
             async_contracts,
         } = facts;
         Self {
@@ -46,6 +51,7 @@ impl Program {
             references,
             members,
             queries,
+            null_aware_queries,
             async_contracts,
             schema,
         }
@@ -75,6 +81,10 @@ impl Program {
         self.queries.get(&span)
     }
 
+    pub(crate) fn query_allows_empty_single_result(&self, span: Span) -> bool {
+        self.null_aware_queries.contains(&span)
+    }
+
     pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
         self.async_contracts.get(&class_id)
     }
@@ -90,6 +100,7 @@ pub(crate) struct ProgramFacts {
     pub references: HashMap<Span, ReferenceTarget>,
     pub members: HashMap<Span, MemberTarget>,
     pub queries: HashMap<Span, CheckedQuery>,
+    pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
 }
 

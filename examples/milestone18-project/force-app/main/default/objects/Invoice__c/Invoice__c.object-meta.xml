@@ -1,0 +1,8 @@
+<CustomObject>
+    <label>Invoice</label>
+    <pluralLabel>Invoices</pluralLabel>
+    <nameField>
+        <label>Invoice Number</label>
+        <type>Text</type>
+    </nameField>
+</CustomObject>

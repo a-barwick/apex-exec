@@ -13,7 +13,7 @@ use crate::{
     platform::{FieldType, SchemaCatalog},
     span::Span,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod flow;
 mod intrinsics;
@@ -164,6 +164,7 @@ struct Checker {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     queries: HashMap<Span, hir::CheckedQuery>,
+    null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, hir::AsyncClassContract>,
     classes: Vec<ClassDeclaration>,
     class_ids: HashMap<String, usize>,
@@ -185,6 +186,7 @@ impl Checker {
             references: HashMap::new(),
             members: HashMap::new(),
             queries: HashMap::new(),
+            null_aware_queries: HashSet::new(),
             async_contracts: HashMap::new(),
             classes: Vec::new(),
             class_ids: HashMap::new(),
@@ -217,6 +219,7 @@ impl Checker {
                 references: self.references,
                 members: self.members,
                 queries: self.queries,
+                null_aware_queries: self.null_aware_queries,
                 async_contracts: self.async_contracts,
             },
             self.schema,
@@ -1816,6 +1819,9 @@ impl Checker {
     }
 
     fn expression_type(&mut self, expression: &Expression) -> Result<ExpressionType, Diagnostic> {
+        if let Some(ty) = self.expression_types.get(&expression.span()).cloned() {
+            return Ok(ty);
+        }
         let ty = self.expression_type_inner(expression)?;
         self.expression_types.insert(expression.span(), ty.clone());
         Ok(ty)
@@ -1827,7 +1833,29 @@ impl Checker {
         expected: &TypeName,
     ) -> Result<ExpressionType, Diagnostic> {
         if let Expression::Soql(query) = expression {
-            self.soql_type(query, Some(expected))
+            let ty = self.soql_type(query, Some(expected))?;
+            self.expression_types.insert(expression.span(), ty.clone());
+            Ok(ty)
+        } else if let Expression::NullCoalesce {
+            left,
+            right,
+            operator_span,
+            ..
+        } = expression
+        {
+            let left_type = self.expression_type_for_expected(left, expected)?;
+            let right_type = self.expression_type_for_expected(right, expected)?;
+            if matches!(left.as_ref(), Expression::Soql(_)) {
+                self.null_aware_queries.insert(left.span());
+            }
+            let ty = self.join_expression_types(
+                &left_type,
+                &right_type,
+                *operator_span,
+                "null-coalescing operands",
+            )?;
+            self.expression_types.insert(expression.span(), ty.clone());
+            Ok(ty)
         } else {
             self.expression_type(expression)
         }
@@ -1873,17 +1901,9 @@ impl Checker {
                 arguments,
                 span,
             } => self.function_call_type(name, arguments, *span),
-            Expression::MethodCall {
-                receiver,
-                method,
-                arguments,
-                span,
-            } => self.method_call_type(receiver, method, arguments, *span),
-            Expression::MemberAccess {
-                receiver,
-                member,
-                span,
-            } => self.member_access_type(receiver, member, *span, false),
+            Expression::MethodCall { .. } | Expression::MemberAccess { .. } => {
+                self.navigation_expression_type(expression)
+            }
             Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
             Expression::Conditional {
                 condition,
@@ -1892,6 +1912,7 @@ impl Checker {
                 question_span,
                 ..
             } => self.conditional_type(condition, when_true, when_false, *question_span),
+            Expression::NullCoalesce { .. } => self.null_coalescing_expression_type(expression),
             Expression::Instanceof {
                 value,
                 target,
@@ -1919,6 +1940,64 @@ impl Checker {
                 ..
             } => self.binary_type(left, *operator, right, *operator_span),
         }
+    }
+
+    fn navigation_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        match expression {
+            Expression::MethodCall {
+                receiver,
+                method,
+                arguments,
+                safe_navigation,
+                navigation_span,
+                span,
+            } => {
+                if *safe_navigation {
+                    self.prepare_null_aware_receiver(receiver)?;
+                }
+                let ty = self.method_call_type(receiver, method, arguments, *span)?;
+                if *safe_navigation {
+                    self.validate_safe_method_target(*span, *navigation_span)?;
+                }
+                Ok(ty)
+            }
+            Expression::MemberAccess {
+                receiver,
+                member,
+                safe_navigation,
+                navigation_span,
+                span,
+            } => {
+                if *safe_navigation {
+                    self.prepare_null_aware_receiver(receiver)?;
+                }
+                let ty = self.member_access_type(receiver, member, *span, false)?;
+                if *safe_navigation {
+                    self.validate_safe_member_target(*span, *navigation_span)?;
+                }
+                Ok(ty)
+            }
+            _ => unreachable!("navigation helper requires a member or method expression"),
+        }
+    }
+
+    fn null_coalescing_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Expression::NullCoalesce {
+            left,
+            right,
+            operator_span,
+            ..
+        } = expression
+        else {
+            unreachable!("null-coalescing helper requires a null-coalescing expression");
+        };
+        self.null_coalescing_type(left, right, *operator_span)
     }
 
     fn new_collection_expression_type(
@@ -2422,6 +2501,20 @@ impl Checker {
             ));
         };
         Ok(self.class_ids[&name.canonical])
+    }
+
+    fn prepare_null_aware_receiver(&mut self, receiver: &Expression) -> Result<(), Diagnostic> {
+        let Expression::Soql(query) = receiver else {
+            return Ok(());
+        };
+        let expected = TypeName::Custom(crate::ast::NamedType::new(
+            query.from.spelling.clone(),
+            query.from.span,
+        ));
+        let ty = self.soql_type(query, Some(&expected))?;
+        self.expression_types.insert(receiver.span(), ty.clone());
+        self.null_aware_queries.insert(receiver.span());
+        Ok(())
     }
 
     fn class_type(&self, class_id: usize) -> TypeName {
@@ -3259,14 +3352,45 @@ impl Checker {
         self.require_operand(condition, &TypeName::Boolean, condition.span())?;
         let true_type = self.expression_type(when_true)?;
         let false_type = self.expression_type(when_false)?;
-        match (&true_type, &false_type) {
+        self.join_expression_types(
+            &true_type,
+            &false_type,
+            question_span,
+            "conditional branches",
+        )
+    }
+
+    fn null_coalescing_type(
+        &mut self,
+        left: &Expression,
+        right: &Expression,
+        operator_span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let left_type = self.expression_type(left)?;
+        let right_type = self.expression_type(right)?;
+        self.join_expression_types(
+            &left_type,
+            &right_type,
+            operator_span,
+            "null-coalescing operands",
+        )
+    }
+
+    fn join_expression_types(
+        &self,
+        left_type: &ExpressionType,
+        right_type: &ExpressionType,
+        operator_span: Span,
+        subject: &str,
+    ) -> Result<ExpressionType, Diagnostic> {
+        match (left_type, right_type) {
             (ExpressionType::Void, _) | (_, ExpressionType::Void) => Err(Diagnostic::new(
                 format!(
-                    "conditional branches must produce values, found {} and {}",
-                    true_type.name(),
-                    false_type.name()
+                    "{subject} must produce values, found {} and {}",
+                    left_type.name(),
+                    right_type.name()
                 ),
-                question_span,
+                operator_span,
             )),
             (ExpressionType::Null, ExpressionType::Null) => Ok(ExpressionType::Null),
             (ExpressionType::Null, ExpressionType::Value(ty))
@@ -3289,6 +3413,63 @@ impl Checker {
             (ExpressionType::Value(_), ExpressionType::Value(_)) => {
                 Ok(ExpressionType::Value(TypeName::Object))
             }
+        }
+    }
+
+    fn validate_safe_method_target(
+        &self,
+        call_span: Span,
+        navigation_span: Span,
+    ) -> Result<(), Diagnostic> {
+        let target = self
+            .calls
+            .get(&call_span)
+            .copied()
+            .expect("checked method call has a target");
+        let valid = match target {
+            CallTarget::InstanceMethod(_)
+            | CallTarget::SObjectGet
+            | CallTarget::SObjectPut
+            | CallTarget::AggregateResultGet => true,
+            CallTarget::Intrinsic(intrinsic) => !intrinsic.is_static(),
+            CallTarget::TopLevelMethod(_)
+            | CallTarget::StaticMethod(_)
+            | CallTarget::SuperMethod(_)
+            | CallTarget::Constructor { .. }
+            | CallTarget::SObjectConstructor { .. }
+            | CallTarget::PlatformConstructor(_)
+            | CallTarget::DatabaseDml(_) => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                "safe navigation requires an instance receiver",
+                navigation_span,
+            ))
+        }
+    }
+
+    fn validate_safe_member_target(
+        &self,
+        member_span: Span,
+        navigation_span: Span,
+    ) -> Result<(), Diagnostic> {
+        let valid = matches!(
+            self.members.get(&member_span),
+            Some(
+                MemberTarget::Instance(_)
+                    | MemberTarget::SObjectField { .. }
+                    | MemberTarget::SObjectRelationship { .. }
+            )
+        );
+        if valid {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                "safe navigation requires an instance receiver",
+                navigation_span,
+            ))
         }
     }
 
@@ -3420,12 +3601,22 @@ impl Checker {
             Expression::MemberAccess {
                 receiver,
                 member,
+                safe_navigation: false,
                 span,
+                ..
             } => self.assignment_target_type(&AssignmentTarget::Member {
                 receiver: receiver.clone(),
                 member: member.clone(),
                 span: *span,
             })?,
+            Expression::MemberAccess {
+                navigation_span, ..
+            } => {
+                return Err(Diagnostic::new(
+                    "safe-navigation access cannot be mutated",
+                    *navigation_span,
+                ));
+            }
             _ => {
                 return Err(Diagnostic::new(
                     "increment/decrement operand must be a variable",

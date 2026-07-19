@@ -1,12 +1,13 @@
 use crate::{
     ast::{
         AccessorKind, AssignmentTarget, BinaryOperator, CatchClause, ClassMember,
-        CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator, ReturnType,
-        Statement, TypeName, UnaryOperator,
+        CollectionInitializer, DmlOperation, Expression, Identifier, Modifier, PostfixOperator,
+        ReturnType, Statement, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
-        CallTarget, ClassMemberId, MemberTarget, Program, ReferenceTarget, TriggerContextVariable,
+        CallTarget, ClassMemberId, ExpressionType, MemberTarget, Program, ReferenceTarget,
+        TriggerContextVariable,
     },
     platform::FieldType,
     span::Span,
@@ -1226,6 +1227,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     self.evaluate(when_false)
                 }
             }
+            Expression::NullCoalesce { left, right, .. } => {
+                let value = self.evaluate(left)?;
+                let present = !matches!(value, Value::Null(_));
+                self.record_branch(left.span(), present);
+                if present {
+                    Ok(value)
+                } else {
+                    self.evaluate(right)
+                }
+            }
             Expression::Instanceof { value, target, .. } => {
                 let value = self.evaluate(value)?;
                 Ok(Value::Boolean(
@@ -1241,85 +1252,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 receiver,
                 method,
                 arguments,
+                safe_navigation,
                 span,
-            } => {
-                let target = self.program().call_target(*span);
-                match target {
-                    Some(CallTarget::Intrinsic(intrinsic)) => {
-                        self.evaluate_intrinsic_call(intrinsic, receiver, method, arguments, *span)
-                    }
-                    Some(CallTarget::StaticMethod(target)) => {
-                        self.evaluate_class_method(target, None, arguments, *span, false)
-                    }
-                    Some(CallTarget::InstanceMethod(target)) => {
-                        let receiver = match self.evaluate(receiver)? {
-                            Value::Object(receiver) => receiver,
-                            Value::Null(_) => {
-                                return Err(runtime_exception(
-                                    "NullPointerException",
-                                    "class method receiver is null",
-                                    receiver.span(),
-                                ));
-                            }
-                            _ => return Err(invalid_runtime_operands(receiver.span())),
-                        };
-                        self.evaluate_class_method(target, Some(receiver), arguments, *span, true)
-                    }
-                    Some(CallTarget::SuperMethod(target)) => {
-                        let receiver = self.current_receiver.ok_or_else(|| {
-                            Diagnostic::new("super call has no current receiver", *span)
-                        })?;
-                        self.evaluate_class_method(target, Some(receiver), arguments, *span, false)
-                    }
-                    Some(CallTarget::SObjectGet) => {
-                        self.evaluate_sobject_get(receiver, arguments, *span)
-                    }
-                    Some(CallTarget::SObjectPut) => {
-                        self.evaluate_sobject_put(receiver, arguments, *span)
-                    }
-                    Some(CallTarget::DatabaseDml(operation)) => {
-                        let Some(value) = arguments.first() else {
-                            return Err(Diagnostic::new(
-                                "invalid checked Database DML call",
-                                *span,
-                            ));
-                        };
-                        let value = self.evaluate(value)?;
-                        if let Some(all_or_none) = arguments.get(1) {
-                            if self.evaluate(all_or_none)? == Value::Boolean(false) {
-                                return Err(runtime_exception(
-                                    "DmlException",
-                                    "Database allOrNone=false partial results are not supported",
-                                    *span,
-                                ));
-                            }
-                        }
-                        self.execute_dml_value(operation, value, *span)?;
-                        Ok(Value::Void)
-                    }
-                    Some(CallTarget::AggregateResultGet) => {
-                        self.evaluate_aggregate_result_get(receiver, arguments, *span)
-                    }
-                    Some(
-                        CallTarget::TopLevelMethod(_)
-                        | CallTarget::Constructor { .. }
-                        | CallTarget::SObjectConstructor { .. }
-                        | CallTarget::PlatformConstructor(_),
-                    ) => Err(Diagnostic::new(
-                        "invalid checked target for member call",
-                        *span,
-                    )),
-                    None => Err(Diagnostic::new(
-                        "unresolved method call escaped semantic validation",
-                        method.span,
-                    )),
-                }
-            }
+                ..
+            } => self.evaluate_method_call(receiver, method, arguments, *safe_navigation, *span),
             Expression::MemberAccess {
                 receiver,
                 member: _,
+                safe_navigation,
                 span,
-            } => self.evaluate_member_access(receiver, *span),
+                ..
+            } => self.evaluate_member_access(receiver, *safe_navigation, *span),
             Expression::Unary {
                 operator,
                 operand,
@@ -1370,18 +1313,165 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn evaluate_method_call(
+        &mut self,
+        receiver: &Expression,
+        method: &Identifier,
+        arguments: &[Expression],
+        safe_navigation: bool,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let evaluated_receiver = if safe_navigation {
+            let receiver_value = self.evaluate(receiver)?;
+            let present = !matches!(receiver_value, Value::Null(_));
+            self.record_branch(receiver.span(), present);
+            if !present {
+                return Ok(self.null_short_circuit_value(span));
+            }
+            Some(receiver_value)
+        } else {
+            None
+        };
+
+        let target = self.program().call_target(span);
+        match target {
+            Some(CallTarget::Intrinsic(intrinsic)) => self.evaluate_intrinsic_call(
+                intrinsic,
+                receiver,
+                evaluated_receiver,
+                method,
+                arguments,
+                span,
+            ),
+            Some(CallTarget::StaticMethod(target)) => {
+                self.evaluate_class_method(target, None, arguments, span, false)
+            }
+            Some(CallTarget::InstanceMethod(target)) => self.evaluate_object_method_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            Some(CallTarget::SuperMethod(target)) => {
+                let receiver = self
+                    .current_receiver
+                    .ok_or_else(|| Diagnostic::new("super call has no current receiver", span))?;
+                self.evaluate_class_method(target, Some(receiver), arguments, span, false)
+            }
+            Some(CallTarget::SObjectGet) => {
+                self.evaluate_sobject_get(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(CallTarget::SObjectPut) => {
+                self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(CallTarget::DatabaseDml(operation)) => {
+                self.evaluate_database_dml_call(operation, arguments, span)
+            }
+            Some(CallTarget::AggregateResultGet) => {
+                self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(
+                CallTarget::TopLevelMethod(_)
+                | CallTarget::Constructor { .. }
+                | CallTarget::SObjectConstructor { .. }
+                | CallTarget::PlatformConstructor(_),
+            ) => Err(Diagnostic::new(
+                "invalid checked target for member call",
+                span,
+            )),
+            None => Err(Diagnostic::new(
+                "unresolved method call escaped semantic validation",
+                method.span,
+            )),
+        }
+    }
+
+    fn evaluate_object_method_call(
+        &mut self,
+        target: ClassMemberId,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver_value = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        let receiver = match receiver_value {
+            Value::Object(receiver) => receiver,
+            Value::Null(_) => {
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "class method receiver is null",
+                    receiver.span(),
+                ));
+            }
+            _ => return Err(invalid_runtime_operands(receiver.span())),
+        };
+        self.evaluate_class_method(target, Some(receiver), arguments, span, true)
+    }
+
+    fn evaluate_database_dml_call(
+        &mut self,
+        operation: DmlOperation,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let Some(value) = arguments.first() else {
+            return Err(Diagnostic::new("invalid checked Database DML call", span));
+        };
+        let value = self.evaluate(value)?;
+        if let Some(all_or_none) = arguments.get(1)
+            && self.evaluate(all_or_none)? == Value::Boolean(false)
+        {
+            return Err(runtime_exception(
+                "DmlException",
+                "Database allOrNone=false partial results are not supported",
+                span,
+            ));
+        }
+        self.execute_dml_value(operation, value, span)?;
+        Ok(Value::Void)
+    }
+
+    fn null_short_circuit_value(&self, span: Span) -> Value {
+        match self.program().expression_type(span) {
+            Some(ExpressionType::Value(ty)) => Value::Null(Some(ty.clone())),
+            Some(ExpressionType::Void) => Value::Void,
+            Some(ExpressionType::Null) | None => Value::Null(None),
+        }
+    }
+
     fn evaluate_member_access(
         &mut self,
         receiver: &Expression,
+        safe_navigation: bool,
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let target = self.program().member_target(span).ok_or_else(|| {
             Diagnostic::new("unresolved member escaped semantic validation", span)
         })?;
+        let evaluated_receiver = if safe_navigation {
+            let receiver_value = self.evaluate(receiver)?;
+            let present = !matches!(receiver_value, Value::Null(_));
+            self.record_branch(receiver.span(), present);
+            if !present {
+                return Ok(self.null_short_circuit_value(span));
+            }
+            Some(receiver_value)
+        } else {
+            None
+        };
         match target {
             MemberTarget::Static(target) => self.read_class_member(target, None, span),
             MemberTarget::Instance(target) => {
-                let receiver = match self.evaluate(receiver)? {
+                let receiver_value = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(receiver)?,
+                };
+                let receiver = match receiver_value {
                     Value::Object(receiver) => receiver,
                     Value::Null(_) => {
                         return Err(runtime_exception(
@@ -1398,7 +1488,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => {
-                let receiver = self.evaluate_sobject_receiver(receiver)?;
+                let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
                 self.read_sobject_field(receiver, object_id, field_id, span)
             }
             MemberTarget::SObjectRelationship {
@@ -1406,7 +1496,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 reference_field_id,
                 target_object_id,
             } => {
-                let receiver = self.evaluate_sobject_receiver(receiver)?;
+                let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
                 let instance = self.store.sobject(receiver);
                 if instance.object_id != object_id {
                     return Err(Diagnostic::new(
@@ -1476,13 +1566,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn evaluate_sobject_get(
         &mut self,
         receiver: &Expression,
+        evaluated_receiver: Option<Value>,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let [field_name] = arguments else {
             return Err(Diagnostic::new("invalid checked SObject.get call", span));
         };
-        let receiver = self.evaluate_sobject_receiver(receiver)?;
+        let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
         let field_name = match self.evaluate(field_name)? {
             Value::String(value) => value,
             Value::Null(_) => {
@@ -1517,13 +1608,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn evaluate_sobject_put(
         &mut self,
         receiver: &Expression,
+        evaluated_receiver: Option<Value>,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let [field_name, value] = arguments else {
             return Err(Diagnostic::new("invalid checked SObject.put call", span));
         };
-        let receiver = self.evaluate_sobject_receiver(receiver)?;
+        let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
         let field_name_value = self.evaluate(field_name)?;
         let value = self.evaluate(value)?;
         let Value::String(field_name) = field_name_value else {
@@ -1557,8 +1649,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn evaluate_sobject_receiver(
         &mut self,
         receiver: &Expression,
+        evaluated_receiver: Option<Value>,
     ) -> Result<SObjectId, Diagnostic> {
-        match self.evaluate(receiver)? {
+        let receiver_value = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        match receiver_value {
             Value::SObject(receiver) => Ok(receiver),
             Value::Null(_) => Err(runtime_exception(
                 "NullPointerException",
@@ -2418,7 +2515,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         object_id,
                         field_id,
                     } => {
-                        let receiver = self.evaluate_sobject_receiver(receiver)?;
+                        let receiver = self.evaluate_sobject_receiver(receiver, None)?;
                         self.write_sobject_field(receiver, object_id, field_id, value, *span)
                     }
                     MemberTarget::SObjectRelationship { .. } => Err(Diagnostic::new(
@@ -3029,7 +3126,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         object_id,
                         field_id,
                     } => {
-                        let receiver = self.evaluate_sobject_receiver(receiver)?;
+                        let receiver = self.evaluate_sobject_receiver(receiver, None)?;
                         let old = match self.read_sobject_field(
                             receiver,
                             object_id,

@@ -318,11 +318,15 @@ pub enum Expression {
         receiver: Box<Expression>,
         method: Identifier,
         arguments: Vec<Expression>,
+        safe_navigation: bool,
+        navigation_span: Span,
         span: Span,
     },
     MemberAccess {
         receiver: Box<Expression>,
         member: Identifier,
+        safe_navigation: bool,
+        navigation_span: Span,
         span: Span,
     },
     Cast {
@@ -335,6 +339,12 @@ pub enum Expression {
         when_true: Box<Expression>,
         when_false: Box<Expression>,
         question_span: Span,
+        span: Span,
+    },
+    NullCoalesce {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        operator_span: Span,
         span: Span,
     },
     Instanceof {
@@ -383,6 +393,7 @@ impl Expression {
             | Self::MemberAccess { span, .. }
             | Self::Cast { span, .. }
             | Self::Conditional { span, .. }
+            | Self::NullCoalesce { span, .. }
             | Self::Instanceof { span, .. }
             | Self::Unary { span, .. }
             | Self::Postfix { span, .. }

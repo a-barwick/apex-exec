@@ -32,7 +32,22 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .host
             .soql(&schema, &request)
             .map_err(|error| runtime_exception("QueryException", error.to_string(), span))?;
-        self.query_outcome_value(outcome, query.result, span)
+        if query.result == QueryResultKind::RecordSingle
+            && self.program().query_allows_empty_single_result(span)
+        {
+            let object = self
+                .program()
+                .schema()
+                .object_at(query.object_id)
+                .expect("checked query object is valid");
+            let ty = TypeName::Custom(crate::ast::NamedType::new(
+                object.api_name().to_owned(),
+                span,
+            ));
+            self.null_aware_query_outcome_value(outcome, query.result, ty, span)
+        } else {
+            self.query_outcome_value(outcome, query.result, span)
+        }
     }
 
     pub(super) fn evaluate_sosl(&mut self, span: Span) -> Result<Value, Diagnostic> {
@@ -438,10 +453,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     pub(super) fn evaluate_aggregate_result_get(
         &mut self,
         receiver: &Expression,
+        evaluated_receiver: Option<Value>,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let Value::AggregateResult(id) = self.evaluate(receiver)? else {
+        let receiver = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        let Value::AggregateResult(id) = receiver else {
             return Err(runtime_exception(
                 "NullPointerException",
                 "AggregateResult receiver is null",
@@ -844,6 +864,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
+        }
+    }
+
+    fn null_aware_query_outcome_value(
+        &mut self,
+        outcome: QueryOutcome,
+        result: QueryResultKind,
+        empty_single_type: TypeName,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if matches!(&outcome, QueryOutcome::Records(records) if records.is_empty()) {
+            Ok(Value::Null(Some(empty_single_type)))
+        } else {
+            self.query_outcome_value(outcome, result, span)
         }
     }
 

@@ -9,10 +9,10 @@ on prior conversation context.
 
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
-- **Active gate:** S0 — process safety and correctness
-- **Next feature milestone:** M18 — null-aware expressions
-- **Feature policy:** M18 implementation is gated until the S0 exit criteria
-  pass. M19 and M20 have additional architecture prerequisites below.
+- **Completed gate:** S0 — process safety and correctness
+- **Next feature milestone:** M19 — bitwise, shift, `Long`, and compound operators
+- **Feature policy:** M18 is complete after the S0 exit criteria passed. M19
+  and M20 retain the additional architecture prerequisites below.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.

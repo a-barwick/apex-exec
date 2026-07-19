@@ -440,7 +440,7 @@ pub fn walk_expression<'ast, V: Visitor<'ast> + ?Sized>(
         Expression::Unary { operand, .. } | Expression::Postfix { operand, .. } => {
             visitor.visit_expression(operand);
         }
-        Expression::Binary { left, right, .. } => {
+        Expression::Binary { left, right, .. } | Expression::NullCoalesce { left, right, .. } => {
             visitor.visit_expression(left);
             visitor.visit_expression(right);
         }
