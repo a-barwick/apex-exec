@@ -66,8 +66,8 @@ package.
 | S0-00 | Durable control plane and handoff documentation | Complete (`b4519ff`) | None | Documentation only |
 | S0-01 | Frontend process safety and correctness | Complete (`c7d4ac7`, `2a8635d`; review approved; merged as `1b16312`, `ae3bf27`) | S0-00 merged | S0-02, S0-05 |
 | S0-02 | Opt-in runtime instrumentation | Complete (`811294f`; review approved; merged as `41319d6`) | S0-00 merged | S0-01, S0-05 |
-| S0-03 | Cycle-safe runtime value traversal | Review (`8f3ce51`; `codex/stab-runtime-graph-safety`; corrected handoff `b8b190e`) | S0-02 merged | S0-01, S0-05 |
-| S0-04 | Execution context and lazy class initialization | Blocked | S0-02, S0-03 | S0-01, S0-05 |
+| S0-03 | Cycle-safe runtime value traversal | Complete (`8f3ce51`; review approved at `b8b190e`; merged as `c7f78e1`) | S0-02 merged | S0-01, S0-05 |
+| S0-04 | Execution context and lazy class initialization | Ready | S0-02 and S0-03 merged | S0-01, S0-05 |
 | S0-05 | CI, complexity ratchet, and release-document gates | Complete (`3471e45`; review approved; merged as `da1945f`) | S0-00 merged | S0-01, S0-02 |
 | S0-GATE | Integrated S0 verification and owner review | Blocked | S0-01–S0-05 | Nothing |
 | S1-01 | Compiler/runtime substrate ADRs | Blocked | S0-GATE | M18 implementation |
@@ -131,7 +131,7 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   post-integration complexity failures before `2a8635d` and approved the
   focused parser, collection-type, and Batchable validation extractions.
 - Integrated Rust verification passed: `cargo fmt --check`; `cargo test
-  --locked` (321 passed, 14 ignored North Star indicators); explicit North
+  --locked` (331 passed, 14 ignored North Star indicators); explicit North
   Star reporting; `cargo clippy --locked --all-targets -- -D warnings`; and
   all 13 focused S0-01 regressions.
 - Integrated release gates passed: website build/test/lint; editor smoke test
@@ -157,6 +157,35 @@ The first parallel wave was limited to S0-01, S0-02, and S0-05.
   `execute_statement` CCN from 17 to 16, held the runtime warning count at
   five, and reported no threshold warnings in the extracted bounded
   instrumentation module.
+
+### S0-03 — Cycle-safe runtime value traversal
+
+- Initial implementation `1cda4e0`, semantic-rendering remediation `f241728`,
+  trace-status correction `8f3ce51`, corrected Review handoff `b8b190e`, and
+  integration merge `c7f78e1`.
+- The first fresh runtime review requested changes after reproducing semantic
+  String truncation. Preflight then found missing debugger trace-status
+  propagation and a temporary `call_system` ratchet regression. Both blockers
+  were reproduced before correction. A second fresh read-only review approved
+  `b8b190e`; fail-before lengths at `657a118` were
+  `16382/16382/16382/16382/16421`, while the corrected branch produced
+  `20480/20480/20480/20480/20519`.
+- Integrated Rust verification passed: `cargo fmt --check`; `cargo test
+  --locked` (342 passed, 14 ignored North Star indicators); explicit North
+  Star reporting; `cargo clippy --locked --all-targets -- -D warnings`; eight
+  focused graph-safety regressions; and the exact eight-line cyclic CLI
+  reproduction. The combined immutable Lizard ratchet passed with 66 current
+  violations against 73 debt caps.
+- Integrated release gates passed: website build/test/lint; editor smoke test
+  and zero-vulnerability audit; 19 tooling tests; 54 Markdown files and 97
+  local links; committed-whitespace range `8873aaa..c7f78e1`; Actionlint
+  1.7.12; RustSec and Cargo Deny; and the npm policy with only the documented
+  time-boxed PostCSS allowance. An independent immutable merge audit approved
+  both parents, the exact 12-path delta, conflict resolution, and preserved
+  owner-policy state.
+- Residual non-blocking risks remain scheduled: vector-backed Set/Map equality
+  and retained graph pairs can grow quadratically, and F-P1-13 still owns
+  downstream debugger/DAP visibility for exhausted traces.
 
 ### S0-05 — CI, complexity ratchet, and release-document gates
 

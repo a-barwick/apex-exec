@@ -11,12 +11,11 @@ The pre-open-source audit and execution strategy are now captured in
 remains the next feature milestone, but feature implementation is gated until
 the bounded S0 process-safety and correctness criteria pass.
 
-S0-01 frontend safety, S0-02 runtime instrumentation, and S0-05 release gates
-are integrated and complete. S0-03 runtime graph safety has independent
-approval and is in integrated verification after correcting its initial
-review blockers; S0-04 execution context/lazy class initialization remains
-blocked until that verification completes. Package status, dependencies,
-acceptance criteria, branch rules, and the coordinator prompt live under
+S0-01 frontend safety, S0-02 runtime instrumentation, S0-03 runtime graph
+safety, and S0-05 release gates are integrated and complete. S0-04 execution
+context/lazy class initialization is Ready now that both runtime dependencies
+are integrated and verified. Package status, dependencies, acceptance
+criteria, branch rules, and the coordinator prompt live under
 `docs/stabilization/`.
 
 ## Completed
@@ -349,7 +348,7 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 321 ordinary tests pass with no failures (14 separate North Star goal tests
+- 342 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
