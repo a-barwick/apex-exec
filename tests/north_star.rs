@@ -152,7 +152,6 @@ macro_rules! north_star_goals {
         }
 
         #[test]
-        #[ignore = "North Star parser milestone indicator; run explicitly"]
         fn $parse_test() {
             require_parse($name);
         }

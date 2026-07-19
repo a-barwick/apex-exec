@@ -14,27 +14,29 @@ pinned. To see the current highest compiler stage for each source:
 cargo test --test north_star reports_current_north_star_progress -- --nocapture
 ```
 
-Lexer and parser goals are ignored so incomplete future-milestone support does
-not make `cargo test` red. Run all goal tests to get a milestone pass/fail count:
+All lexer and parser goals are ordinary tests after M21. Run the complete
+indicator suite with:
 
 ```bash
-cargo test --test north_star -- --ignored
+cargo test --test north_star
 ```
 
 Run one source or one compiler phase by filtering the test name, for example:
 
 ```bash
-cargo test --test north_star lexes_puff -- --ignored
-cargo test --test north_star parses_rollup_service -- --ignored
+cargo test --test north_star lexes_puff
+cargo test --test north_star parses_rollup_service
 ```
 
 When a goal becomes part of the supported compatibility surface, promote it
 out of `#[ignore]` rather than weakening or replacing the source.
 
-Phase 2 targets all seven lexer goals as ordinary tests in M19 and all 14
-lexer/parser goals as ordinary tests in M21. Those gates measure acceptance of
-this pinned syntax corpus only; semantic/runtime compatibility remains covered
-by focused conformance and enterprise-project tests.
+M19 promoted all seven lexer goals, and M21 promoted all seven parser goals.
+Those 14 gates measure acceptance of this pinned syntax corpus only;
+semantic/runtime compatibility remains covered by focused conformance and
+enterprise-project tests. The executable comment-aware M21 census and
+construct dispositions are documented in
+[`docs/NORTH_STAR_GRAMMAR_CENSUS.md`](../../docs/NORTH_STAR_GRAMMAR_CENSUS.md).
 
 ## Selection method
 

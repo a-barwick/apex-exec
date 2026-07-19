@@ -71,7 +71,7 @@ fn statement_completions(statement: &Statement) -> Completions {
             continues: true,
             ..Completions::default()
         },
-        Statement::Block { statements, .. } => statements
+        Statement::Block { statements, .. } | Statement::Sequence { statements, .. } => statements
             .iter()
             .fold(Completions::normal(), |current, statement| {
                 current.then(statement_completions(statement))
@@ -145,8 +145,6 @@ fn statement_completions(statement: &Statement) -> Completions {
             }
             result
         }
-        Statement::VariableDeclaration { .. }
-        | Statement::Expression { .. }
-        | Statement::Dml { .. } => Completions::normal(),
+        _ => Completions::normal(),
     }
 }

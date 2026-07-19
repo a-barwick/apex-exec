@@ -237,6 +237,7 @@ fn record_runtime_member(
                 steps.push(ClassInitializationStep::Field(target));
             }
         }
+        ast::ClassMember::FieldGroup(_) => {}
         ast::ClassMember::Property(property) => {
             if property.modifiers.contains(&ast::Modifier::Static) {
                 metadata.static_slots.push(target);

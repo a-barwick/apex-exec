@@ -9,8 +9,8 @@ S0 — Phase 2 stabilization — Complete
 The pre-open-source audit and execution strategy are now captured in
 [`docs/STABILIZATION.md`](STABILIZATION.md). The bounded S0 process-safety and
 correctness criteria have passed. M18 — null-aware expressions, M19 — bitwise,
-shift, `Long`, and compound operators, and M20 — nested declarations, enums,
-and type literals are complete.
+shift, `Long`, and compound operators, M20 — nested declarations, enums, and
+type literals, and M21 — North Star grammar closure are complete.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -381,33 +381,37 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   exception subclasses, `this(...)`/`super(...)` constructor delegation,
   class literals, `Iterable<T>`, and source-ordered static/instance initializer
   blocks.
-- 390 ordinary tests pass with no failures (seven future North Star parser
-  goals remain intentionally ignored); LLVM source-line coverage is **85.22%**
-  overall and **84.81%** across the M20-changed production modules. The
-  checked-in M20 Apex project passes 2/2 Apex tests and reports 12/12
-  production lines covered.
+- M21 adds a checked-in AST-derived grammar census, lossless arbitrary
+  annotations/arguments, switch arms, external-ID DML fields,
+  multi-declarator fields, and `transient` syntax with explicit semantic
+  dispositions. Uninitialized and multi-declarator locals plus
+  comma-separated traditional-for clauses check and execute with typed-null,
+  left-to-right behavior.
+- M20 verification passed 390 ordinary tests with no failures (at that
+  checkpoint, seven future North Star parser goals remained intentionally
+  ignored). LLVM source-line coverage measured **85.22%** overall and
+  **84.81%** across the M20-changed production modules. The checked-in M20
+  Apex project passed 2/2 Apex tests and reported 12/12 production lines
+  covered.
 
 ## Immediate target
 
-M21 North Star grammar closure is the next planned feature milestone. The
+M22 representative enterprise baseline is the next planned feature milestone. The
 package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
-M20 reproduces 8 of 14 passing indicators (**57.14%**): lexer 7 of 7
-(**100.00%**) and parser 1 of 7 (**14.29%**), a gain of seven indicators from
-the Phase 2 baseline. `JSONParse.cls` now parses completely; all lexer goals run
-in the ordinary suite.
+M21 reproduces 14 of 14 passing indicators (**100.00%**): lexer 7 of 7
+(**100.00%**) and parser 7 of 7 (**100.00%**), a gain of six indicators from
+the M20 baseline and 13 from the Phase 2 baseline. All goals run in the
+ordinary suite against byte-identical fixtures with no `#[ignore]`.
 
-The six remaining parser goals first stop at arbitrary annotations,
-external-ID DML syntax, or uninitialized locals. Later reachable blockers
-include `switch`/`when`, multi-declarator locals, and additional
-modifiers/literals. These are
-syntax-progress indicators, not semantic, execution, or Salesforce
-compatibility percentages. M21 requires all 14 original fixtures to pass
-without `#[ignore]` or corpus changes.
+These remain syntax-progress indicators, not semantic, execution, runtime, or
+Salesforce compatibility percentages. Checked-only dispositions and exact
+comment-aware construct counts are recorded in
+`docs/NORTH_STAR_GRAMMAR_CENSUS.md`.
 
 ## Phase 2 evidence baseline
 
@@ -507,8 +511,9 @@ without `#[ignore]` or corpus changes.
 - The default recording host owns an in-memory SQLite database for one
   interpreter. A persistent project database configuration and fixture CLI
   remain future work.
-- Annotations other than `@IsTest`/`@TestSetup`/`@future` and
-  Salesforce-exact object string formatting are not implemented. Custom
+- Annotations other than `@IsTest`/`@TestSetup`/`@future` are retained
+  losslessly but their platform effects remain explicit semantic unsupported
+  behavior. Salesforce-exact object string formatting is not implemented. Custom
   exception subclasses inherit the zero- and one-String constructors; explicit
   constructors declared on those subclasses remain unsupported.
 - Sharing modifiers are parsed for structural progress but rejected during

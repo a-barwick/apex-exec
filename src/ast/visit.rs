@@ -6,11 +6,11 @@
 //! growing independent, incomplete recursive walkers.
 
 use super::{
-    Annotation, AssignmentTarget, CatchClause, ClassDeclaration, ClassMember,
+    Annotation, AnnotationArgument, AssignmentTarget, CatchClause, ClassDeclaration, ClassMember,
     CollectionInitializer, ConstructorDeclaration, Expression, FieldDeclaration, Identifier,
     MapEntry, MethodDeclaration, NamedType, Parameter, Program, PropertyAccessor,
     PropertyDeclaration, ReturnType, SoqlCondition, SoqlInValues, SoqlQuery, SoqlValue, SoslQuery,
-    Statement, TriggerDeclaration, TypeName,
+    Statement, SwitchArm, SwitchLabels, TriggerDeclaration, TypeName, VariableDeclarator,
 };
 
 pub trait Visitor<'ast> {
@@ -54,6 +54,10 @@ pub trait Visitor<'ast> {
         walk_annotation(self, annotation);
     }
 
+    fn visit_annotation_argument(&mut self, argument: &'ast AnnotationArgument) {
+        walk_annotation_argument(self, argument);
+    }
+
     fn visit_parameter(&mut self, parameter: &'ast Parameter) {
         walk_parameter(self, parameter);
     }
@@ -64,6 +68,14 @@ pub trait Visitor<'ast> {
 
     fn visit_catch_clause(&mut self, catch: &'ast CatchClause) {
         walk_catch_clause(self, catch);
+    }
+
+    fn visit_variable_declarator(&mut self, declarator: &'ast VariableDeclarator) {
+        walk_variable_declarator(self, declarator);
+    }
+
+    fn visit_switch_arm(&mut self, arm: &'ast SwitchArm) {
+        walk_switch_arm(self, arm);
     }
 
     fn visit_statement(&mut self, statement: &'ast Statement) {
@@ -148,6 +160,15 @@ pub fn walk_class_member<'ast, V: Visitor<'ast> + ?Sized>(
 ) {
     match member {
         ClassMember::Field(field) => visitor.visit_field_declaration(field),
+        ClassMember::FieldGroup(group) => {
+            for annotation in &group.annotations {
+                visitor.visit_annotation(annotation);
+            }
+            visitor.visit_type_name(&group.ty);
+            for declarator in &group.declarators {
+                visitor.visit_variable_declarator(declarator);
+            }
+        }
         ClassMember::Property(property) => visitor.visit_property_declaration(property),
         ClassMember::Constructor(constructor) => {
             visitor.visit_constructor_declaration(constructor);
@@ -161,6 +182,9 @@ pub fn walk_field_declaration<'ast, V: Visitor<'ast> + ?Sized>(
     visitor: &mut V,
     field: &'ast FieldDeclaration,
 ) {
+    for annotation in &field.annotations {
+        visitor.visit_annotation(annotation);
+    }
     visitor.visit_type_name(&field.ty);
     visitor.visit_identifier(&field.name);
     if let Some(initializer) = &field.initializer {
@@ -172,6 +196,9 @@ pub fn walk_property_declaration<'ast, V: Visitor<'ast> + ?Sized>(
     visitor: &mut V,
     property: &'ast PropertyDeclaration,
 ) {
+    for annotation in &property.annotations {
+        visitor.visit_annotation(annotation);
+    }
     visitor.visit_type_name(&property.ty);
     visitor.visit_identifier(&property.name);
     for accessor in &property.accessors {
@@ -192,6 +219,9 @@ pub fn walk_constructor_declaration<'ast, V: Visitor<'ast> + ?Sized>(
     visitor: &mut V,
     constructor: &'ast ConstructorDeclaration,
 ) {
+    for annotation in &constructor.annotations {
+        visitor.visit_annotation(annotation);
+    }
     visitor.visit_identifier(&constructor.name);
     for parameter in &constructor.parameters {
         visitor.visit_parameter(parameter);
@@ -222,9 +252,23 @@ pub fn walk_method_declaration<'ast, V: Visitor<'ast> + ?Sized>(
 }
 
 pub fn walk_annotation<'ast, V: Visitor<'ast> + ?Sized>(
-    _visitor: &mut V,
-    _annotation: &'ast Annotation,
+    visitor: &mut V,
+    annotation: &'ast Annotation,
 ) {
+    visitor.visit_identifier(&annotation.name);
+    for argument in &annotation.arguments {
+        visitor.visit_annotation_argument(argument);
+    }
+}
+
+pub fn walk_annotation_argument<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    argument: &'ast AnnotationArgument,
+) {
+    if let Some(name) = &argument.name {
+        visitor.visit_identifier(name);
+    }
+    visitor.visit_expression(&argument.value);
 }
 
 pub fn walk_parameter<'ast, V: Visitor<'ast> + ?Sized>(
@@ -253,7 +297,73 @@ pub fn walk_catch_clause<'ast, V: Visitor<'ast> + ?Sized>(
     visitor.visit_statement(&catch.body);
 }
 
+pub fn walk_variable_declarator<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    declarator: &'ast VariableDeclarator,
+) {
+    visitor.visit_identifier(&declarator.name);
+    if let Some(initializer) = &declarator.initializer {
+        visitor.visit_expression(initializer);
+    }
+}
+
+pub fn walk_switch_arm<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, arm: &'ast SwitchArm) {
+    if let SwitchLabels::Expressions(labels) = &arm.labels {
+        for label in labels {
+            visitor.visit_expression(label);
+        }
+    }
+    visitor.visit_statement(&arm.body);
+}
+
 pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    statement: &'ast Statement,
+) {
+    match statement {
+        declaration @ Statement::VariableDeclaration { .. }
+        | declaration @ Statement::LocalDeclaration { .. } => {
+            walk_declaration_statement(visitor, declaration);
+        }
+        Statement::Sequence { statements, .. } | Statement::Block { statements, .. } => {
+            statements
+                .iter()
+                .for_each(|statement| visitor.visit_statement(statement));
+        }
+        Statement::Expression { expression, .. } => visitor.visit_expression(expression),
+        control @ Statement::If { .. }
+        | control @ Statement::While { .. }
+        | control @ Statement::DoWhile { .. }
+        | control @ Statement::Switch { .. }
+        | control @ Statement::For { .. }
+        | control @ Statement::ForEach { .. } => walk_control_statement(visitor, control),
+        Statement::Try {
+            try_block,
+            catches,
+            finally_block,
+            ..
+        } => {
+            visitor.visit_statement(try_block);
+            for catch in catches {
+                visitor.visit_catch_clause(catch);
+            }
+            if let Some(finally_block) = finally_block {
+                visitor.visit_statement(finally_block);
+            }
+        }
+        Statement::Throw { value, .. } | Statement::Dml { value, .. } => {
+            visitor.visit_expression(value);
+        }
+        Statement::Return { value, .. } => {
+            if let Some(value) = value {
+                visitor.visit_expression(value);
+            }
+        }
+        Statement::Break { .. } | Statement::Continue { .. } => {}
+    }
+}
+
+fn walk_declaration_statement<'ast, V: Visitor<'ast> + ?Sized>(
     visitor: &mut V,
     statement: &'ast Statement,
 ) {
@@ -268,12 +378,23 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
             visitor.visit_identifier(name);
             visitor.visit_expression(initializer);
         }
-        Statement::Expression { expression, .. } => visitor.visit_expression(expression),
-        Statement::Block { statements, .. } => {
-            for statement in statements {
-                visitor.visit_statement(statement);
-            }
+        Statement::LocalDeclaration {
+            ty, declarators, ..
+        } => {
+            visitor.visit_type_name(ty);
+            declarators
+                .iter()
+                .for_each(|declarator| visitor.visit_variable_declarator(declarator));
         }
+        _ => unreachable!("caller selects declaration statements"),
+    }
+}
+
+fn walk_control_statement<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    statement: &'ast Statement,
+) {
+    match statement {
         Statement::If {
             condition,
             then_branch,
@@ -298,6 +419,10 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
             visitor.visit_statement(body);
             visitor.visit_expression(condition);
         }
+        Statement::Switch { value, arms, .. } => {
+            visitor.visit_expression(value);
+            arms.iter().for_each(|arm| visitor.visit_switch_arm(arm));
+        }
         Statement::For {
             initializer,
             condition,
@@ -305,15 +430,15 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
             body,
             ..
         } => {
-            if let Some(initializer) = initializer {
-                visitor.visit_statement(initializer);
-            }
-            if let Some(condition) = condition {
-                visitor.visit_expression(condition);
-            }
-            if let Some(update) = update {
-                visitor.visit_statement(update);
-            }
+            initializer
+                .iter()
+                .for_each(|initializer| visitor.visit_statement(initializer));
+            condition
+                .iter()
+                .for_each(|condition| visitor.visit_expression(condition));
+            update
+                .iter()
+                .for_each(|update| visitor.visit_statement(update));
             visitor.visit_statement(body);
         }
         Statement::ForEach {
@@ -328,29 +453,7 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
             visitor.visit_expression(iterable);
             visitor.visit_statement(body);
         }
-        Statement::Try {
-            try_block,
-            catches,
-            finally_block,
-            ..
-        } => {
-            visitor.visit_statement(try_block);
-            for catch in catches {
-                visitor.visit_catch_clause(catch);
-            }
-            if let Some(finally_block) = finally_block {
-                visitor.visit_statement(finally_block);
-            }
-        }
-        Statement::Throw { value, .. } | Statement::Dml { value, .. } => {
-            visitor.visit_expression(value);
-        }
-        Statement::Return { value, .. } => {
-            if let Some(value) = value {
-                visitor.visit_expression(value);
-            }
-        }
-        Statement::Break { .. } | Statement::Continue { .. } => {}
+        _ => unreachable!("caller selects control statements"),
     }
 }
 

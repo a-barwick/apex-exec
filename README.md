@@ -26,9 +26,11 @@ gate is complete after its process-safety, correctness, instrumentation, and
 maintainability criteria passed independent review. M18 completes checked safe
 navigation and null coalescing with evaluate-once, lazy, chained runtime
 behavior. M19 completes bitwise and shift expressions, checked `Long`, and
-evaluate-once compound assignment. M20 nested declarations, enums, and type
-literals are next. The primary syntax gate remains all 14 pinned North Star
-lexer/parser indicators passing; the current frontier is 7 of 14.
+evaluate-once compound assignment. M20 completes nested declarations, enums,
+and type literals. M21 closes the pinned North Star grammar with lossless
+syntax and explicit checked-only dispositions where runtime behavior remains
+unsupported. All 14 lexer/parser indicators now pass as ordinary tests.
+M22 is the next milestone.
 The phase then carries that syntax foundation into a representative 60–80%
 enterprise test benchmark, broader metadata accounting, selected platform
 fidelity, and persistent incremental compiler work. See

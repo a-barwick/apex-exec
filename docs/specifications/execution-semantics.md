@@ -18,14 +18,15 @@ after parsing and semantic validation succeed.
 
 ## Variables
 
-**Implemented.** A declaration evaluates its initializer and stores the value
-under the identifier's canonical case-insensitive key. Assignment replaces the
-stored value. Reads of unknown variables are compile-time errors and are also
-guarded defensively by the runtime. Primitive values copy by value. Collection
-values carry execution-store-owned identity, so ordinary assignment aliases the
-same mutable collection. Class instances use the same per-interpreter store;
-static fields and properties belong to one interpreter run rather than
-process-global state.
+**Implemented.** A declaration evaluates each initializer from left to right
+and stores the value under the identifier's canonical case-insensitive key.
+An omitted initializer stores typed null. Each declarator enters the same scope
+before the next initializer. Assignment replaces the stored value. Reads of
+unknown variables are compile-time errors and are also guarded defensively by
+the runtime. Primitive values copy by value. Collection values carry
+execution-store-owned identity, so ordinary assignment aliases the same mutable
+collection. Class instances use the same per-interpreter store; static fields
+and properties belong to one interpreter run rather than process-global state.
 
 ## Debug output
 
@@ -190,8 +191,11 @@ method comparison. Both equality methods return `false` for a null argument.
 
 **Implemented.** Blocks introduce lexical scopes. Loop-local variables do not
 escape their declaring scope. `if`/`else`, traditional `for`, `while`, and
-`do`/`while` execute directly over checked Boolean conditions. Enhanced `for`
-evaluates a List or Set expression once, snapshots its elements for traversal,
+`do`/`while` execute directly over checked Boolean conditions. Traditional
+`for` accepts comma-separated initializer and update expressions, executes
+them left to right, and does not count its structural sequence container as an
+extra coverage line or debugger stop. Enhanced `for` evaluates a List or Set
+expression once, snapshots its elements for traversal,
 and gives the iteration variable its own non-escaping scope. Direct Map
 iteration is rejected; callers iterate `keySet()` or `values()`.
 
@@ -199,6 +203,9 @@ Structural mutation of a List or Set during enhanced iteration is rejected
 through every alias, including diagnostic unwinding. `break` and `continue`
 target the nearest enclosing loop. A value-less `return` terminates anonymous
 execution. Declared methods support typed values and `void` completion.
+
+`switch on`/`when` is retained as lossless parsed syntax in M21 but fails with
+an explicit semantic unsupported diagnostic; no switch execution is implied.
 
 ## Exceptions
 

@@ -1,6 +1,6 @@
 use super::Parser;
 use crate::{
-    ast::{CatchClause, DmlOperation, Statement},
+    ast::{CatchClause, DmlOperation, Statement, SwitchArm, SwitchLabels, VariableDeclarator},
     diagnostic::Diagnostic,
     token::TokenKind,
 };
@@ -12,6 +12,7 @@ impl Parser {
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
             TokenKind::Do => self.parse_do_while(),
+            TokenKind::Switch => self.parse_switch(),
             TokenKind::For => self.parse_for(),
             TokenKind::Break => self.parse_break(),
             TokenKind::Continue => self.parse_continue(),
@@ -45,10 +46,18 @@ impl Parser {
             _ => unreachable!("DML start was checked"),
         };
         let value = self.parse_expression()?;
+        let external_id = if operation == DmlOperation::Upsert
+            && matches!(self.current().kind, TokenKind::Identifier(_))
+        {
+            Some(self.expect_identifier("expected an external-ID field name")?)
+        } else {
+            None
+        };
         let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after DML statement")?;
         Ok(Statement::Dml {
             operation,
             value,
+            external_id,
             span: start.span.merge(end.span),
         })
     }
@@ -57,21 +66,56 @@ impl Parser {
         &mut self,
         consume_semicolon: bool,
     ) -> Result<Statement, Diagnostic> {
+        let start = self.current().span;
+        let mut modifiers = Vec::new();
+        while matches!(self.current().kind, TokenKind::Final | TokenKind::Transient) {
+            modifiers.push(self.parse_modifier()?);
+        }
         let (ty, type_span) = self.parse_type_name()?;
-        let name = self.expect_identifier("expected a variable name")?;
-        self.expect_simple(TokenKind::Equal, "expected `=` and an explicit initializer")?;
-        let initializer = self.parse_expression()?;
+        let mut declarators = Vec::new();
+        loop {
+            let name = self.expect_identifier("expected a variable name")?;
+            let initializer = if self.check(&TokenKind::Equal) {
+                self.advance();
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            let end = initializer.as_ref().map_or(name.span, |value| value.span());
+            let span = name.span.merge(end);
+            declarators.push(VariableDeclarator {
+                name,
+                initializer,
+                span,
+            });
+            if !self.check(&TokenKind::Comma) {
+                break;
+            }
+            self.advance();
+        }
         let end = if consume_semicolon {
             self.expect_simple(TokenKind::Semicolon, "expected `;` after declaration")?
                 .span
         } else {
-            initializer.span()
+            declarators
+                .last()
+                .expect("declaration has a declarator")
+                .span
         };
-        Ok(Statement::VariableDeclaration {
+        if modifiers.is_empty() && declarators.len() == 1 && declarators[0].initializer.is_some() {
+            let declarator = declarators.pop().expect("one declarator");
+            return Ok(Statement::VariableDeclaration {
+                ty,
+                name: declarator.name,
+                initializer: declarator.initializer.expect("initializer was checked"),
+                span: type_span.merge(end),
+            });
+        }
+        Ok(Statement::LocalDeclaration {
+            modifiers,
             ty,
-            name,
-            initializer,
-            span: type_span.merge(end),
+            declarators,
+            span: start.merge(end),
         })
     }
 
@@ -162,6 +206,53 @@ impl Parser {
         })
     }
 
+    pub(super) fn parse_switch(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect_simple(TokenKind::Switch, "expected `switch`")?;
+        self.expect_keyword("on", "expected `on` after `switch`")?;
+        let value = self.parse_expression()?;
+        self.expect_simple(TokenKind::LeftBrace, "expected `{` after switch value")?;
+        let mut arms = Vec::new();
+        let mut saw_else = false;
+        while self.check(&TokenKind::When) {
+            let when = self.advance();
+            if saw_else {
+                return Err(Diagnostic::new(
+                    "`when else` must be the final switch arm",
+                    when.span,
+                ));
+            }
+            let labels = if self.check(&TokenKind::Else) {
+                saw_else = true;
+                SwitchLabels::Else(self.advance().span)
+            } else {
+                let mut labels = vec![self.parse_expression()?];
+                while self.check(&TokenKind::Comma) {
+                    self.advance();
+                    labels.push(self.parse_expression()?);
+                }
+                SwitchLabels::Expressions(labels)
+            };
+            let body = self.parse_block()?;
+            arms.push(SwitchArm {
+                span: when.span.merge(body.span()),
+                labels,
+                body,
+            });
+        }
+        if arms.is_empty() {
+            return Err(Diagnostic::new(
+                "switch requires at least one `when` arm",
+                self.current().span,
+            ));
+        }
+        let end = self.expect_simple(TokenKind::RightBrace, "expected `}` after switch arms")?;
+        Ok(Statement::Switch {
+            value,
+            arms,
+            span: start.span.merge(end.span),
+        })
+    }
+
     pub(super) fn parse_for(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect_simple(TokenKind::For, "expected `for`")?;
         self.expect_simple(TokenKind::LeftParen, "expected `(` after `for`")?;
@@ -193,7 +284,7 @@ impl Parser {
             let statement = if self.is_declaration_start() {
                 self.parse_variable_declaration(false)?
             } else {
-                self.parse_expression_statement(false)?
+                self.parse_for_expression_sequence()?
             };
             self.expect_simple(TokenKind::Semicolon, "expected `;` after for initializer")?;
             Some(Box::new(statement))
@@ -209,7 +300,7 @@ impl Parser {
         let update = if self.check(&TokenKind::RightParen) {
             None
         } else {
-            Some(Box::new(self.parse_expression_statement(false)?))
+            Some(Box::new(self.parse_for_expression_sequence()?))
         };
         self.expect_simple(TokenKind::RightParen, "expected `)` after for clauses")?;
         let body = Box::new(self.parse_statement()?);
@@ -221,6 +312,23 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    fn parse_for_expression_sequence(&mut self) -> Result<Statement, Diagnostic> {
+        let mut statements = vec![self.parse_expression_statement(false)?];
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            statements.push(self.parse_expression_statement(false)?);
+        }
+        if statements.len() == 1 {
+            return Ok(statements.pop().expect("one statement"));
+        }
+        let span = statements
+            .first()
+            .expect("sequence is nonempty")
+            .span()
+            .merge(statements.last().expect("sequence is nonempty").span());
+        Ok(Statement::Sequence { statements, span })
     }
 
     pub(super) fn parse_break(&mut self) -> Result<Statement, Diagnostic> {

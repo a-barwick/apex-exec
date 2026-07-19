@@ -1,9 +1,9 @@
 use crate::{
     ast::{
-        AccessorKind, AnnotationKind, AssignmentOperator, AssignmentTarget, BinaryOperator,
-        CatchClause, ClassDeclaration, ClassKind, ClassMember, CollectionInitializer,
-        ConstructorDeclaration, ConstructorDelegationKind, Expression, Identifier,
-        MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement,
+        AccessorKind, Annotation, AnnotationKind, AssignmentOperator, AssignmentTarget,
+        BinaryOperator, CatchClause, ClassDeclaration, ClassKind, ClassMember,
+        CollectionInitializer, ConstructorDeclaration, ConstructorDelegationKind, Expression,
+        Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement,
         TriggerDeclaration, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
@@ -592,6 +592,7 @@ impl Checker {
                         annotation.span,
                     ));
                 }
+                AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
             }
         }
         if saw_is_test && class.kind != ClassKind::Class {
@@ -626,6 +627,7 @@ impl Checker {
     fn check_class_member(&mut self, member: &ClassMember) -> Result<(), Diagnostic> {
         match member {
             ClassMember::Field(field) => {
+                reject_unsupported_annotations(&field.annotations)?;
                 self.validate_type(&field.ty, field.name.span)?;
                 self.current_static = field.modifiers.contains(&Modifier::Static);
                 if let Some(initializer) = &field.initializer {
@@ -634,7 +636,12 @@ impl Checker {
                 }
                 Ok(())
             }
+            ClassMember::FieldGroup(group) => Err(Diagnostic::new(
+                "multi-declarator fields are parsed but unsupported by the active compatibility profile",
+                group.span,
+            )),
             ClassMember::Constructor(constructor) => {
+                reject_unsupported_annotations(&constructor.annotations)?;
                 self.current_static = false;
                 self.check_constructor(constructor)
             }
@@ -643,6 +650,7 @@ impl Checker {
                 self.check_method(method)
             }
             ClassMember::Property(property) => {
+                reject_unsupported_annotations(&property.annotations)?;
                 self.validate_type(&property.ty, property.name.span)?;
                 self.current_static = property.modifiers.contains(&Modifier::Static);
                 self.check_property_accessors(property)
@@ -679,6 +687,12 @@ impl Checker {
                             field.name.span,
                         ));
                     }
+                }
+                ClassMember::FieldGroup(group) => {
+                    return Err(Diagnostic::new(
+                        "multi-declarator fields are parsed but unsupported by the active compatibility profile",
+                        group.span,
+                    ));
                 }
                 ClassMember::Property(property) => {
                     validate_modifier_set(&property.modifiers, property.name.span, "property")?;
@@ -908,16 +922,14 @@ impl Checker {
                     "@IsTest"
                 }
                 AnnotationKind::TestSetup => "@TestSetup",
-                AnnotationKind::Future => {
-                    if future.is_some() {
-                        return Err(Diagnostic::new(
-                            "duplicate `@future` annotation",
-                            annotation.span,
-                        ));
-                    }
-                    future = Some(annotation.span);
-                    continue;
+                AnnotationKind::Future if future.replace(annotation.span).is_some() => {
+                    return Err(Diagnostic::new(
+                        "duplicate `@future` annotation",
+                        annotation.span,
+                    ));
                 }
+                AnnotationKind::Future => continue,
+                AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
             };
             if test_kind.is_some() {
                 return Err(Diagnostic::new(
@@ -1992,24 +2004,10 @@ impl Checker {
 
     fn check_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match statement {
-            Statement::VariableDeclaration {
-                ty,
-                name,
-                initializer,
-                ..
-            } => {
-                self.validate_type(ty, name.span)?;
-                if self.current_scope().contains_key(&name.canonical) {
-                    return Err(Diagnostic::new(
-                        format!("duplicate variable `{}`", name.spelling),
-                        name.span,
-                    ));
-                }
-                let initializer_type = self.expression_type_for_expected(initializer, ty)?;
-                self.require_assignable(ty, &initializer_type, initializer.span())?;
-                self.current_scope_mut()
-                    .insert(name.canonical.clone(), ty.clone());
-                Ok(())
+            declaration @ Statement::VariableDeclaration { .. }
+            | declaration @ Statement::LocalDeclaration { .. }
+            | declaration @ Statement::Sequence { .. } => {
+                self.check_declaration_statement(declaration)
             }
             Statement::Expression { expression, .. } => {
                 if !is_statement_expression(expression) {
@@ -2052,6 +2050,10 @@ impl Checker {
                 self.with_loop(|checker| checker.check_statement(body))?;
                 self.require_boolean(condition)
             }
+            Statement::Switch { span, .. } => Err(Diagnostic::new(
+                "`switch on`/`when` is parsed but unsupported by the active compatibility profile",
+                *span,
+            )),
             Statement::For {
                 initializer,
                 condition,
@@ -2093,25 +2095,8 @@ impl Checker {
                     checker.with_loop(|checker| checker.check_statement(body))
                 })
             }
-            Statement::Break { span } => {
-                if self.loop_depth == 0 {
-                    Err(Diagnostic::new(
-                        "`break` is only valid inside a loop",
-                        *span,
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            Statement::Continue { span } => {
-                if self.loop_depth == 0 {
-                    Err(Diagnostic::new(
-                        "`continue` is only valid inside a loop",
-                        *span,
-                    ))
-                } else {
-                    Ok(())
-                }
+            control @ Statement::Break { .. } | control @ Statement::Continue { .. } => {
+                self.check_loop_control(control)
             }
             Statement::Try {
                 try_block,
@@ -2139,9 +2124,105 @@ impl Checker {
                     ))
                 }
             }
-            Statement::Dml { value, .. } => self.check_dml_value(value),
+            Statement::Dml {
+                value, external_id, ..
+            } => self.check_dml_statement(value, external_id.as_ref()),
             Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
         }
+    }
+
+    fn check_declaration_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
+        match statement {
+            Statement::VariableDeclaration {
+                ty,
+                name,
+                initializer,
+                ..
+            } => {
+                self.check_declarator(ty, name, Some(initializer))?;
+                Ok(())
+            }
+            Statement::LocalDeclaration {
+                modifiers,
+                ty,
+                declarators,
+                ..
+            } => {
+                if let Some(modifier) = modifiers.first() {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "local modifier `{}` is parsed but unsupported by the active compatibility profile",
+                            modifier_name(*modifier)
+                        ),
+                        declarators
+                            .first()
+                            .map_or_else(|| statement.span(), |declarator| declarator.span),
+                    ));
+                }
+                for declarator in declarators {
+                    self.check_declarator(ty, &declarator.name, declarator.initializer.as_ref())?;
+                }
+                Ok(())
+            }
+            Statement::Sequence { statements, .. } => {
+                for statement in statements {
+                    self.check_statement(statement)?;
+                }
+                Ok(())
+            }
+            _ => unreachable!("caller selects declarations and sequences"),
+        }
+    }
+
+    fn check_declarator(
+        &mut self,
+        ty: &TypeName,
+        name: &Identifier,
+        initializer: Option<&Expression>,
+    ) -> Result<(), Diagnostic> {
+        self.validate_type(ty, name.span)?;
+        if self.current_scope().contains_key(&name.canonical) {
+            return Err(Diagnostic::new(
+                format!("duplicate variable `{}`", name.spelling),
+                name.span,
+            ));
+        }
+        if let Some(initializer) = initializer {
+            let actual = self.expression_type_for_expected(initializer, ty)?;
+            self.require_assignable(ty, &actual, initializer.span())?;
+        }
+        self.current_scope_mut()
+            .insert(name.canonical.clone(), ty.clone());
+        Ok(())
+    }
+
+    fn check_loop_control(&self, statement: &Statement) -> Result<(), Diagnostic> {
+        if self.loop_depth > 0 {
+            return Ok(());
+        }
+        let keyword = if matches!(statement, Statement::Break { .. }) {
+            "break"
+        } else {
+            "continue"
+        };
+        Err(Diagnostic::new(
+            format!("`{keyword}` is only valid inside a loop"),
+            statement.span(),
+        ))
+    }
+
+    fn check_dml_statement(
+        &mut self,
+        value: &Expression,
+        external_id: Option<&Identifier>,
+    ) -> Result<(), Diagnostic> {
+        if let Some(external_id) = external_id {
+            return Err(Diagnostic::new(
+                "external-ID DML syntax is parsed but unsupported by the active compatibility profile",
+                external_id.span,
+            ));
+        }
+        self.check_dml_value(value)
     }
 
     fn iterable_element_type(&mut self, iterable: &Expression) -> Result<TypeName, Diagnostic> {
@@ -4618,6 +4699,14 @@ fn validate_modifier_set(
     span: Span,
     subject: &str,
 ) -> Result<(), Diagnostic> {
+    if modifiers.contains(&Modifier::Transient) {
+        return Err(Diagnostic::new(
+            format!(
+                "modifier `transient` on {subject} is parsed but unsupported by the active compatibility profile"
+            ),
+            span,
+        ));
+    }
     let mut seen = Vec::new();
     for modifier in modifiers {
         if seen.contains(modifier) {
@@ -4732,6 +4821,7 @@ fn modifier_name(modifier: Modifier) -> &'static str {
         Modifier::Abstract => "abstract",
         Modifier::Override => "override",
         Modifier::Final => "final",
+        Modifier::Transient => "transient",
         Modifier::WithSharing => "with sharing",
         Modifier::WithoutSharing => "without sharing",
         Modifier::InheritedSharing => "inherited sharing",
@@ -5016,6 +5106,27 @@ fn unknown_variable(identifier: &Identifier) -> Diagnostic {
     Diagnostic::new(
         format!("unknown variable `{}`", identifier.spelling),
         identifier.span,
+    )
+}
+
+fn reject_unsupported_annotations(annotations: &[Annotation]) -> Result<(), Diagnostic> {
+    if let Some(annotation) = annotations
+        .iter()
+        .find(|annotation| annotation.kind == AnnotationKind::Other)
+    {
+        Err(unsupported_annotation(annotation))
+    } else {
+        Ok(())
+    }
+}
+
+fn unsupported_annotation(annotation: &Annotation) -> Diagnostic {
+    Diagnostic::new(
+        format!(
+            "annotation `@{}` is parsed but unsupported by the active compatibility profile",
+            annotation.name.spelling
+        ),
+        annotation.span,
     )
 }
 

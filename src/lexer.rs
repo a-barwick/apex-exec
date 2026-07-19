@@ -126,6 +126,8 @@ impl<'a> Lexer<'a> {
                     "for" => TokenKind::For,
                     "while" => TokenKind::While,
                     "do" => TokenKind::Do,
+                    "switch" => TokenKind::Switch,
+                    "when" => TokenKind::When,
                     "break" => TokenKind::Break,
                     "continue" => TokenKind::Continue,
                     "return" => TokenKind::Return,
@@ -149,6 +151,7 @@ impl<'a> Lexer<'a> {
                     "abstract" => TokenKind::Abstract,
                     "override" => TokenKind::Override,
                     "final" => TokenKind::Final,
+                    "transient" => TokenKind::Transient,
                     _ => TokenKind::Identifier(text.to_owned()),
                 }
             }

@@ -79,6 +79,12 @@ impl Parser {
 
     pub(super) fn is_declaration_start(&self) -> bool {
         let mut probe = self.clone();
+        while matches!(
+            probe.current().kind,
+            TokenKind::Final | TokenKind::Transient
+        ) {
+            probe.advance();
+        }
         match probe.parse_type_name() {
             Ok(_) => matches!(probe.current().kind, TokenKind::Identifier(_)),
             Err(error) if error.message == "only one array suffix is supported" => {
@@ -108,7 +114,8 @@ impl Parser {
                 | TokenKind::Virtual
                 | TokenKind::Abstract
                 | TokenKind::Override
-                | TokenKind::Final => cursor += 1,
+                | TokenKind::Final
+                | TokenKind::Transient => cursor += 1,
                 TokenKind::Identifier(ref spelling)
                     if ["with", "without", "inherited"]
                         .iter()

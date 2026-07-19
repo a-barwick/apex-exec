@@ -119,7 +119,7 @@ fn collect_coverage_candidates(
                         }
                     }
                 }
-                ClassMember::Field(_) => {}
+                ClassMember::Field(_) | ClassMember::FieldGroup(_) => {}
                 ClassMember::Initializer(initializer) => {
                     visit_executable(&initializer.body, statements, branches)
                 }
@@ -145,29 +145,28 @@ fn visit_statement(
     statements: &mut BTreeSet<Span>,
     branches: &mut BTreeSet<Span>,
 ) {
-    if !matches!(statement, Statement::Block { .. }) {
+    if statement_is_executable_line(statement) {
         statements.insert(statement.span());
     }
     match statement {
         Statement::Block {
             statements: body, ..
-        } => {
-            for statement in body {
-                visit_statement(statement, statements, branches);
-            }
         }
+        | Statement::Sequence {
+            statements: body, ..
+        } => visit_statement_list(body, statements, branches),
         Statement::If {
             condition,
             then_branch,
             else_branch,
             ..
-        } => {
-            branches.insert(condition.span());
-            visit_statement(then_branch, statements, branches);
-            if let Some(else_branch) = else_branch {
-                visit_statement(else_branch, statements, branches);
-            }
-        }
+        } => visit_if_statement(
+            condition,
+            then_branch,
+            else_branch.as_deref(),
+            statements,
+            branches,
+        ),
         Statement::While {
             condition, body, ..
         }
@@ -177,46 +176,113 @@ fn visit_statement(
             branches.insert(condition.span());
             visit_statement(body, statements, branches);
         }
+        Statement::Switch { arms, .. } => {
+            for arm in arms {
+                visit_statement(&arm.body, statements, branches);
+            }
+        }
         Statement::For {
             initializer,
             condition,
             update,
             body,
             ..
-        } => {
-            if let Some(initializer) = initializer {
-                visit_statement(initializer, statements, branches);
-            }
-            if let Some(condition) = condition {
-                branches.insert(condition.span());
-            }
-            if let Some(update) = update {
-                visit_statement(update, statements, branches);
-            }
-            visit_statement(body, statements, branches);
-        }
+        } => visit_for_statement(
+            initializer.as_deref(),
+            condition.as_ref(),
+            update.as_deref(),
+            body,
+            statements,
+            branches,
+        ),
         Statement::ForEach { body, .. } => visit_statement(body, statements, branches),
         Statement::Try {
             try_block,
             catches,
             finally_block,
             ..
-        } => {
-            visit_statement(try_block, statements, branches);
-            for catch in catches {
-                visit_statement(&catch.body, statements, branches);
-            }
-            if let Some(finally_block) = finally_block {
-                visit_statement(finally_block, statements, branches);
-            }
-        }
+        } => visit_try_statement(
+            try_block,
+            catches,
+            finally_block.as_deref(),
+            statements,
+            branches,
+        ),
         Statement::VariableDeclaration { .. }
+        | Statement::LocalDeclaration { .. }
         | Statement::Expression { .. }
         | Statement::Break { .. }
         | Statement::Continue { .. }
         | Statement::Throw { .. }
         | Statement::Return { .. }
         | Statement::Dml { .. } => {}
+    }
+}
+
+fn statement_is_executable_line(statement: &Statement) -> bool {
+    !matches!(
+        statement,
+        Statement::Block { .. } | Statement::Sequence { .. }
+    )
+}
+
+fn visit_if_statement(
+    condition: &Expression,
+    then_branch: &Statement,
+    else_branch: Option<&Statement>,
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    branches.insert(condition.span());
+    visit_statement(then_branch, statements, branches);
+    if let Some(else_branch) = else_branch {
+        visit_statement(else_branch, statements, branches);
+    }
+}
+
+fn visit_for_statement(
+    initializer: Option<&Statement>,
+    condition: Option<&Expression>,
+    update: Option<&Statement>,
+    body: &Statement,
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    if let Some(initializer) = initializer {
+        visit_statement(initializer, statements, branches);
+    }
+    if let Some(condition) = condition {
+        branches.insert(condition.span());
+    }
+    if let Some(update) = update {
+        visit_statement(update, statements, branches);
+    }
+    visit_statement(body, statements, branches);
+}
+
+fn visit_statement_list(
+    body: &[Statement],
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    for statement in body {
+        visit_statement(statement, statements, branches);
+    }
+}
+
+fn visit_try_statement(
+    try_block: &Statement,
+    catches: &[crate::ast::CatchClause],
+    finally_block: Option<&Statement>,
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    visit_statement(try_block, statements, branches);
+    for catch in catches {
+        visit_statement(&catch.body, statements, branches);
+    }
+    if let Some(finally_block) = finally_block {
+        visit_statement(finally_block, statements, branches);
     }
 }
 

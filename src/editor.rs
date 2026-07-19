@@ -257,6 +257,7 @@ impl<'program> IndexBuilder<'program> {
                             self.visit_expression(initializer);
                         }
                     }
+                    ClassMember::FieldGroup(_) => {}
                     ClassMember::Property(property) => {
                         self.add(property.name.span, symbol, true);
                         self.visit_type_name(&property.ty);
