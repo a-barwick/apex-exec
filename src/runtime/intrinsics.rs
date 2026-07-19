@@ -204,17 +204,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match intrinsic {
-            SystemIntrinsic::Debug => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if matches!(argument.value, Value::Void) {
-                    return Err(Diagnostic::new("cannot debug void", argument.span));
-                }
-                let message = self.render_bounded_value(&argument.value);
-                self.host.debug(DebugEvent { message });
-                Ok(Value::Void)
-            }
+            SystemIntrinsic::Debug => self.call_system_debug(arguments, span),
             SystemIntrinsic::Assert => {
                 let ([condition] | [condition, _]) = arguments else {
                     return Err(invalid_call_arguments(span));
@@ -280,6 +270,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(Value::Integer(self.host.now_millis()))
             }
         }
+    }
+
+    fn call_system_debug(
+        &mut self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [argument] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        if matches!(argument.value, Value::Void) {
+            return Err(Diagnostic::new("cannot debug void", argument.span));
+        }
+        let rendered = self.render_value(&argument.value);
+        self.instrumentation
+            .record_render_truncation(rendered.truncated);
+        self.host.debug(DebugEvent {
+            message: rendered.text,
+        });
+        Ok(Value::Void)
     }
 
     fn call_exception_instance(

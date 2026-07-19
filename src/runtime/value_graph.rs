@@ -242,11 +242,6 @@ pub(super) struct RenderedValue {
 }
 
 impl<'program, H: PlatformHost> Interpreter<'program, H> {
-    /// Renders presentation output under the fixed display-byte budget.
-    pub(super) fn render_bounded_value(&self, value: &Value) -> String {
-        self.render_value(value).text
-    }
-
     /// Converts a value into observable Apex/API String content.
     ///
     /// Structural traversal remains cycle-safe and bounded by depth, node, and

@@ -168,9 +168,10 @@ impl InstrumentationState {
         self.snapshots.push(snapshot);
     }
 
-    pub(crate) fn mark_debug_trace_truncated(&mut self) {
-        debug_assert_eq!(self.policy, InstrumentationPolicy::Debugger);
-        self.debug_trace_truncated = true;
+    pub(crate) fn record_render_truncation(&mut self, truncated: bool) {
+        if truncated && self.policy == InstrumentationPolicy::Debugger {
+            self.debug_trace_truncated = true;
+        }
     }
 
     pub(crate) fn take_trace(&mut self) -> ExecutionTrace {

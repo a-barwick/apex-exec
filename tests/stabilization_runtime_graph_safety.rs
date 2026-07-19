@@ -362,4 +362,10 @@ fn semantic_string_paths_preserve_long_acyclic_values() {
     assert_eq!(debug_output.len(), 1);
     assert_eq!(debug_output[0].len(), 16 * 1024);
     assert!(debug_output[0].ends_with('…'));
+
+    let debug_program = check(&format!("System.debug('{payload}');")).unwrap();
+    let debug_execution = Interpreter::new().debug_execute(&debug_program);
+    assert!(debug_execution.diagnostic.is_none());
+    assert_eq!(debug_execution.output, debug_output);
+    assert!(debug_execution.trace_status.truncated);
 }

@@ -306,9 +306,8 @@ impl<'program> Interpreter<'program, RecordingHost> {
             Ok(value) => {
                 if !matches!(value, Value::Void) {
                     let rendered = self.render_value(&value);
-                    if rendered.truncated {
-                        self.instrumentation.mark_debug_trace_truncated();
-                    }
+                    self.instrumentation
+                        .record_render_truncation(rendered.truncated);
                     output.push(rendered.text);
                 }
                 None
