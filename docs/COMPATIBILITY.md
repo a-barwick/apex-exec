@@ -25,8 +25,9 @@ for the documented case.
 |---|---:|---:|---:|---|---|
 | `String` | Yes | Yes | Yes | Simplified | Single-quoted literals, common escapes, and the documented M3 method subset |
 | `Boolean` | Yes | Yes | Yes | Compatible | `true` and `false` are case-insensitive |
-| `Integer` | Yes | Yes | Yes | Simplified | Stored as Rust `i64`; Apex range/overflow pending |
-| `Decimal` | Yes | Yes | Yes | Simplified | Decimal literals, mixed Integer arithmetic, comparison, parsing, scale, and fixed-point display |
+| `Integer` | Yes | Yes | Yes | Compatible | Signed 32-bit values with checked arithmetic overflow |
+| `Long` | Yes | Yes | Yes | Compatible | Signed 64-bit values, `L` literals, checked arithmetic, casts, and platform epoch-millisecond results |
+| `Decimal` | Yes | Yes | Yes | Simplified | Decimal literals, mixed Integer/Long arithmetic, comparison, parsing, scale, and fixed-point display |
 | `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
 | `Datetime` | Yes | Yes | Yes | Simplified | UTC construction/parsing, epoch milliseconds, arithmetic, date/time projections, and formatting |
 | `Time` | Yes | Yes | Yes | Simplified | Millisecond construction/parsing, wrapping arithmetic, components, and formatting |
@@ -35,21 +36,21 @@ for the documented case.
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Uninitialized declarations are rejected |
 | Uninitialized/multi-declarator locals | No | No | No | Unsupported | Valid Apex forms are planned for M21 grammar closure |
-| Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative |
+| Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative; arithmetic, String, bitwise, and shift compounds share evaluate-once lvalue handling |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
 | Line/block comments | Yes | N/A | N/A | Compatible | Unterminated block comments are errors |
 | `System.debug(expression)` | Yes | Yes | Yes | Simplified | Structured platform-host event exposed as plain output by the default host; no Salesforce log metadata |
-| Integer arithmetic | Yes | Yes | Yes | Simplified | `+`, `-`, `*`, `/`, `%`, unary signs; checked `i64` runtime behavior |
-| Comparison and equality | Yes | Yes | Yes | Compatible | Integer ordering; case-insensitive String `==`; same-type collection and null equality |
-| Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
+| Numeric arithmetic | Yes | Yes | Yes | Simplified | Checked 32-bit Integer, 64-bit Long, and Decimal `+`, `-`, `*`, `/`, `%`, unary signs, and mixed promotion |
+| Comparison and equality | Yes | Yes | Yes | Compatible | Mixed numeric ordering/equality; case-insensitive String `==`; same-type collection and null equality |
+| Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&` and <code>&#124;&#124;</code>, unary `!`, plus eager `&`, <code>&#124;</code>, and `^` |
 | String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; complete String content is preserved and collection text uses deterministic cycle-safe local formatting |
-| Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
+| Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on Integer/Long locals, List indexes, class members, and SObject fields |
 | Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
 | `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
 | Safe navigation | Yes | Yes | Yes | Compatible | Evaluate-once instance member/method access, member/method chain short-circuiting, lazy arguments, typed nulls, and null-aware single-record SOQL; indexed chain continuation is rejected |
 | Null coalescing | Yes | Yes | Yes | Compatible | Left-associative Apex precedence, evaluate-once left operand, lazy right operand, checked type joins, and branch coverage |
-| Bitwise/shift operators | No | No | No | Unsupported | Includes compound forms and `Long`; planned in M19 |
+| Bitwise/shift operators | Yes | Yes | Yes | Compatible | Boolean/integral `&`, <code>&#124;</code>, `^`, integral `~`, `<<`, `>>`, and `>>>`; shift widths are masked to 32/64 bits |
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
 | `switch on` / `when` | No | No | No | Unsupported | Required by M21 North Star grammar closure |
@@ -668,14 +669,12 @@ language or Salesforce compatibility claim.
   lexer/parser goal tests measure progress only; they are not compatibility or
   execution claims until promoted into the supported surface above.
 
-M18 reproduces 5 of 14 passing goals (35.71%): 5 of 7 lexer goals and 0 of 7
-parser goals, up from the 1-of-14 Phase 2 baseline. Ternary and `instanceof` are
-no longer first blockers, and no current first diagnostic is a null-aware
-operator. The current first diagnostics are bitwise syntax, unsupported
-annotations, and nested declarations. M21 requires 14 of 14
-passing against the unchanged corpus and removes every goal's `#[ignore]`.
-These are syntax indicators only, not runtime or Salesforce compatibility
-percentages.
+M19 reproduces 7 of 14 passing goals (50.00%): all 7 lexer goals and 0 of 7
+parser goals, up from the 1-of-14 Phase 2 baseline. Lexer goals now run in the
+ordinary suite; the remaining first diagnostics are unsupported annotations
+and nested declarations. M21 requires 14 of 14 passing against the unchanged
+corpus and removes the seven parser goals' `#[ignore]`. These are syntax
+indicators only, not runtime or Salesforce compatibility percentages.
 
 ## Updating this document
 

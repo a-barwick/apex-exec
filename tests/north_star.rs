@@ -147,7 +147,6 @@ fn reports_current_north_star_progress() {
 macro_rules! north_star_goals {
     ($lex_test:ident, $parse_test:ident, $name:literal) => {
         #[test]
-        #[ignore = "North Star lexer milestone indicator; run explicitly"]
         fn $lex_test() {
             require_lex($name);
         }

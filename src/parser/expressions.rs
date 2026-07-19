@@ -1,8 +1,8 @@
 use super::Parser;
 use crate::{
     ast::{
-        AssignmentTarget, BinaryOperator, CollectionInitializer, Expression, Identifier, MapEntry,
-        PostfixOperator, TypeName, UnaryOperator,
+        AssignmentOperator, AssignmentTarget, BinaryOperator, CollectionInitializer, Expression,
+        Identifier, MapEntry, PostfixOperator, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     token::TokenKind,
@@ -15,11 +15,22 @@ impl Parser {
 
     pub(super) fn parse_assignment(&mut self) -> Result<Expression, Diagnostic> {
         let expression = self.parse_conditional()?;
-        if !self.check(&TokenKind::Equal) {
-            return Ok(expression);
-        }
-
-        let equals = self.advance();
+        let operator = match self.current().kind {
+            TokenKind::Equal => AssignmentOperator::Assign,
+            TokenKind::PlusEqual => AssignmentOperator::Add,
+            TokenKind::MinusEqual => AssignmentOperator::Subtract,
+            TokenKind::StarEqual => AssignmentOperator::Multiply,
+            TokenKind::SlashEqual => AssignmentOperator::Divide,
+            TokenKind::PercentEqual => AssignmentOperator::Remainder,
+            TokenKind::AmpersandEqual => AssignmentOperator::BitwiseAnd,
+            TokenKind::PipeEqual => AssignmentOperator::BitwiseOr,
+            TokenKind::CaretEqual => AssignmentOperator::BitwiseXor,
+            TokenKind::ShiftLeftEqual => AssignmentOperator::ShiftLeft,
+            TokenKind::ShiftRightEqual => AssignmentOperator::ShiftRight,
+            TokenKind::UnsignedShiftRightEqual => AssignmentOperator::UnsignedShiftRight,
+            _ => return Ok(expression),
+        };
+        let operator_token = self.advance();
         let value = self.parse_assignment()?;
         let target = match expression {
             Expression::Variable(identifier) => AssignmentTarget::Variable(identifier),
@@ -51,11 +62,18 @@ impl Parser {
                     navigation_span,
                 ));
             }
-            _ => return Err(Diagnostic::new("invalid assignment target", equals.span)),
+            _ => {
+                return Err(Diagnostic::new(
+                    "invalid assignment target",
+                    operator_token.span,
+                ));
+            }
         };
         let span = target.span().merge(value.span());
         Ok(Expression::Assignment {
             target,
+            operator,
+            operator_span: operator_token.span,
             value: Box::new(value),
             span,
         })
@@ -106,8 +124,29 @@ impl Parser {
 
     pub(super) fn parse_and(&mut self) -> Result<Expression, Diagnostic> {
         self.parse_binary_level(
-            Self::parse_equality,
+            Self::parse_bitwise_or,
             &[(TokenKind::AndAnd, BinaryOperator::And)],
+        )
+    }
+
+    pub(super) fn parse_bitwise_or(&mut self) -> Result<Expression, Diagnostic> {
+        self.parse_binary_level(
+            Self::parse_bitwise_xor,
+            &[(TokenKind::Pipe, BinaryOperator::BitwiseOr)],
+        )
+    }
+
+    pub(super) fn parse_bitwise_xor(&mut self) -> Result<Expression, Diagnostic> {
+        self.parse_binary_level(
+            Self::parse_bitwise_and,
+            &[(TokenKind::Caret, BinaryOperator::BitwiseXor)],
+        )
+    }
+
+    pub(super) fn parse_bitwise_and(&mut self) -> Result<Expression, Diagnostic> {
+        self.parse_binary_level(
+            Self::parse_equality,
+            &[(TokenKind::Ampersand, BinaryOperator::BitwiseAnd)],
         )
     }
 
@@ -122,7 +161,7 @@ impl Parser {
     }
 
     pub(super) fn parse_comparison(&mut self) -> Result<Expression, Diagnostic> {
-        let mut expression = self.parse_term()?;
+        let mut expression = self.parse_shift()?;
         loop {
             if self.check(&TokenKind::Instanceof) {
                 let operator = self.advance();
@@ -150,7 +189,7 @@ impl Parser {
                 break;
             };
             let operator_token = self.advance();
-            let right = self.parse_term()?;
+            let right = self.parse_shift()?;
             let span = expression.span().merge(right.span());
             expression = Expression::Binary {
                 left: Box::new(expression),
@@ -161,6 +200,20 @@ impl Parser {
             };
         }
         Ok(expression)
+    }
+
+    pub(super) fn parse_shift(&mut self) -> Result<Expression, Diagnostic> {
+        self.parse_binary_level(
+            Self::parse_term,
+            &[
+                (TokenKind::ShiftLeft, BinaryOperator::ShiftLeft),
+                (TokenKind::ShiftRight, BinaryOperator::ShiftRight),
+                (
+                    TokenKind::UnsignedShiftRight,
+                    BinaryOperator::UnsignedShiftRight,
+                ),
+            ],
+        )
     }
 
     pub(super) fn parse_term(&mut self) -> Result<Expression, Diagnostic> {
@@ -217,6 +270,7 @@ impl Parser {
             TokenKind::Plus => Some(UnaryOperator::Positive),
             TokenKind::Minus => Some(UnaryOperator::Negate),
             TokenKind::Bang => Some(UnaryOperator::Not),
+            TokenKind::Tilde => Some(UnaryOperator::BitwiseNot),
             TokenKind::PlusPlus => Some(UnaryOperator::PrefixIncrement),
             TokenKind::MinusMinus => Some(UnaryOperator::PrefixDecrement),
             _ => None,
@@ -321,6 +375,7 @@ impl Parser {
             TokenKind::StringLiteral(value) => Expression::StringLiteral(value, token.span),
             TokenKind::BooleanLiteral(value) => Expression::BooleanLiteral(value, token.span),
             TokenKind::IntegerLiteral(value) => Expression::IntegerLiteral(value, token.span),
+            TokenKind::LongLiteral(value) => Expression::LongLiteral(value, token.span),
             TokenKind::DecimalLiteral(value) => Expression::DecimalLiteral(value, token.span),
             TokenKind::Null => Expression::NullLiteral(token.span),
             TokenKind::Identifier(spelling) => {

@@ -1,0 +1,7 @@
+<CustomField>
+    <fullName>Value__c</fullName>
+    <label>Value</label>
+    <type>Number</type>
+    <precision>9</precision>
+    <scale>0</scale>
+</CustomField>

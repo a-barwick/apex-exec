@@ -271,7 +271,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             SystemIntrinsic::CurrentTimeMillis => {
                 expect_no_arguments(arguments, span)?;
-                Ok(Value::Integer(self.host.now_millis()))
+                Ok(Value::Long(self.host.now_millis()))
             }
         }
     }
@@ -1103,10 +1103,12 @@ fn collection_size(size: usize, span: Span) -> Result<i64, Diagnostic> {
 }
 
 fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnostic> {
-    if values
-        .iter()
-        .any(|value| !matches!(value, Value::String(_) | Value::Integer(_) | Value::Null(_)))
-    {
+    if values.iter().any(|value| {
+        !matches!(
+            value,
+            Value::String(_) | Value::Integer(_) | Value::Long(_) | Value::Null(_)
+        )
+    }) {
         return Err(runtime_exception(
             "TypeException",
             "List.sort currently requires String or Integer values",
@@ -1119,6 +1121,7 @@ fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnos
         (_, Value::Null(_)) => Ordering::Greater,
         (Value::String(left), Value::String(right)) => left.cmp(right),
         (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+        (Value::Long(left), Value::Long(right)) => left.cmp(right),
         _ => Ordering::Equal,
     });
     Ok(())

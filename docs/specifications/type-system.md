@@ -6,8 +6,8 @@ Primitive expression checking, recursive generic collections, array aliases,
 checked methods/exceptions, class/interface project types, test assertions,
 ternary and runtime-type expressions, and the curated M10 scalar/platform
 surface are implemented. The shipped summary is `docs/COMPATIBILITY.md`.
-General numeric/platform conversions, `Long`, `Double`, nested declarations,
-and the remaining Phase 2 expression forms remain later work.
+General platform conversions, `Double`, nested declarations, and the remaining
+Phase 2 declaration forms remain later work.
 
 ## Names
 
@@ -32,18 +32,23 @@ case-insensitive.
 
 ### `Integer`
 
-**Implemented, simplified.** Values currently use Rust `i64`. Arithmetic is
-checked and produces a catchable `MathException` on overflow, but
-Apex-compatible range and overflow behavior are planned.
+**Implemented.** Values use the signed 32-bit Apex range. Arithmetic is checked
+and produces a catchable `MathException` on overflow.
+
+### `Long`
+
+**Implemented.** Values use the signed 64-bit Apex range. Decimal digits with
+an `L` suffix produce Long literals; checked arithmetic, integral bitwise and
+shift operators, Integer widening, explicit Integer casts, increment/decrement,
+sorting, serialization, and epoch-millisecond platform results retain Long
+identity.
 
 ### Additional scalar types
 
 **Implemented through M10, simplified.** `Decimal`, `Date`, `Datetime`, `Time`,
 `Id`, and `Blob` have the checked construction, conversion, arithmetic, and
-method subsets listed in `docs/COMPATIBILITY.md`. `Long`, `Double`, complete
-numeric promotion, and Salesforce-exact range/overflow behavior are not
-implemented. M19 introduces the `Long` slice required for bitwise and shift
-operators.
+method subsets listed in `docs/COMPATIBILITY.md`. `Double` and complete
+platform numeric conversion remain unsupported.
 
 ### `Object`
 
@@ -189,15 +194,18 @@ casting `null` yields a null carrying the target static type.
 
 ## Operators
 
-**Implemented for the documented subset.** Integer arithmetic and ordering
-require Integer operands.
-Equality accepts matching supported types or `null`; String `==` and `!=` are
-case-insensitive, while collection membership uses case-sensitive String
-equality. Boolean operators require Boolean operands and short-circuit at
-runtime. `+` performs Integer addition unless either operand is a String, in
-which case every supported non-Void value can be converted for concatenation.
-Increment and decrement require a mutable Integer variable, field/property, or
-Integer-valued List index.
+**Implemented for the documented subset.** Integer, Long, and Decimal
+arithmetic uses checked numeric promotion. Equality and ordering accept mixed
+numeric operands; String `==` and `!=` are case-insensitive, while collection
+membership uses case-sensitive String equality. Boolean `&&` and `||`
+short-circuit, while Boolean `&`, `|`, and `^` evaluate both operands. Integer
+and Long support integral bitwise operations, unary `~`, and signed or unsigned
+shifts with width-masked distances.
+
+`+` concatenates when either operand is String and converts every supported
+non-Void value. Arithmetic, String, bitwise, and shift compound assignments use
+the left target type. Increment and decrement require a mutable Integer or Long
+local, field/property, SObject field, or List element.
 
 **Implemented for M16.** Ternary is right-associative, below logical OR and
 above assignment. Its condition must have static type Boolean. Both arms are

@@ -1,6 +1,7 @@
 use super::{
     Collection, CollectionId, Interpreter, ObjectId, PlatformHost, PlatformValue, SObjectId, Value,
 };
+use rust_decimal::Decimal;
 use std::collections::HashSet;
 
 pub(super) const MAX_VALUE_GRAPH_DEPTH: usize = 64;
@@ -564,6 +565,7 @@ fn render_leaf(
         Value::String(value) | Value::Id(value) => traversal.write(output, value),
         Value::Boolean(value) => traversal.write(output, &value.to_string()),
         Value::Integer(value) => traversal.write(output, &value.to_string()),
+        Value::Long(value) => traversal.write(output, &value.to_string()),
         Value::Decimal(value) => traversal.write(output, &value.normalize().to_string()),
         Value::Date(value) => traversal.write(output, &value.format("%Y-%m-%d").to_string()),
         Value::Datetime(value) => {
@@ -757,7 +759,14 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
             (Value::String(left), Value::String(right)) => left == right,
             (Value::Boolean(left), Value::Boolean(right)) => left == right,
             (Value::Integer(left), Value::Integer(right)) => left == right,
+            (Value::Long(left), Value::Long(right)) => left == right,
+            (Value::Integer(left), Value::Long(right))
+            | (Value::Long(right), Value::Integer(left)) => left == right,
             (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Integer(left), Value::Decimal(right))
+            | (Value::Decimal(right), Value::Integer(left)) => Decimal::from(*left) == *right,
+            (Value::Long(left), Value::Decimal(right))
+            | (Value::Decimal(right), Value::Long(left)) => Decimal::from(*left) == *right,
             (Value::Date(left), Value::Date(right)) => left == right,
             (Value::Datetime(left), Value::Datetime(right)) => left == right,
             (Value::Time(left), Value::Time(right)) => left == right,

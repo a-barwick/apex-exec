@@ -456,15 +456,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         memo: &mut CloneMemo,
     ) -> Result<Value, Diagnostic> {
         match value {
-            value @ (Value::String(_)
-            | Value::Boolean(_)
-            | Value::Integer(_)
-            | Value::Decimal(_)
-            | Value::Date(_)
-            | Value::Datetime(_)
-            | Value::Time(_)
-            | Value::Id(_)
-            | Value::Null(_)) => Ok(value),
+            value @ (Value::String(_) | Value::Boolean(_) | Value::Integer(_) | Value::Long(_)) => {
+                Ok(value)
+            }
+            value @ (Value::Decimal(_) | Value::Date(_) | Value::Datetime(_)) => Ok(value),
+            value @ (Value::Time(_) | Value::Id(_) | Value::Null(_)) => Ok(value),
             Value::Collection(source) => {
                 if let Some(snapshot) = memo.collections.get(&source) {
                     return Ok(Value::Collection(*snapshot));

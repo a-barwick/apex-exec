@@ -466,7 +466,7 @@ block any North Star source.
 
 ### M19 — Bitwise, shift, and compound operators
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 

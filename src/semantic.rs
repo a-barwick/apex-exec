@@ -1,14 +1,16 @@
 use crate::{
     ast::{
-        AccessorKind, AnnotationKind, AssignmentTarget, BinaryOperator, CatchClause,
-        ClassDeclaration, ClassKind, ClassMember, CollectionInitializer, ConstructorDeclaration,
-        Expression, Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType,
-        Statement, TriggerDeclaration, TypeName, UnaryOperator,
+        AccessorKind, AnnotationKind, AssignmentOperator, AssignmentTarget, BinaryOperator,
+        CatchClause, ClassDeclaration, ClassKind, ClassMember, CollectionInitializer,
+        ConstructorDeclaration, Expression, Identifier, MethodDeclaration, Modifier,
+        PostfixOperator, Program, ReturnType, Statement, TriggerDeclaration, TypeName,
+        UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
-        self, CallTarget, ClassMemberId, ExpressionType, MemberTarget, PlatformConstructor,
-        ReferenceTarget, TriggerContextVariable,
+        self, CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassMemberId,
+        ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId, PlaceTarget,
+        PlatformConstructor, ReferenceTarget, TriggerContextVariable,
     },
     platform::{FieldType, SchemaCatalog},
     span::Span,
@@ -163,6 +165,9 @@ struct Checker {
     calls: HashMap<Span, CallTarget>,
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
+    places: HashMap<Span, PlaceTarget>,
+    binary_operations: HashMap<Span, CheckedBinaryOperation>,
+    unary_operations: HashMap<Span, CheckedUnaryOperation>,
     queries: HashMap<Span, hir::CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, hir::AsyncClassContract>,
@@ -185,6 +190,9 @@ impl Checker {
             calls: HashMap::new(),
             references: HashMap::new(),
             members: HashMap::new(),
+            places: HashMap::new(),
+            binary_operations: HashMap::new(),
+            unary_operations: HashMap::new(),
             queries: HashMap::new(),
             null_aware_queries: HashSet::new(),
             async_contracts: HashMap::new(),
@@ -218,6 +226,9 @@ impl Checker {
                 calls: self.calls,
                 references: self.references,
                 members: self.members,
+                places: self.places,
+                binary_operations: self.binary_operations,
+                unary_operations: self.unary_operations,
                 queries: self.queries,
                 null_aware_queries: self.null_aware_queries,
                 async_contracts: self.async_contracts,
@@ -1342,7 +1353,9 @@ impl Checker {
         if actual == expected || *expected == TypeName::Object {
             return true;
         }
-        if *actual == TypeName::Integer && *expected == TypeName::Decimal {
+        if (*actual == TypeName::Integer && matches!(expected, TypeName::Long | TypeName::Decimal))
+            || (*actual == TypeName::Long && *expected == TypeName::Decimal)
+        {
             return true;
         }
         if *expected == TypeName::Exception && actual.is_exception() {
@@ -1865,21 +1878,20 @@ impl Checker {
         &mut self,
         expression: &Expression,
     ) -> Result<ExpressionType, Diagnostic> {
+        if let Some(ty) = literal_expression_type(expression) {
+            return ty;
+        }
         match expression {
-            Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
-            Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
-            Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
-            Expression::DecimalLiteral(..) => Ok(ExpressionType::Value(TypeName::Decimal)),
-            Expression::NullLiteral(..) => Ok(ExpressionType::Null),
+            Expression::StringLiteral(..)
+            | Expression::BooleanLiteral(..)
+            | Expression::IntegerLiteral(..)
+            | Expression::LongLiteral(..)
+            | Expression::DecimalLiteral(..)
+            | Expression::NullLiteral(..) => unreachable!("literal type handled above"),
             Expression::Soql(query) => self.soql_type(query, None),
             Expression::Sosl(query) => self.sosl_type(query),
             Expression::Variable(identifier) => self.variable_type(identifier),
-            Expression::Assignment { target, value, .. } => {
-                let expected = self.assignment_target_type(target)?;
-                let actual = self.expression_type_for_expected(value, &expected)?;
-                self.require_assignable(&expected, &actual, value.span())?;
-                Ok(ExpressionType::Value(expected))
-            }
+            Expression::Assignment { .. } => self.assignment_expression_type(expression),
             Expression::NewCollection { .. } => self.new_collection_expression_type(expression),
             Expression::NewException {
                 exception_type,
@@ -1940,6 +1952,38 @@ impl Checker {
                 ..
             } => self.binary_type(left, *operator, right, *operator_span),
         }
+    }
+
+    fn assignment_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Expression::Assignment {
+            target,
+            operator,
+            operator_span,
+            value,
+            ..
+        } = expression
+        else {
+            unreachable!("assignment helper requires an assignment expression");
+        };
+        let expected =
+            self.assignment_target_type(target, *operator != AssignmentOperator::Assign)?;
+        if *operator == AssignmentOperator::Assign {
+            let actual = self.expression_type_for_expected(value, &expected)?;
+            self.require_assignable(&expected, &actual, value.span())?;
+        } else {
+            let right = self.expression_type(value)?;
+            let result = self.checked_binary_type(
+                ExpressionType::Value(expected.clone()),
+                compound_binary_operator(*operator),
+                right,
+                *operator_span,
+            )?;
+            self.require_assignable(&expected, &result, *operator_span)?;
+        }
+        Ok(ExpressionType::Value(expected))
     }
 
     fn navigation_expression_type(
@@ -2684,6 +2728,8 @@ impl Checker {
             ExpressionType::Null => true,
             ExpressionType::Value(source) => {
                 source == target
+                    || (matches!(source, TypeName::Integer | TypeName::Long)
+                        && matches!(target, TypeName::Integer | TypeName::Long))
                     || *source == TypeName::Object
                     || *target == TypeName::Object
                     || (*source == TypeName::Exception && target.is_exception())
@@ -2715,45 +2761,76 @@ impl Checker {
                 self.check_collection_constructor(ty, arguments)?;
             }
             CollectionInitializer::Elements(elements) => {
-                let element_type = match ty {
-                    TypeName::List(element) | TypeName::Set(element) => element.as_ref(),
-                    _ => {
-                        return Err(Diagnostic::new(
-                            format!("{} does not support an element initializer", ty.apex_name()),
-                            elements.first().map_or(Span::new(0, 0), Expression::span),
-                        ));
-                    }
-                };
-                for element in elements {
-                    let actual = self.expression_type(element)?;
-                    self.require_assignable(element_type, &actual, element.span())?;
-                }
+                self.validate_collection_elements(ty, elements)?;
             }
             CollectionInitializer::MapEntries(entries) => {
-                let TypeName::Map(key_type, value_type) = ty else {
-                    return Err(Diagnostic::new(
-                        format!("{} does not support a map initializer", ty.apex_name()),
-                        entries.first().map_or(Span::new(0, 0), |entry| entry.span),
-                    ));
-                };
-                for entry in entries {
-                    let actual_key = self.expression_type(&entry.key)?;
-                    self.require_assignable(key_type, &actual_key, entry.key.span())?;
-                    let actual_value = self.expression_type(&entry.value)?;
-                    self.require_assignable(value_type, &actual_value, entry.value.span())?;
-                }
+                self.validate_map_initializer(ty, entries)?;
             }
-            CollectionInitializer::SizedArray(size) => {
-                if !matches!(ty, TypeName::List(_)) {
-                    return Err(Diagnostic::new(
-                        format!("{} cannot be allocated with an array size", ty.apex_name()),
-                        size.span(),
-                    ));
-                }
-                self.require_operand(size, &TypeName::Integer, size.span())?;
-            }
+            CollectionInitializer::SizedArray(size) => self.validate_array_size(ty, size)?,
         }
         Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn validate_collection_elements(
+        &mut self,
+        ty: &TypeName,
+        elements: &[Expression],
+    ) -> Result<(), Diagnostic> {
+        let element_type = match ty {
+            TypeName::List(element) | TypeName::Set(element) => element.as_ref(),
+            _ => {
+                return Err(Diagnostic::new(
+                    format!("{} does not support an element initializer", ty.apex_name()),
+                    elements.first().map_or(Span::new(0, 0), Expression::span),
+                ));
+            }
+        };
+        for element in elements {
+            let actual = self.expression_type(element)?;
+            self.require_assignable(element_type, &actual, element.span())?;
+        }
+        Ok(())
+    }
+
+    fn validate_map_initializer(
+        &mut self,
+        ty: &TypeName,
+        entries: &[crate::ast::MapEntry],
+    ) -> Result<(), Diagnostic> {
+        let TypeName::Map(key_type, value_type) = ty else {
+            return Err(Diagnostic::new(
+                format!("{} does not support a map initializer", ty.apex_name()),
+                entries.first().map_or(Span::new(0, 0), |entry| entry.span),
+            ));
+        };
+        for entry in entries {
+            let actual_key = self.expression_type(&entry.key)?;
+            self.require_assignable(key_type, &actual_key, entry.key.span())?;
+            let actual_value = self.expression_type(&entry.value)?;
+            self.require_assignable(value_type, &actual_value, entry.value.span())?;
+        }
+        Ok(())
+    }
+
+    fn validate_array_size(&mut self, ty: &TypeName, size: &Expression) -> Result<(), Diagnostic> {
+        if !matches!(ty, TypeName::List(_)) {
+            return Err(Diagnostic::new(
+                format!("{} cannot be allocated with an array size", ty.apex_name()),
+                size.span(),
+            ));
+        }
+        let size_type = self.expression_type(size)?;
+        if matches!(
+            size_type,
+            ExpressionType::Value(TypeName::Integer | TypeName::Long)
+        ) {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                format!("array size requires Integer, found {}", size_type.name()),
+                size.span(),
+            ))
+        }
     }
 
     fn check_collection_constructor(
@@ -2786,59 +2863,126 @@ impl Checker {
     fn assignment_target_type(
         &mut self,
         target: &AssignmentTarget,
+        require_read: bool,
     ) -> Result<TypeName, Diagnostic> {
         match target {
             AssignmentTarget::Variable(identifier) => {
-                if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
-                    self.references
-                        .insert(identifier.span, ReferenceTarget::Local);
-                    return Ok(ty);
-                }
-                let class_id = self
-                    .current_class
-                    .ok_or_else(|| unknown_variable(identifier))?;
-                let member = self
-                    .class_value_member(class_id, &identifier.canonical)
-                    .ok_or_else(|| unknown_variable(identifier))?;
-                self.ensure_member_access(member.target, &member.write_access, identifier.span)?;
-                if !member.writable {
-                    return Err(Diagnostic::new(
-                        format!("member `{}` is read-only", identifier.spelling),
-                        identifier.span,
-                    ));
-                }
-                let is_static = member.modifiers.contains(&Modifier::Static);
-                if self.current_static && !is_static {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "instance member `{}` is unavailable in a static context",
-                            identifier.spelling
-                        ),
-                        identifier.span,
-                    ));
-                }
-                self.references.insert(
-                    identifier.span,
-                    if is_static {
-                        ReferenceTarget::StaticMember(member.target)
-                    } else {
-                        ReferenceTarget::InstanceMember(member.target)
-                    },
-                );
-                Ok(member.ty)
+                self.variable_assignment_target_type(identifier, require_read)
             }
             AssignmentTarget::Index {
-                collection, index, ..
-            } => self.index_type(collection, index),
+                collection,
+                index,
+                span,
+            } => {
+                let ty = self.index_type(collection, index)?;
+                self.places.insert(*span, PlaceTarget::ListIndex);
+                Ok(ty)
+            }
             AssignmentTarget::Member {
                 receiver,
                 member,
                 span,
-            } => match self.member_access_type(receiver, member, *span, true)? {
-                ExpressionType::Value(ty) => Ok(ty),
-                _ => unreachable!("member access always has a value type"),
-            },
+            } => self.member_assignment_target_type(receiver, member, *span, require_read),
         }
+    }
+
+    fn variable_assignment_target_type(
+        &mut self,
+        identifier: &Identifier,
+        require_read: bool,
+    ) -> Result<TypeName, Diagnostic> {
+        if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
+            self.references
+                .insert(identifier.span, ReferenceTarget::Local);
+            self.places.insert(identifier.span, PlaceTarget::Local);
+            return Ok(ty);
+        }
+        let class_id = self
+            .current_class
+            .ok_or_else(|| unknown_variable(identifier))?;
+        let member = self
+            .class_value_member(class_id, &identifier.canonical)
+            .ok_or_else(|| unknown_variable(identifier))?;
+        self.ensure_member_access(member.target, &member.write_access, identifier.span)?;
+        self.ensure_member_is_mutable(identifier, &member, require_read)?;
+        let is_static = member.modifiers.contains(&Modifier::Static);
+        if self.current_static && !is_static {
+            return Err(Diagnostic::new(
+                format!(
+                    "instance member `{}` is unavailable in a static context",
+                    identifier.spelling
+                ),
+                identifier.span,
+            ));
+        }
+        let reference = if is_static {
+            ReferenceTarget::StaticMember(member.target)
+        } else {
+            ReferenceTarget::InstanceMember(member.target)
+        };
+        let place = if is_static {
+            PlaceTarget::StaticMember(member.target)
+        } else {
+            PlaceTarget::InstanceMember(member.target)
+        };
+        self.references.insert(identifier.span, reference);
+        self.places.insert(identifier.span, place);
+        Ok(member.ty)
+    }
+
+    fn ensure_member_is_mutable(
+        &self,
+        identifier: &Identifier,
+        member: &ClassValueMember,
+        require_read: bool,
+    ) -> Result<(), Diagnostic> {
+        if !member.writable {
+            return Err(Diagnostic::new(
+                format!("member `{}` is read-only", identifier.spelling),
+                identifier.span,
+            ));
+        }
+        if require_read && !member.readable {
+            return Err(Diagnostic::new(
+                format!("member `{}` is write-only", identifier.spelling),
+                identifier.span,
+            ));
+        }
+        if require_read {
+            self.ensure_member_access(member.target, &member.read_access, identifier.span)?;
+        }
+        Ok(())
+    }
+
+    fn member_assignment_target_type(
+        &mut self,
+        receiver: &Expression,
+        member: &Identifier,
+        span: Span,
+        require_read: bool,
+    ) -> Result<TypeName, Diagnostic> {
+        if require_read {
+            self.member_access_type(receiver, member, span, false)?;
+        }
+        let ty = match self.member_access_type(receiver, member, span, true)? {
+            ExpressionType::Value(ty) => ty,
+            _ => unreachable!("member access always has a value type"),
+        };
+        let place = match self.members.get(&span).copied() {
+            Some(MemberTarget::Static(target)) => PlaceTarget::StaticMember(target),
+            Some(MemberTarget::Instance(target)) => PlaceTarget::InstanceMember(target),
+            Some(MemberTarget::SObjectField {
+                object_id,
+                field_id,
+            }) => PlaceTarget::SObjectField {
+                object_id: ObjectTypeId::from_index(object_id),
+                field_id: FieldId::from_index(field_id),
+            },
+            Some(MemberTarget::SObjectRelationship { .. } | MemberTarget::TriggerContext(_))
+            | None => return Err(Diagnostic::new("member is not assignable", span)),
+        };
+        self.places.insert(span, place);
+        Ok(ty)
     }
 
     fn index_type(
@@ -3185,11 +3329,42 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         match operator {
             UnaryOperator::Positive | UnaryOperator::Negate => {
+                if operator == UnaryOperator::Negate
+                    && matches!(
+                        operand,
+                        Expression::IntegerLiteral(value, _)
+                            if *value == i64::from(i32::MAX) + 1
+                    )
+                {
+                    self.unary_operations.insert(
+                        operator_span,
+                        CheckedUnaryOperation::Negate(NumericKind::Integer),
+                    );
+                    return Ok(ExpressionType::Value(TypeName::Integer));
+                }
+                if operator == UnaryOperator::Negate
+                    && matches!(
+                        operand,
+                        Expression::LongLiteral(value, _)
+                            if *value == i128::from(i64::MAX) + 1
+                    )
+                {
+                    self.unary_operations.insert(
+                        operator_span,
+                        CheckedUnaryOperation::Negate(NumericKind::Long),
+                    );
+                    return Ok(ExpressionType::Value(TypeName::Long));
+                }
                 let ty = self.expression_type(operand)?;
-                if matches!(
-                    ty,
-                    ExpressionType::Value(TypeName::Integer | TypeName::Decimal)
-                ) {
+                if let Some(kind) = numeric_kind(&ty) {
+                    self.unary_operations.insert(
+                        operator_span,
+                        if operator == UnaryOperator::Positive {
+                            CheckedUnaryOperation::Positive(kind)
+                        } else {
+                            CheckedUnaryOperation::Negate(kind)
+                        },
+                    );
                     Ok(ty)
                 } else {
                     Err(Diagnostic::new(
@@ -3202,8 +3377,20 @@ impl Checker {
                 self.require_operand(operand, &TypeName::Boolean, operator_span)?;
                 Ok(ExpressionType::Value(TypeName::Boolean))
             }
+            UnaryOperator::BitwiseNot => {
+                let ty = self.expression_type(operand)?;
+                let Some(kind) = integral_kind(&ty) else {
+                    return Err(Diagnostic::new(
+                        format!("expected Integer or Long operand, found {}", ty.name()),
+                        operator_span,
+                    ));
+                };
+                self.unary_operations
+                    .insert(operator_span, CheckedUnaryOperation::BitwiseNot(kind));
+                Ok(ty)
+            }
             UnaryOperator::PrefixIncrement | UnaryOperator::PrefixDecrement => {
-                self.require_mutable_integer(operand, operator_span)
+                self.require_mutable_integral(operand, operator_span)
             }
         }
     }
@@ -3214,7 +3401,7 @@ impl Checker {
         _operator: PostfixOperator,
         operator_span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
-        self.require_mutable_integer(operand, operator_span)
+        self.require_mutable_integral(operand, operator_span)
     }
 
     fn binary_type(
@@ -3226,29 +3413,18 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         let left_type = self.expression_type(left)?;
         let right_type = self.expression_type(right)?;
+        self.checked_binary_type(left_type, operator, right_type, operator_span)
+    }
+
+    fn checked_binary_type(
+        &mut self,
+        left_type: ExpressionType,
+        operator: BinaryOperator,
+        right_type: ExpressionType,
+        operator_span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
         match operator {
-            BinaryOperator::Add => {
-                if left_type == ExpressionType::Value(TypeName::Integer)
-                    && right_type == ExpressionType::Value(TypeName::Integer)
-                {
-                    Ok(ExpressionType::Value(TypeName::Integer))
-                } else if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
-                    Ok(ExpressionType::Value(TypeName::Decimal))
-                } else if (left_type == ExpressionType::Value(TypeName::String)
-                    || right_type == ExpressionType::Value(TypeName::String))
-                    && left_type != ExpressionType::Void
-                    && right_type != ExpressionType::Void
-                {
-                    Ok(ExpressionType::Value(TypeName::String))
-                } else {
-                    Err(invalid_binary_operands(
-                        operator,
-                        &left_type,
-                        &right_type,
-                        operator_span,
-                    ))
-                }
-            }
+            BinaryOperator::Add => self.checked_add_type(left_type, right_type, operator_span),
             BinaryOperator::Subtract
             | BinaryOperator::Multiply
             | BinaryOperator::Divide
@@ -3256,90 +3432,143 @@ impl Checker {
             | BinaryOperator::Less
             | BinaryOperator::LessEqual
             | BinaryOperator::Greater
-            | BinaryOperator::GreaterEqual => {
-                if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
-                    if matches!(
-                        operator,
-                        BinaryOperator::Less
-                            | BinaryOperator::LessEqual
-                            | BinaryOperator::Greater
-                            | BinaryOperator::GreaterEqual
-                    ) {
-                        Ok(ExpressionType::Value(TypeName::Boolean))
-                    } else {
-                        Ok(
-                            if left_type == ExpressionType::Value(TypeName::Integer)
-                                && right_type == ExpressionType::Value(TypeName::Integer)
-                            {
-                                ExpressionType::Value(TypeName::Integer)
-                            } else {
-                                ExpressionType::Value(TypeName::Decimal)
-                            },
-                        )
-                    }
-                } else if matches!(
-                    (&left_type, &right_type),
-                    (
-                        ExpressionType::Value(TypeName::Date),
-                        ExpressionType::Value(TypeName::Date)
-                    ) | (
-                        ExpressionType::Value(TypeName::Datetime),
-                        ExpressionType::Value(TypeName::Datetime)
-                    ) | (
-                        ExpressionType::Value(TypeName::Time),
-                        ExpressionType::Value(TypeName::Time)
-                    )
-                ) && matches!(
-                    operator,
-                    BinaryOperator::Less
-                        | BinaryOperator::LessEqual
-                        | BinaryOperator::Greater
-                        | BinaryOperator::GreaterEqual
-                ) {
-                    Ok(ExpressionType::Value(TypeName::Boolean))
-                } else {
-                    Err(invalid_binary_operands(
-                        operator,
-                        &left_type,
-                        &right_type,
-                        operator_span,
-                    ))
-                }
-            }
+            | BinaryOperator::GreaterEqual => self.checked_numeric_or_temporal_type(
+                left_type,
+                operator,
+                right_type,
+                operator_span,
+            ),
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                let comparable = match (&left_type, &right_type) {
-                    (ExpressionType::Value(left), ExpressionType::Value(right)) => left == right,
-                    (ExpressionType::Null, ExpressionType::Value(_))
-                    | (ExpressionType::Value(_), ExpressionType::Null)
-                    | (ExpressionType::Null, ExpressionType::Null) => true,
-                    (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
-                };
-                if comparable {
-                    Ok(ExpressionType::Value(TypeName::Boolean))
-                } else {
-                    Err(invalid_binary_operands(
-                        operator,
-                        &left_type,
-                        &right_type,
-                        operator_span,
-                    ))
-                }
+                checked_equality_type(left_type, operator, right_type, operator_span)
+            }
+            BinaryOperator::BitwiseAnd | BinaryOperator::BitwiseOr | BinaryOperator::BitwiseXor => {
+                self.checked_bitwise_type(left_type, operator, right_type, operator_span)
+            }
+            BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight
+            | BinaryOperator::UnsignedShiftRight => {
+                self.checked_shift_type(left_type, operator, right_type, operator_span)
             }
             BinaryOperator::And | BinaryOperator::Or => {
-                if left_type == ExpressionType::Value(TypeName::Boolean)
-                    && right_type == ExpressionType::Value(TypeName::Boolean)
-                {
-                    Ok(ExpressionType::Value(TypeName::Boolean))
-                } else {
-                    Err(invalid_binary_operands(
-                        operator,
-                        &left_type,
-                        &right_type,
-                        operator_span,
-                    ))
-                }
+                checked_boolean_type(left_type, operator, right_type, operator_span)
             }
         }
+    }
+
+    fn checked_add_type(
+        &mut self,
+        left_type: ExpressionType,
+        right_type: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if let Some(kind) = promoted_numeric_kind(&left_type, &right_type) {
+            self.binary_operations.insert(
+                span,
+                CheckedBinaryOperation::Numeric {
+                    operator: BinaryOperator::Add,
+                    kind,
+                },
+            );
+            return Ok(ExpressionType::Value(numeric_type(kind)));
+        }
+        let includes_string = left_type == ExpressionType::Value(TypeName::String)
+            || right_type == ExpressionType::Value(TypeName::String);
+        if includes_string
+            && left_type != ExpressionType::Void
+            && right_type != ExpressionType::Void
+        {
+            self.binary_operations
+                .insert(span, CheckedBinaryOperation::StringConcat);
+            return Ok(ExpressionType::Value(TypeName::String));
+        }
+        Err(invalid_binary_operands(
+            BinaryOperator::Add,
+            &left_type,
+            &right_type,
+            span,
+        ))
+    }
+
+    fn checked_numeric_or_temporal_type(
+        &mut self,
+        left_type: ExpressionType,
+        operator: BinaryOperator,
+        right_type: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if is_numeric_type(&left_type) && is_numeric_type(&right_type) {
+            if is_ordering_operator(operator) {
+                return Ok(ExpressionType::Value(TypeName::Boolean));
+            }
+            let kind = promoted_numeric_kind(&left_type, &right_type)
+                .expect("numeric operands have a promoted kind");
+            self.binary_operations
+                .insert(span, CheckedBinaryOperation::Numeric { operator, kind });
+            return Ok(ExpressionType::Value(numeric_type(kind)));
+        }
+        if is_ordering_operator(operator) && same_temporal_type(&left_type, &right_type) {
+            return Ok(ExpressionType::Value(TypeName::Boolean));
+        }
+        Err(invalid_binary_operands(
+            operator,
+            &left_type,
+            &right_type,
+            span,
+        ))
+    }
+
+    fn checked_bitwise_type(
+        &mut self,
+        left_type: ExpressionType,
+        operator: BinaryOperator,
+        right_type: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let boolean = ExpressionType::Value(TypeName::Boolean);
+        if left_type == boolean && right_type == boolean {
+            self.binary_operations
+                .insert(span, CheckedBinaryOperation::BooleanBitwise(operator));
+            return Ok(ExpressionType::Value(TypeName::Boolean));
+        }
+        if let Some(kind) = promoted_integral_kind(&left_type, &right_type) {
+            self.binary_operations
+                .insert(span, CheckedBinaryOperation::Integral { operator, kind });
+            return Ok(ExpressionType::Value(numeric_type(kind)));
+        }
+        Err(invalid_binary_operands(
+            operator,
+            &left_type,
+            &right_type,
+            span,
+        ))
+    }
+
+    fn checked_shift_type(
+        &mut self,
+        left_type: ExpressionType,
+        operator: BinaryOperator,
+        right_type: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Some(kind) = integral_kind(&left_type) else {
+            return Err(invalid_binary_operands(
+                operator,
+                &left_type,
+                &right_type,
+                span,
+            ));
+        };
+        if right_type != ExpressionType::Value(TypeName::Integer) {
+            return Err(invalid_binary_operands(
+                operator,
+                &left_type,
+                &right_type,
+                span,
+            ));
+        }
+        self.binary_operations
+            .insert(span, CheckedBinaryOperation::Shift { operator, kind });
+        Ok(ExpressionType::Value(numeric_type(kind)))
     }
 
     fn conditional_type(
@@ -3586,29 +3815,41 @@ impl Checker {
         }
     }
 
-    fn require_mutable_integer(
+    fn require_mutable_integral(
         &mut self,
         operand: &Expression,
         operator_span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let actual = match operand {
             Expression::Variable(identifier) => {
-                self.assignment_target_type(&AssignmentTarget::Variable(identifier.clone()))?
+                self.assignment_target_type(&AssignmentTarget::Variable(identifier.clone()), true)?
             }
             Expression::Index {
-                collection, index, ..
-            } => self.index_type(collection, index)?,
+                collection,
+                index,
+                span,
+            } => self.assignment_target_type(
+                &AssignmentTarget::Index {
+                    collection: collection.clone(),
+                    index: index.clone(),
+                    span: *span,
+                },
+                true,
+            )?,
             Expression::MemberAccess {
                 receiver,
                 member,
                 safe_navigation: false,
                 span,
                 ..
-            } => self.assignment_target_type(&AssignmentTarget::Member {
-                receiver: receiver.clone(),
-                member: member.clone(),
-                span: *span,
-            })?,
+            } => self.assignment_target_type(
+                &AssignmentTarget::Member {
+                    receiver: receiver.clone(),
+                    member: member.clone(),
+                    span: *span,
+                },
+                true,
+            )?,
             Expression::MemberAccess {
                 navigation_span, ..
             } => {
@@ -3624,16 +3865,16 @@ impl Checker {
                 ));
             }
         };
-        if actual != TypeName::Integer {
+        if !matches!(actual, TypeName::Integer | TypeName::Long) {
             return Err(Diagnostic::new(
                 format!(
-                    "increment/decrement requires Integer, found {}",
+                    "increment/decrement requires Integer or Long, found {}",
                     actual.apex_name()
                 ),
                 operator_span,
             ));
         }
-        Ok(ExpressionType::Value(TypeName::Integer))
+        Ok(ExpressionType::Value(actual))
     }
 
     fn lookup(&self, canonical: &str) -> Option<&TypeName> {
@@ -3740,6 +3981,7 @@ fn is_future_parameter_type(ty: &TypeName) -> bool {
         TypeName::String
             | TypeName::Boolean
             | TypeName::Integer
+            | TypeName::Long
             | TypeName::Decimal
             | TypeName::Date
             | TypeName::Datetime
@@ -3833,6 +4075,86 @@ fn is_statement_expression(expression: &Expression) -> bool {
     )
 }
 
+fn literal_expression_type(expression: &Expression) -> Option<Result<ExpressionType, Diagnostic>> {
+    Some(match expression {
+        Expression::StringLiteral(..) => Ok(ExpressionType::Value(TypeName::String)),
+        Expression::BooleanLiteral(..) => Ok(ExpressionType::Value(TypeName::Boolean)),
+        Expression::IntegerLiteral(value, _) if *value > i64::from(i32::MAX) => {
+            Ok(ExpressionType::Value(TypeName::Long))
+        }
+        Expression::IntegerLiteral(..) => Ok(ExpressionType::Value(TypeName::Integer)),
+        Expression::LongLiteral(value, span) if *value > i128::from(i64::MAX) => {
+            Err(Diagnostic::new("Long literal is out of range", *span))
+        }
+        Expression::LongLiteral(..) => Ok(ExpressionType::Value(TypeName::Long)),
+        Expression::DecimalLiteral(..) => Ok(ExpressionType::Value(TypeName::Decimal)),
+        Expression::NullLiteral(..) => Ok(ExpressionType::Null),
+        _ => return None,
+    })
+}
+
+fn checked_equality_type(
+    left: ExpressionType,
+    operator: BinaryOperator,
+    right: ExpressionType,
+    span: Span,
+) -> Result<ExpressionType, Diagnostic> {
+    let comparable = match (&left, &right) {
+        (ExpressionType::Value(left_value), ExpressionType::Value(right_value)) => {
+            left_value == right_value || (is_numeric_type(&left) && is_numeric_type(&right))
+        }
+        (ExpressionType::Null, ExpressionType::Value(_))
+        | (ExpressionType::Value(_), ExpressionType::Null)
+        | (ExpressionType::Null, ExpressionType::Null) => true,
+        (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
+    };
+    if comparable {
+        Ok(ExpressionType::Value(TypeName::Boolean))
+    } else {
+        Err(invalid_binary_operands(operator, &left, &right, span))
+    }
+}
+
+fn checked_boolean_type(
+    left: ExpressionType,
+    operator: BinaryOperator,
+    right: ExpressionType,
+    span: Span,
+) -> Result<ExpressionType, Diagnostic> {
+    let boolean = ExpressionType::Value(TypeName::Boolean);
+    if left == boolean && right == boolean {
+        Ok(ExpressionType::Value(TypeName::Boolean))
+    } else {
+        Err(invalid_binary_operands(operator, &left, &right, span))
+    }
+}
+
+fn is_ordering_operator(operator: BinaryOperator) -> bool {
+    matches!(
+        operator,
+        BinaryOperator::Less
+            | BinaryOperator::LessEqual
+            | BinaryOperator::Greater
+            | BinaryOperator::GreaterEqual
+    )
+}
+
+fn same_temporal_type(left: &ExpressionType, right: &ExpressionType) -> bool {
+    matches!(
+        (left, right),
+        (
+            ExpressionType::Value(TypeName::Date),
+            ExpressionType::Value(TypeName::Date)
+        ) | (
+            ExpressionType::Value(TypeName::Datetime),
+            ExpressionType::Value(TypeName::Datetime)
+        ) | (
+            ExpressionType::Value(TypeName::Time),
+            ExpressionType::Value(TypeName::Time)
+        )
+    )
+}
+
 fn invalid_binary_operands(
     operator: BinaryOperator,
     left: &ExpressionType,
@@ -3873,8 +4195,76 @@ fn is_platform_static_owner(name: &str) -> bool {
 fn is_numeric_type(ty: &ExpressionType) -> bool {
     matches!(
         ty,
-        ExpressionType::Value(TypeName::Integer | TypeName::Decimal)
+        ExpressionType::Value(TypeName::Integer | TypeName::Long | TypeName::Decimal)
     )
+}
+
+fn numeric_kind(ty: &ExpressionType) -> Option<NumericKind> {
+    match ty {
+        ExpressionType::Value(TypeName::Integer) => Some(NumericKind::Integer),
+        ExpressionType::Value(TypeName::Long) => Some(NumericKind::Long),
+        ExpressionType::Value(TypeName::Decimal) => Some(NumericKind::Decimal),
+        _ => None,
+    }
+}
+
+fn integral_kind(ty: &ExpressionType) -> Option<NumericKind> {
+    match ty {
+        ExpressionType::Value(TypeName::Integer) => Some(NumericKind::Integer),
+        ExpressionType::Value(TypeName::Long) => Some(NumericKind::Long),
+        _ => None,
+    }
+}
+
+fn promoted_numeric_kind(left: &ExpressionType, right: &ExpressionType) -> Option<NumericKind> {
+    let left = numeric_kind(left)?;
+    let right = numeric_kind(right)?;
+    Some(
+        if left == NumericKind::Decimal || right == NumericKind::Decimal {
+            NumericKind::Decimal
+        } else if left == NumericKind::Long || right == NumericKind::Long {
+            NumericKind::Long
+        } else {
+            NumericKind::Integer
+        },
+    )
+}
+
+fn promoted_integral_kind(left: &ExpressionType, right: &ExpressionType) -> Option<NumericKind> {
+    let left = integral_kind(left)?;
+    let right = integral_kind(right)?;
+    Some(if left == NumericKind::Long || right == NumericKind::Long {
+        NumericKind::Long
+    } else {
+        NumericKind::Integer
+    })
+}
+
+fn numeric_type(kind: NumericKind) -> TypeName {
+    match kind {
+        NumericKind::Integer => TypeName::Integer,
+        NumericKind::Long => TypeName::Long,
+        NumericKind::Decimal => TypeName::Decimal,
+    }
+}
+
+fn compound_binary_operator(operator: AssignmentOperator) -> BinaryOperator {
+    match operator {
+        AssignmentOperator::Assign => {
+            unreachable!("simple assignment does not have a binary operation")
+        }
+        AssignmentOperator::Add => BinaryOperator::Add,
+        AssignmentOperator::Subtract => BinaryOperator::Subtract,
+        AssignmentOperator::Multiply => BinaryOperator::Multiply,
+        AssignmentOperator::Divide => BinaryOperator::Divide,
+        AssignmentOperator::Remainder => BinaryOperator::Remainder,
+        AssignmentOperator::BitwiseAnd => BinaryOperator::BitwiseAnd,
+        AssignmentOperator::BitwiseOr => BinaryOperator::BitwiseOr,
+        AssignmentOperator::BitwiseXor => BinaryOperator::BitwiseXor,
+        AssignmentOperator::ShiftLeft => BinaryOperator::ShiftLeft,
+        AssignmentOperator::ShiftRight => BinaryOperator::ShiftRight,
+        AssignmentOperator::UnsignedShiftRight => BinaryOperator::UnsignedShiftRight,
+    }
 }
 
 fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
@@ -3890,6 +4280,12 @@ fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
         BinaryOperator::GreaterEqual => ">=",
         BinaryOperator::Equal => "==",
         BinaryOperator::NotEqual => "!=",
+        BinaryOperator::BitwiseAnd => "&",
+        BinaryOperator::BitwiseOr => "|",
+        BinaryOperator::BitwiseXor => "^",
+        BinaryOperator::ShiftLeft => "<<",
+        BinaryOperator::ShiftRight => ">>",
+        BinaryOperator::UnsignedShiftRight => ">>>",
         BinaryOperator::And => "&&",
         BinaryOperator::Or => "||",
     }

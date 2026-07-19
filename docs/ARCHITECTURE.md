@@ -495,6 +495,33 @@ authentication response is never serialized. Release readiness still requires
 the hermetic local CI policy, check-only deployment, unaffected
 schema/configuration drift, and every selected test outcome to agree.
 
+## M19 checked place and numeric architecture
+
+M19 keeps lexing, parsing, checking, and execution separate while closing the
+operator surface. The lexer applies maximal munch to every arithmetic,
+bitwise, and shift compound token. Type parsing then consumes a logical `>` at
+a time from `>`, `>>`, or `>>>`, so the same token stream preserves shift
+expressions and adjacent nested-generic closers. Declaration, cast, and
+enhanced-for lookahead clone the parser cursor and invoke the real type grammar
+instead of maintaining a second positional grammar.
+
+Semantic analysis records the selected operation and assignable target in HIR.
+Numeric operations carry their checked Integer, Long, or Decimal family;
+Boolean bitwise, integral bitwise, shifts, and String concatenation are
+separate closed variants. Assignable SObject schema positions cross the
+checker/runtime boundary as typed `ObjectTypeId` and `FieldId` values rather
+than raw positions.
+
+At runtime, simple assignment, compound assignment, and prefix/postfix mutation
+all resolve an ephemeral `Place`. A Place evaluates a receiver and List index
+once, retains the resulting storage identity, and then provides one read/write
+path for locals, class members, List elements, and SObject fields. Compound
+operations read before evaluating the right operand and write only after the
+checked operation succeeds. The numeric module owns checked 32-bit Integer,
+64-bit Long, Decimal arithmetic, divide/remainder faults, bitwise operations,
+shift-distance masking, and signed/unsigned shift behavior; runtime does not
+reselect operand families from source syntax.
+
 ## Phase 2 architecture constraints
 
 The Phase 2 roadmap expands compatibility without weakening the existing phase

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "bitwise-long-compound-output",
+      "project": ".",
+      "entrypoint": {
+        "kind": "invoke",
+        "target": "BitwiseProfile.run"
+      },
+      "compare": [
+        "compile",
+        "output"
+      ]
+    },
+    {
+      "name": "bitwise-long-compound-tests",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "BitwiseProfileTest.longBoundsAndCompoundArithmeticAreStable"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

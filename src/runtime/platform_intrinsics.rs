@@ -138,7 +138,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             P::DatetimeGetTime => {
                 expect_no_arguments(arguments, span)?;
-                Ok(Value::Integer(
+                Ok(Value::Long(
                     expect_datetime(receiver, span)?.timestamp_millis(),
                 ))
             }
@@ -948,6 +948,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Null(_) => JsonValue::Null,
             Value::Boolean(value) => JsonValue::Bool(*value),
             Value::Integer(value) => JsonValue::Number((*value).into()),
+            Value::Long(value) => JsonValue::Number((*value).into()),
             Value::Decimal(value) => JsonValue::Number(
                 JsonNumber::from_str(&value.normalize().to_string())
                     .map_err(|_| platform_error("Decimal cannot be serialized to JSON", span))?,
@@ -1034,7 +1035,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             JsonValue::String(value) => Value::String(value),
             JsonValue::Number(value) => {
                 if let Some(integer) = value.as_i64() {
-                    Value::Integer(integer)
+                    if i32::try_from(integer).is_ok() {
+                        Value::Integer(integer)
+                    } else {
+                        Value::Long(integer)
+                    }
                 } else {
                     Value::Decimal(
                         Decimal::from_str(&value.to_string())

@@ -1,0 +1,8 @@
+<CustomObject>
+    <label>Counter</label>
+    <pluralLabel>Counters</pluralLabel>
+    <nameField>
+        <label>Counter Name</label>
+        <type>Text</type>
+    </nameField>
+</CustomObject>

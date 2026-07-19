@@ -232,7 +232,7 @@ impl Checker {
                     &[0],
                     arguments,
                 )?;
-                if !matches!(element, TypeName::String | TypeName::Integer) {
+                if !sortable_list_element(element) {
                     return Err(Diagnostic::new(
                         format!(
                             "method `sort` requires List<String> or List<Integer>, found {}",
@@ -812,7 +812,7 @@ impl Checker {
             }
             SystemIntrinsic::CurrentTimeMillis => {
                 require_static_arity("System", method, arguments.len(), &[0], arguments)?;
-                Ok(ExpressionType::Value(TypeName::Integer))
+                Ok(ExpressionType::Value(TypeName::Long))
             }
         }?;
         Ok((IntrinsicId::System(intrinsic), result))
@@ -1178,7 +1178,7 @@ impl Checker {
                     &[0],
                     arguments,
                 )?;
-                TypeName::Integer
+                TypeName::Long
             }
             P::DatetimeDate | P::DatetimeDateGmt => {
                 require_arity(
@@ -1623,6 +1623,13 @@ impl Checker {
             ))
         }
     }
+}
+
+fn sortable_list_element(element: &TypeName) -> bool {
+    matches!(
+        element,
+        TypeName::String | TypeName::Integer | TypeName::Long
+    )
 }
 
 pub(super) fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> Diagnostic {
