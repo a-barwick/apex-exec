@@ -239,10 +239,10 @@ impl<'program> IndexBuilder<'program> {
         for (class_id, class) in self.program.classes.iter().enumerate() {
             self.add(class.name.span, Symbol::Class(class_id), true);
             if let Some(superclass) = &class.superclass {
-                self.named_type(superclass);
+                self.visit_named_type(superclass);
             }
             for interface in &class.interfaces {
-                self.named_type(interface);
+                self.visit_named_type(interface);
             }
             for (member_id, member) in class.members.iter().enumerate() {
                 let symbol = Symbol::Member(ClassMemberId {
@@ -294,7 +294,7 @@ impl<'program> IndexBuilder<'program> {
             self.visit_statement(statement);
         }
         for trigger in &self.program.triggers {
-            self.named_type(&trigger.object);
+            self.visit_named_type(&trigger.object);
             self.visit_statement(&trigger.body);
         }
     }
@@ -514,6 +514,39 @@ mod tests {
         assert_eq!(edits.len(), 2);
         assert!(edits.iter().all(|edit| edit.new_text == "answer"));
         assert!(index.rename(&entry, 1, column, "not valid").is_err());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generic_hierarchy_arguments_resolve_to_class_definitions() {
+        let root = temporary_project();
+        let classes = root.join("force-app/main/default/classes");
+        fs::create_dir_all(&classes).unwrap();
+        fs::write(
+            root.join("sfdx-project.json"),
+            r#"{"packageDirectories":[{"path":"force-app","default":true}],"namespace":"","sourceApiVersion":"65.0"}"#,
+        )
+        .unwrap();
+        fs::write(classes.join("Scope.cls"), "public class Scope {}").unwrap();
+        let batch_source = "\
+public class BatchWork implements Database.Batchable<Scope> {
+    public List<Scope> start(Database.BatchableContext context) {
+        return new List<Scope>();
+    }
+    public void execute(Database.BatchableContext context, List<Scope> scope) {}
+    public void finish(Database.BatchableContext context) {}
+}";
+        let batch = classes.join("BatchWork.cls");
+        fs::write(&batch, batch_source).unwrap();
+
+        let compilation = crate::project::compile(&root).unwrap();
+        let index = EditorIndex::new(&compilation);
+        let column = batch_source.find("<Scope>").unwrap() + 2;
+        let definition = index
+            .definition(&batch, 1, column)
+            .expect("the Batchable generic argument should resolve");
+        assert_eq!(definition.path.file_name().unwrap(), "Scope.cls");
 
         fs::remove_dir_all(root).unwrap();
     }
