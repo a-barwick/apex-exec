@@ -10,10 +10,11 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Active feature milestone:** M24 — partial DML results and bulk failure
+- **Completed feature milestone:** M24 — partial DML results and bulk failure
   fidelity on `codex/milestone-24-partial-dml-results`
-- **Feature policy:** M18 through M23 are complete. M24 is the active language
-  milestone and is prioritized by the frozen M22 impact census.
+- **Active feature milestone:** M25 — API-version compatibility profiles
+- **Feature policy:** M18 through M24 are complete. M25 is the next language
+  milestone and requires the typed compatibility context gate below.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.

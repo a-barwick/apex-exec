@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "partial-dml-result-fidelity",
+      "compile": {
+        "success": true
+      },
+      "tests": [
+        {
+          "name": "M24PartialDmlTest.partialResultsMatchSalesforce",
+          "outcome": "pass"
+        }
+      ]
+    }
+  ]
+}

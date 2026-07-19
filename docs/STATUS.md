@@ -426,13 +426,24 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   source-line coverage measures **84.82%** overall (27,363/32,259) and
   **84.16%** across the 20 instrumented M23-changed production modules
   (13,580/16,135).
+- M24 adds checked `SaveResult`, `UpsertResult`, `DeleteResult`,
+  `UndeleteResult`, `Database.Error`, and `StatusCode` values; ordered partial
+  outcomes; successful caller Id propagation; external-ID upsert; unique-field
+  enforcement; and atomic statement/`allOrNone=true` behavior. Mixed failures
+  use Salesforce-shaped subset retries capped at three attempts, with trigger
+  refiring and query/callout limit reset. The guarded API 65.0 fixture and
+  credential-free replay report 2/2 selected dimensions matching. Verification
+  passes 424 ordinary tests with no failures or ignored tests, formatting,
+  Clippy, documentation validation, and the Lizard ratchet. LLVM source-line
+  coverage measures **84.86%** overall (28,410/33,480) and **83.79%** across
+  the 12 instrumented M24-changed production modules (12,388/14,785).
 
 ## Immediate target
 
-M23 broader SOQL fidelity is complete. M24 partial DML results and bulk failure
-fidelity is the next planned feature milestone. The package tracker is in
-`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
-baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+M24 partial DML results and bulk failure fidelity is complete. M25 API-version
+compatibility profiles are the next planned feature milestone. The package
+tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
+evidence baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 

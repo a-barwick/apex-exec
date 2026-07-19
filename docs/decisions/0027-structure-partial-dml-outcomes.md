@@ -66,9 +66,17 @@ returns result objects.
 For `allOrNone=false`, deterministic preflight failures become row outcomes
 without entering trigger contexts. Rows that pass preflight are grouped by
 their concrete insert, update, delete, or undelete operation while preserving
-relative input order. Before triggers receive the complete valid concrete
-group, persistence receives the possibly mutated before images, and after
-triggers receive only rows that persisted successfully.
+relative input order. Before triggers receive the complete concrete group,
+persistence receives the possibly mutated before images, and after triggers
+receive rows that persisted successfully in that attempt.
+
+If an attempt returns mixed row outcomes, its database and caller-record
+changes roll back and the surviving subset is attempted again. Before and
+after triggers refire on that subset. The process is bounded to three attempts;
+a row error on the third raises the documented retry `DmlException`. Trigger
+static state and timeline observations remain visible across attempts, while
+query and callout governor counters reset to the state before the first
+attempt.
 
 An uncaught trigger or host failure rolls back the affected concrete group and
 returns a structured failure for every row in that group. Earlier successful
@@ -78,8 +86,8 @@ the entry point rolls them back with the rest of the transaction.
 
 Generated Ids are copied to caller SObjects only for successful rows. Failed
 rows retain their exact pre-call runtime state. One source-level DML request
-consumes one DML-statement limit observation regardless of row count,
-insert/update partitioning, or outcome mix.
+consumes one DML-statement limit observation regardless of row count, retry
+count, insert/update partitioning, or outcome mix.
 
 ### Keep matching and validation in the platform database
 

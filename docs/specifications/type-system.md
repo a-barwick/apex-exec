@@ -4,10 +4,10 @@
 
 Primitive expression checking, recursive generic collections, array aliases,
 checked methods/exceptions, class/interface project types, test assertions,
-ternary and runtime-type expressions, and the curated M10 scalar/platform
-surface are implemented. The shipped summary is `docs/COMPATIBILITY.md`.
-General platform conversions, `Double`, nested declarations, and the remaining
-Phase 2 declaration forms remain later work.
+ternary and runtime-type expressions, the curated M10 platform surface, nested
+M20 declarations, and M24 DML result/error types are implemented. The shipped
+summary is `docs/COMPATIBILITY.md`. General platform conversions, `Double`, and
+the remaining Phase 2 declaration forms remain later work.
 
 ## Names
 
@@ -146,6 +146,16 @@ overloads are compile-time errors.
 Bare call receivers are resolved as variables before supported static type
 names. A local variable named `String`, `Math`, or `System` therefore retains
 normal variable precedence.
+
+### DML result types
+
+**Implemented for M24.** `Database.SaveResult`, `UpsertResult`,
+`DeleteResult`, `UndeleteResult`, `Database.Error`, and `StatusCode` are
+distinct checked types. Database DML returns a scalar result for a scalar
+SObject and `List<ResultType>` for a typed SObject List. Result and error
+members are closed checked targets; unsupported members or invalid arity fail
+before execution. Status constants retain platform identity and compare by
+their typed status value rather than by rendered text.
 
 ## User-defined methods and overloads
 

@@ -92,6 +92,21 @@ DML tree atomic while an outer entry-point checkpoint provides uncaught
 transaction rollback. Trigger enter/exit and DML events share one deterministic
 host timeline.
 
+M24 replaces the former all-or-nothing host DML vector with typed requests,
+preflight records, and one structured outcome per input index. The checker
+records the concrete result kind, optional schema-indexed external-ID field,
+and all-or-none argument position in HIR. Runtime owns Apex result allocation,
+trigger dispatch, and caller-value restoration; the platform database owns
+matching, required/unique validation, Id allocation, recycle-bin behavior, and
+persistence.
+
+Partial saves execute within bounded nested checkpoints. A mixed attempt emits
+results for failed rows, rolls back database/caller state, resets retry-scoped
+query/callout counters, and refires triggers on the surviving subset, for at
+most three attempts. Trigger and timeline observations remain visible across
+attempts, while one source request records one DML-statement limit. Atomic
+calls and statements retain the outer DML-tree rollback boundary.
+
 M10 extends the checked intrinsic boundary with a closed curated platform API
 set. Scalar date/time/decimal/ID values live directly in interpreter values;
 stateful regex, Blob, describe, and HTTP objects live in the execution store by

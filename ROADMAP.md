@@ -623,7 +623,7 @@ shortcut in the interpreter.
 
 ### M24 — Partial DML results and bulk failure fidelity
 
-**Status:** Active on `codex/milestone-24-partial-dml-results`
+**Status:** Complete on `codex/milestone-24-partial-dml-results`
 
 #### Scope
 
@@ -642,6 +642,31 @@ shortcut in the interpreter.
 Mixed-success bulk DML returns Salesforce-shaped per-row results and preserves
 the documented transaction/trigger boundary, verified locally and through M13
 differential fixtures.
+
+#### Completion evidence
+
+- `Database.insert`, `update`, `upsert`, `delete`, and `undelete` return the
+  checked scalar/List result shape for the input. Results retain input order,
+  successful Ids, upsert-created flags, and structured status/message/field
+  errors; failed caller records are restored.
+- DML statements and `allOrNone=true` remain atomic and catchable. Partial
+  saves use at most three bounded attempts, refire before/after triggers on the
+  surviving subset, reset query/callout governor observations before retries,
+  and charge one source DML statement.
+- External-ID upsert is schema checked, case-insensitive, supports update versus
+  insert created flags, and reports missing, ambiguous, and unique-value
+  failures without string-classifying platform errors.
+- The unchanged API 65.0 conformance test passes locally and in the guarded
+  disposable Salesforce org using CLI 2.143.6. The sanitized evidence records
+  2/2 selected dimensions matching and byte-identical offline replay.
+- Verification passes 424 Rust tests with no failures or ignored tests,
+  formatting, Clippy with warnings denied, documentation validation, and the
+  pinned maintainability ratchet. LLVM source-line coverage is 28,410/33,480
+  (**84.86%**) overall and 12,388/14,785 (**83.79%**) across the 12
+  instrumented M24-changed production modules.
+- North Star remains 7/7 lexer and 7/7 parser indicators, 14/14 total, a change
+  of zero from the pre-M24 baseline. These are syntax indicators, not runtime
+  or Salesforce compatibility percentages.
 
 ### M25 — API-version compatibility profiles
 

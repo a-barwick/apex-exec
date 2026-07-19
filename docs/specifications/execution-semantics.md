@@ -277,5 +277,12 @@ schema.
 Every DML tree owns a nested checkpoint that includes active records, recycled
 records, and deterministic ID sequences. A caught DML/trigger failure rolls
 back that tree, while an exception escaping an invocation or test rolls back
-the outer entry point. Partial `allOrNone=false` result semantics remain M24
-work.
+the outer entry point.
+
+M24 adds structured partial saves. False `allOrNone` returns exactly one
+ordered result per input, copies generated Ids only to successful caller
+records, and retries the subset that survived a failed attempt. Attempts are
+bounded at three. Triggers refire on each subset; trigger/static observations
+remain visible, while retry-scoped query and callout counters reset to their
+pre-first-attempt values. A third-attempt row error raises a catchable
+`DmlException`. Statements and omitted/true `allOrNone` remain atomic.
