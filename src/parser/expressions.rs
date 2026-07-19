@@ -323,7 +323,11 @@ impl Parser {
 
     pub(super) fn parse_new_expression(&mut self) -> Result<Expression, Diagnostic> {
         let start = self.expect_simple(TokenKind::New, "expected `new`")?;
-        let (mut ty, _) = self.parse_base_type_name()?;
+        let (ty, _) = self.parse_base_type_name()?;
+
+        if self.check(&TokenKind::LeftBracket) {
+            return self.parse_new_array_expression(start, ty);
+        }
 
         if ty.is_exception() {
             if !self.check(&TokenKind::LeftParen) {
@@ -358,26 +362,7 @@ impl Parser {
             });
         }
 
-        let (initializer, end) = if self.check(&TokenKind::LeftBracket) {
-            self.advance();
-            if self.check(&TokenKind::RightBracket) {
-                self.advance();
-                ty = TypeName::List(Box::new(ty));
-                if !self.check(&TokenKind::LeftBrace) {
-                    return Err(Diagnostic::new(
-                        "expected an array initializer after `[]`",
-                        self.current().span,
-                    ));
-                }
-                self.parse_collection_initializer(&ty)?
-            } else {
-                let size = self.parse_expression()?;
-                let end =
-                    self.expect_simple(TokenKind::RightBracket, "expected `]` after array size")?;
-                ty = TypeName::List(Box::new(ty));
-                (CollectionInitializer::SizedArray(Box::new(size)), end.span)
-            }
-        } else if self.check(&TokenKind::LeftParen) {
+        let (initializer, end) = if self.check(&TokenKind::LeftParen) {
             let (arguments, end) = self.parse_argument_list()?;
             (CollectionInitializer::Arguments(arguments), end)
         } else if self.check(&TokenKind::LeftBrace) {
@@ -389,6 +374,35 @@ impl Parser {
             ));
         };
 
+        Ok(Expression::NewCollection {
+            ty,
+            initializer,
+            span: start.span.merge(end),
+        })
+    }
+
+    fn parse_new_array_expression(
+        &mut self,
+        start: crate::token::Token,
+        element_type: TypeName,
+    ) -> Result<Expression, Diagnostic> {
+        self.expect_simple(TokenKind::LeftBracket, "expected `[`")?;
+        let ty = TypeName::List(Box::new(element_type));
+        let (initializer, end) = if self.check(&TokenKind::RightBracket) {
+            self.advance();
+            if !self.check(&TokenKind::LeftBrace) {
+                return Err(Diagnostic::new(
+                    "expected an array initializer after `[]`",
+                    self.current().span,
+                ));
+            }
+            self.parse_collection_initializer(&ty)?
+        } else {
+            let size = self.parse_expression()?;
+            let end =
+                self.expect_simple(TokenKind::RightBracket, "expected `]` after array size")?;
+            (CollectionInitializer::SizedArray(Box::new(size)), end.span)
+        };
         Ok(Expression::NewCollection {
             ty,
             initializer,

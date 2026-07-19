@@ -19,13 +19,19 @@ use std::{
 };
 
 mod asynchronous;
+mod class_initialization;
+mod context;
 mod database;
 mod host;
 mod image;
+mod instrumentation;
 mod intrinsics;
 mod platform_intrinsics;
 mod store;
+mod value_graph;
 
+use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DEPTH};
+use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
     LimitUsage, M10_COMPATIBILITY_PROFILE, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind,
@@ -33,31 +39,12 @@ pub use host::{
     TriggerStage, UserContext,
 };
 use image::RuntimeImage;
+pub(crate) use instrumentation::{BranchHits, ExecutionTrace};
+pub use instrumentation::{DebugFrame, DebugSnapshot, DebugTraceStatus, DebugVariable};
+use instrumentation::{
+    DebugSnapshotBuilder, InstrumentationPolicy, InstrumentationState, StatementInstrumentation,
+};
 use store::ExecutionStore;
-
-/// A debugger-visible variable captured immediately before an Apex statement.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugVariable {
-    pub name: String,
-    pub type_name: String,
-    pub value: String,
-}
-
-/// One source-mapped Apex frame in a debugger snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugFrame {
-    pub name: String,
-    pub span: Span,
-}
-
-/// Immutable runtime state captured at one executable statement boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugSnapshot {
-    pub span: Span,
-    pub frames: Vec<DebugFrame>,
-    pub variables: Vec<DebugVariable>,
-    pub transaction_event_count: usize,
-}
 
 /// Complete deterministic trace from one debugger launch.
 #[derive(Clone, Debug)]
@@ -66,18 +53,8 @@ pub struct DebugExecution {
     pub diagnostic: Option<Diagnostic>,
     pub snapshots: Vec<DebugSnapshot>,
     pub timeline: Vec<TransactionEvent>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BranchHits {
-    pub true_hits: usize,
-    pub false_hits: usize,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ExecutionTrace {
-    pub executed_statements: BTreeSet<Span>,
-    pub branches: BTreeMap<Span, BranchHits>,
+    /// Retained-memory accounting and truncation state for `snapshots`.
+    pub trace_status: DebugTraceStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -216,6 +193,7 @@ struct PendingAsyncJob {
     kind: AsyncJobKind,
     work: AsyncWork,
     span: Span,
+    execution_context: ExecutionContext,
 }
 
 #[derive(Clone, Debug)]
@@ -286,8 +264,9 @@ pub struct Interpreter<'program, H = RecordingHost> {
     trigger_depth: usize,
     read_only_sobjects: BTreeSet<SObjectId>,
     read_only_collections: BTreeSet<CollectionId>,
-    trace: ExecutionTrace,
-    debug_snapshots: Vec<DebugSnapshot>,
+    instrumentation: InstrumentationState,
+    execution_context: ExecutionContext,
+    initialization_stack: Vec<usize>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
     next_async_sequence: u64,
@@ -305,43 +284,18 @@ impl<'program> Interpreter<'program, RecordingHost> {
     /// can navigate the immutable snapshots without pausing the language
     /// runtime on an editor or transport thread.
     pub fn debug_execute(mut self, program: &'program Program) -> DebugExecution {
-        let result = self.prepare(program).and_then(|_| {
-            self.begin_transaction(Span::new(0, 0))?;
-            let result = (|| {
-                self.initialize_static_fields()?;
-                for statement in &program.statements {
-                    match self.execute_statement(statement)? {
-                        Flow::Normal => {}
-                        Flow::Return(None) => break,
-                        Flow::Return(Some(_)) => {
-                            return Err(Diagnostic::new(
-                                "value return escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                        Flow::Break => {
-                            return Err(Diagnostic::new(
-                                "`break` escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                        Flow::Continue => {
-                            return Err(Diagnostic::new(
-                                "`continue` escaped semantic validation",
-                                statement.span(),
-                            ));
-                        }
-                    }
-                }
-                Ok(())
-            })();
-            self.finish_transaction(result, Span::new(0, 0))
-        });
+        self.execution_context = ExecutionContext::debugger();
+        debug_assert!(self.execution_context.is_debug());
+        self.instrumentation
+            .configure(InstrumentationPolicy::Debugger);
+        let result = self.execute_anonymous_entry(program);
+        let (snapshots, trace_status) = self.instrumentation.take_debug_trace();
         DebugExecution {
             output: self.host.take_debug_output(),
             diagnostic: result.err(),
-            snapshots: self.debug_snapshots,
+            snapshots,
             timeline: self.host.timeline_events().to_vec(),
+            trace_status,
         }
     }
 
@@ -353,28 +307,31 @@ impl<'program> Interpreter<'program, RecordingHost> {
         class_name: &str,
         method_name: &str,
     ) -> DebugExecution {
-        let result = self.prepare(program).and_then(|_| {
-            self.begin_transaction(Span::new(0, 0))?;
-            let result = self
-                .initialize_static_fields()
-                .and_then(|_| self.invoke_static_inner(class_name, method_name));
-            self.finish_transaction(result, Span::new(0, 0))
-        });
+        self.execution_context = ExecutionContext::debugger();
+        debug_assert!(self.execution_context.is_debug());
+        self.instrumentation
+            .configure(InstrumentationPolicy::Debugger);
+        let result = self.invoke_static_entry(program, class_name, method_name);
         let mut output = self.host.take_debug_output();
         let diagnostic = match result {
             Ok(value) => {
                 if !matches!(value, Value::Void) {
-                    output.push(self.display_value(&value));
+                    let rendered = self.render_value(&value);
+                    self.instrumentation
+                        .record_render_truncation(rendered.truncated);
+                    output.push(rendered.text);
                 }
                 None
             }
             Err(diagnostic) => Some(diagnostic),
         };
+        let (snapshots, trace_status) = self.instrumentation.take_debug_trace();
         DebugExecution {
             output,
             diagnostic,
-            snapshots: self.debug_snapshots,
+            snapshots,
             timeline: self.host.timeline_events().to_vec(),
+            trace_status,
         }
     }
 }
@@ -398,8 +355,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             trigger_depth: 0,
             read_only_sobjects: BTreeSet::new(),
             read_only_collections: BTreeSet::new(),
-            trace: ExecutionTrace::default(),
-            debug_snapshots: Vec::new(),
+            instrumentation: InstrumentationState::new(InstrumentationPolicy::None),
+            execution_context: ExecutionContext::ordinary(),
+            initialization_stack: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
             next_async_sequence: 1,
@@ -412,37 +370,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     /// [`PlatformHost::take_debug_output`]. A streaming host that keeps the
     /// default implementation returns an empty vector.
     pub fn execute(mut self, program: &'program Program) -> Result<Vec<String>, Diagnostic> {
-        self.prepare(program)?;
-        self.begin_transaction(Span::new(0, 0))?;
-        let result = (|| {
-            self.initialize_static_fields()?;
-            for statement in &program.statements {
-                match self.execute_statement(statement)? {
-                    Flow::Normal => {}
-                    Flow::Return(None) => break,
-                    Flow::Return(Some(_)) => {
-                        return Err(Diagnostic::new(
-                            "value return escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                    Flow::Break => {
-                        return Err(Diagnostic::new(
-                            "`break` escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                    Flow::Continue => {
-                        return Err(Diagnostic::new(
-                            "`continue` escaped semantic validation",
-                            statement.span(),
-                        ));
-                    }
-                }
-            }
-            Ok(())
-        })();
-        self.finish_transaction(result, Span::new(0, 0))?;
+        self.execution_context = ExecutionContext::ordinary();
+        self.instrumentation.configure(InstrumentationPolicy::None);
+        self.execute_anonymous_entry(program)?;
         Ok(self.host.take_debug_output())
     }
 
@@ -457,15 +387,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         class_name: &str,
         method_name: &str,
     ) -> Result<Vec<String>, Diagnostic> {
-        self.prepare(program)?;
-        self.begin_transaction(Span::new(0, 0))?;
-        let result = self
-            .initialize_static_fields()
-            .and_then(|_| self.invoke_static_inner(class_name, method_name));
-        let value = self.finish_transaction(result, Span::new(0, 0))?;
+        self.execution_context = ExecutionContext::ordinary();
+        self.instrumentation.configure(InstrumentationPolicy::None);
+        let value = self.invoke_static_entry(program, class_name, method_name)?;
         let mut output = self.host.take_debug_output();
         if !matches!(value, Value::Void) {
-            output.push(self.display_value(&value));
+            output.push(self.stringify_value(&value));
         }
         Ok(output)
     }
@@ -524,10 +451,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         setup_methods: &[ClassMemberId],
         test_method: ClassMemberId,
     ) -> TestExecution {
+        self.execution_context = ExecutionContext::test();
+        self.instrumentation
+            .configure(InstrumentationPolicy::Coverage);
         let result = self.prepare(program).and_then(|_| {
             self.begin_transaction(Span::new(0, 0))?;
             let result = (|| {
-                self.initialize_static_fields()?;
                 for setup_method in setup_methods {
                     let span = self.class_method_span(*setup_method)?;
                     self.evaluate_class_method(*setup_method, None, &[], span, false)?;
@@ -541,8 +470,53 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         TestExecution {
             output: self.host.take_debug_output(),
             diagnostic: result.err(),
-            trace: self.trace,
+            trace: self.instrumentation.take_trace(),
         }
+    }
+
+    fn execute_anonymous_entry(&mut self, program: &'program Program) -> Result<(), Diagnostic> {
+        self.prepare(program)?;
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = (|| {
+            for statement in &program.statements {
+                match self.execute_statement(statement)? {
+                    Flow::Normal => {}
+                    Flow::Return(None) => break,
+                    Flow::Return(Some(_)) => {
+                        return Err(Diagnostic::new(
+                            "value return escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Break => {
+                        return Err(Diagnostic::new(
+                            "`break` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                    Flow::Continue => {
+                        return Err(Diagnostic::new(
+                            "`continue` escaped semantic validation",
+                            statement.span(),
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.finish_transaction(result, Span::new(0, 0))
+    }
+
+    fn invoke_static_entry(
+        &mut self,
+        program: &'program Program,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Value, Diagnostic> {
+        self.prepare(program)?;
+        self.begin_transaction(Span::new(0, 0))?;
+        let result = self.invoke_static_inner(class_name, method_name);
+        self.finish_transaction(result, Span::new(0, 0))
     }
 
     fn class_method_span(&self, target: ClassMemberId) -> Result<Span, Diagnostic> {
@@ -613,71 +587,132 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.image().classes()
     }
 
-    fn initialize_static_fields(&mut self) -> Result<(), Diagnostic> {
-        for (class_id, class) in self.classes().iter().enumerate() {
-            for (member_id, member) in class.members.iter().enumerate() {
-                let target = ClassMemberId {
-                    class_id,
-                    member_id,
-                };
-                match member {
-                    ClassMember::Field(field) if field.modifiers.contains(&Modifier::Static) => {
-                        self.store.insert_static_slot(
-                            target,
-                            Slot {
-                                ty: field.ty.clone(),
-                                value: Value::Null(Some(field.ty.clone())),
-                            },
-                        );
-                    }
-                    ClassMember::Property(property)
-                        if property.modifiers.contains(&Modifier::Static) =>
-                    {
-                        self.store.insert_static_slot(
-                            target,
-                            Slot {
-                                ty: property.ty.clone(),
-                                value: Value::Null(Some(property.ty.clone())),
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-            }
+    fn ensure_class_initialized(
+        &mut self,
+        class_id: usize,
+        use_span: Span,
+    ) -> Result<(), Diagnostic> {
+        for class_id in self.class_lineage_base_first(class_id) {
+            self.initialize_one_class(class_id, use_span)?;
         }
-
-        let classes = self.classes();
-        for (class_id, class) in classes.iter().enumerate() {
-            self.current_declaring_class = Some(class_id);
-            for (member_id, member) in class.members.iter().enumerate() {
-                let ClassMember::Field(field) = member else {
-                    continue;
-                };
-                if !field.modifiers.contains(&Modifier::Static) {
-                    continue;
-                }
-                if let Some(initializer) = &field.initializer {
-                    let target = ClassMemberId {
-                        class_id,
-                        member_id,
-                    };
-                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
-                    self.store
-                        .static_slot_mut(&target)
-                        .expect("static field was allocated")
-                        .value = value;
-                }
-            }
-        }
-        self.current_declaring_class = None;
         Ok(())
     }
 
-    fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
-        if !matches!(statement, Statement::Block { .. }) {
-            self.capture_debug_snapshot(statement.span());
+    fn initialize_one_class(&mut self, class_id: usize, use_span: Span) -> Result<(), Diagnostic> {
+        match self.store.class_initialization(class_id) {
+            ClassInitializationState::Initialized => return Ok(()),
+            ClassInitializationState::Failed(diagnostic) => return Err(diagnostic),
+            ClassInitializationState::Initializing => {
+                if self.initialization_stack.last() == Some(&class_id) {
+                    return Ok(());
+                }
+                return Err(self.class_initialization_cycle(class_id, use_span));
+            }
+            ClassInitializationState::Uninitialized => {}
         }
-        self.trace.executed_statements.insert(statement.span());
+        if self.initialization_stack.len() >= MAX_CLASS_INITIALIZATION_DEPTH {
+            return Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "static initialization exceeds the depth limit of {MAX_CLASS_INITIALIZATION_DEPTH} classes"
+                ),
+                use_span,
+            ));
+        }
+
+        self.store
+            .set_class_initialization(class_id, ClassInitializationState::Initializing);
+        self.initialization_stack.push(class_id);
+        let saved_declaring = self.current_declaring_class.replace(class_id);
+        let saved_receiver = self.current_receiver.take();
+        let result = self.initialize_class_members(class_id);
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        let popped = self.initialization_stack.pop();
+        debug_assert_eq!(popped, Some(class_id));
+
+        self.store.set_class_initialization(
+            class_id,
+            match &result {
+                Ok(()) => ClassInitializationState::Initialized,
+                Err(diagnostic) => ClassInitializationState::Failed(diagnostic.clone()),
+            },
+        );
+        result
+    }
+
+    fn initialize_class_members(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        let members = self.classes()[class_id].members.clone();
+        for (member_id, member) in members.iter().enumerate() {
+            let (ty, is_static) = match member {
+                ClassMember::Field(field) => {
+                    (&field.ty, field.modifiers.contains(&Modifier::Static))
+                }
+                ClassMember::Property(property) => {
+                    (&property.ty, property.modifiers.contains(&Modifier::Static))
+                }
+                _ => continue,
+            };
+            if is_static {
+                self.store.insert_static_slot(
+                    ClassMemberId {
+                        class_id,
+                        member_id,
+                    },
+                    Slot {
+                        ty: ty.clone(),
+                        value: Value::Null(Some(ty.clone())),
+                    },
+                );
+            }
+        }
+
+        for (member_id, member) in members.iter().enumerate() {
+            let ClassMember::Field(field) = member else {
+                continue;
+            };
+            if !field.modifiers.contains(&Modifier::Static) {
+                continue;
+            }
+            let Some(initializer) = &field.initializer else {
+                continue;
+            };
+            let target = ClassMemberId {
+                class_id,
+                member_id,
+            };
+            let value = typed_value(self.evaluate(initializer)?, &field.ty);
+            self.store
+                .static_slot_mut(&target)
+                .expect("static field was allocated")
+                .value = value;
+        }
+        Ok(())
+    }
+
+    fn class_initialization_cycle(&self, class_id: usize, span: Span) -> Diagnostic {
+        let cycle_start = self
+            .initialization_stack
+            .iter()
+            .position(|active| *active == class_id)
+            .unwrap_or(0);
+        let mut names = self.initialization_stack[cycle_start..]
+            .iter()
+            .map(|active| self.classes()[*active].name.spelling.as_str())
+            .collect::<Vec<_>>();
+        names.push(self.classes()[class_id].name.spelling.as_str());
+        runtime_exception(
+            "TypeException",
+            format!("circular static initialization: {}", names.join(" -> ")),
+            span,
+        )
+    }
+
+    fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, Diagnostic> {
+        self.instrument_statement(
+            statement.span(),
+            !matches!(statement, Statement::Block { .. }),
+        );
         match statement {
             Statement::VariableDeclaration {
                 ty,
@@ -912,12 +947,116 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     }
 
     fn record_branch(&mut self, span: Span, outcome: bool) {
-        let hits = self.trace.branches.entry(span).or_default();
-        if outcome {
-            hits.true_hits += 1;
-        } else {
-            hits.false_hits += 1;
+        self.instrumentation.record_branch(span, outcome);
+    }
+
+    fn instrument_statement(&mut self, span: Span, capture_debugger: bool) {
+        let StatementInstrumentation::CaptureDebugger {
+            retained_byte_budget,
+        } = self
+            .instrumentation
+            .before_statement(span, capture_debugger)
+        else {
+            return;
+        };
+        let (snapshot, retained_bytes, truncated) =
+            self.build_debug_snapshot(span, retained_byte_budget);
+        self.instrumentation
+            .record_debug_snapshot(snapshot, retained_bytes, truncated);
+    }
+
+    fn build_debug_snapshot(
+        &self,
+        span: Span,
+        retained_byte_budget: usize,
+    ) -> (DebugSnapshot, usize, bool) {
+        let mut builder = DebugSnapshotBuilder::new(
+            span,
+            self.host.transaction_event_count(),
+            retained_byte_budget,
+        );
+        self.capture_debug_frames(span, &mut builder);
+        self.capture_debug_variables(&mut builder);
+        builder.finish()
+    }
+
+    fn capture_debug_frames(&self, span: Span, builder: &mut DebugSnapshotBuilder) {
+        let leaf_name = self
+            .call_stack
+            .last()
+            .map_or("<anonymous>", |call| call.method.as_str());
+        if !builder.can_push_frame() {
+            builder.mark_truncated();
+        } else if builder.push_frame(leaf_name.to_owned(), span) {
+            for index in (0..self.call_stack.len().saturating_sub(1)).rev() {
+                if !builder.can_push_frame() {
+                    builder.mark_truncated();
+                    break;
+                }
+                if !builder.push_frame(
+                    self.call_stack[index].method.clone(),
+                    self.call_stack[index + 1].call_span,
+                ) {
+                    break;
+                }
+            }
+            if let Some(call) = self.call_stack.first() {
+                if builder.can_push_frame() {
+                    builder.push_frame("<anonymous>".to_owned(), call.call_span);
+                } else {
+                    builder.mark_truncated();
+                }
+            }
         }
+    }
+
+    fn capture_debug_variables(&self, builder: &mut DebugSnapshotBuilder) {
+        let limit = builder.remaining_variable_slots();
+        let (visible, variables_truncated) = self.visible_debug_names(limit);
+        if variables_truncated {
+            builder.mark_truncated();
+        }
+        for canonical in visible {
+            if !builder.can_push_variable() {
+                builder.mark_truncated();
+                break;
+            }
+            let slot = self
+                .lookup_canonical(canonical)
+                .expect("selected debugger variable remains visible");
+            let rendered = self.render_value(&slot.value);
+            if rendered.truncated {
+                builder.mark_truncated();
+            }
+            if !builder.push_variable(canonical.to_owned(), slot.ty.apex_name(), rendered.text) {
+                break;
+            }
+        }
+    }
+
+    fn visible_debug_names(&self, limit: usize) -> (BTreeSet<&str>, bool) {
+        let mut visible = BTreeSet::<&str>::new();
+        let mut truncated = false;
+        for scope in &self.scopes {
+            for canonical in scope.keys().map(String::as_str) {
+                if visible.contains(canonical) {
+                    continue;
+                }
+                if visible.len() < limit {
+                    visible.insert(canonical);
+                    continue;
+                }
+                truncated = true;
+                let Some(last) = visible.last().copied() else {
+                    continue;
+                };
+                if canonical < last {
+                    visible.remove(last);
+                    visible.insert(canonical);
+                }
+            }
+        }
+        (visible, truncated)
     }
 
     fn execute_for_each(
@@ -1512,6 +1651,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         receiver: Option<ObjectId>,
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
@@ -1571,6 +1711,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
@@ -1593,42 +1734,53 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(value)
             }
             ClassMember::Property(property) => {
-                let value = typed_value(value, &property.ty);
-                let accessor = property
-                    .accessors
-                    .iter()
-                    .find(|accessor| accessor.kind == AccessorKind::Set)
-                    .cloned()
-                    .ok_or_else(|| Diagnostic::new("property has no setter", span))?;
-                if let Some(body) = accessor.body {
-                    self.execute_property_setter(
-                        target,
-                        &property.name.spelling,
-                        &property.ty,
-                        receiver,
-                        &body,
-                        value.clone(),
-                        span,
-                    )?;
-                } else if property.modifiers.contains(&Modifier::Static) {
-                    self.store
-                        .static_slot_mut(&target)
-                        .expect("auto property storage exists")
-                        .value = value.clone();
-                } else {
-                    let receiver = receiver
-                        .ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
-                    self.store
-                        .object_mut(receiver)
-                        .fields
-                        .get_mut(&target)
-                        .expect("auto property storage exists")
-                        .value = value.clone();
-                }
-                Ok(value)
+                self.write_class_property(target, receiver, property, value, span)
             }
             _ => Err(Diagnostic::new("target is not a value member", span)),
         }
+    }
+
+    fn write_class_property(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        property: crate::ast::PropertyDeclaration,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let value = typed_value(value, &property.ty);
+        let accessor = property
+            .accessors
+            .iter()
+            .find(|accessor| accessor.kind == AccessorKind::Set)
+            .cloned()
+            .ok_or_else(|| Diagnostic::new("property has no setter", span))?;
+        if let Some(body) = accessor.body {
+            self.execute_property_setter(
+                target,
+                &property.name.spelling,
+                &property.ty,
+                receiver,
+                &body,
+                value.clone(),
+                span,
+            )?;
+        } else if property.modifiers.contains(&Modifier::Static) {
+            self.store
+                .static_slot_mut(&target)
+                .expect("auto property storage exists")
+                .value = value.clone();
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            self.store
+                .object_mut(receiver)
+                .fields
+                .get_mut(&target)
+                .expect("auto property storage exists")
+                .value = value.clone();
+        }
+        Ok(value)
     }
 
     fn evaluate_new_object(
@@ -1640,64 +1792,94 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .program()
             .call_target(span)
             .ok_or_else(|| Diagnostic::new("unresolved constructor", span))?;
-        if let CallTarget::PlatformConstructor(constructor) = target {
+        match target {
+            CallTarget::PlatformConstructor(constructor) => {
+                self.construct_platform_value(constructor, arguments, span)
+            }
+            CallTarget::SObjectConstructor { object_id } => {
+                self.construct_sobject(object_id, arguments, span)
+            }
+            CallTarget::Constructor {
+                class_id,
+                member_id,
+            } => {
+                let arguments = self.evaluate_arguments(arguments)?;
+                self.ensure_class_initialized(class_id, span)?;
+                self.construct_user_object(class_id, member_id, arguments, span)
+            }
+            _ => Err(Diagnostic::new("invalid constructor target", span)),
+        }
+    }
+
+    fn construct_platform_value(
+        &mut self,
+        constructor: crate::hir::PlatformConstructor,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if !arguments.is_empty() {
+            return Err(Diagnostic::new(
+                "platform constructor received unexpected arguments",
+                span,
+            ));
+        }
+        let value = match constructor {
+            crate::hir::PlatformConstructor::Http => PlatformValue::Http,
+            crate::hir::PlatformConstructor::HttpRequest => {
+                PlatformValue::HttpRequest(HttpRequestData::default())
+            }
+            crate::hir::PlatformConstructor::HttpResponse => {
+                PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+        };
+        Ok(self.store.allocate_platform(value))
+    }
+
+    fn construct_sobject(
+        &mut self,
+        object_id: Option<usize>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let object_id = if let Some(object_id) = object_id {
             if !arguments.is_empty() {
                 return Err(Diagnostic::new(
-                    "platform constructor received unexpected arguments",
+                    "typed SObject constructor received unexpected arguments",
                     span,
                 ));
             }
-            let value = match constructor {
-                crate::hir::PlatformConstructor::Http => PlatformValue::Http,
-                crate::hir::PlatformConstructor::HttpRequest => {
-                    PlatformValue::HttpRequest(HttpRequestData::default())
-                }
-                crate::hir::PlatformConstructor::HttpResponse => {
-                    PlatformValue::HttpResponse(HttpResponseData::default())
-                }
+            object_id
+        } else {
+            let [object_name] = arguments else {
+                return Err(Diagnostic::new(
+                    "dynamic SObject constructor requires one API name",
+                    span,
+                ));
             };
-            return Ok(self.store.allocate_platform(value));
-        }
-        if let CallTarget::SObjectConstructor { object_id } = target {
-            let object_id = if let Some(object_id) = object_id {
-                if !arguments.is_empty() {
-                    return Err(Diagnostic::new(
-                        "typed SObject constructor received unexpected arguments",
-                        span,
-                    ));
-                }
-                object_id
-            } else {
-                let [object_name] = arguments else {
-                    return Err(Diagnostic::new(
-                        "dynamic SObject constructor requires one API name",
-                        span,
-                    ));
-                };
-                let Value::String(object_name) = self.evaluate(object_name)? else {
-                    return Err(invalid_runtime_operands(object_name.span()));
-                };
-                self.program()
-                    .schema()
-                    .object_index(&object_name)
-                    .ok_or_else(|| {
-                        runtime_exception(
-                            "IllegalArgumentException",
-                            format!("unknown SObject `{object_name}`"),
-                            span,
-                        )
-                    })?
+            let Value::String(object_name) = self.evaluate(object_name)? else {
+                return Err(invalid_runtime_operands(object_name.span()));
             };
-            return Ok(self.store.allocate_sobject(object_id));
-        }
-        let CallTarget::Constructor {
-            class_id,
-            member_id,
-        } = target
-        else {
-            return Err(Diagnostic::new("invalid constructor target", span));
+            self.program()
+                .schema()
+                .object_index(&object_name)
+                .ok_or_else(|| {
+                    runtime_exception(
+                        "IllegalArgumentException",
+                        format!("unknown SObject `{object_name}`"),
+                        span,
+                    )
+                })?
         };
-        let arguments = self.evaluate_arguments(arguments)?;
+        Ok(self.store.allocate_sobject(object_id))
+    }
+
+    fn construct_user_object(
+        &mut self,
+        class_id: usize,
+        member_id: Option<usize>,
+        arguments: Vec<EvaluatedArgument>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
         let object_id = self.store.allocate_object(class_id);
         self.allocate_instance_fields(object_id, class_id);
         let lineage = self.class_lineage_base_first(class_id);
@@ -1892,6 +2074,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         } else {
             target
         };
+        self.ensure_class_initialized(target.class_id, span)?;
         let method = match self.classes()[target.class_id].members[target.member_id].clone() {
             ClassMember::Method(method) => method,
             _ => return Err(Diagnostic::new("method target is invalid", span)),
@@ -2644,7 +2827,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             BinaryOperator::Add => {
                 if left.has_string_type() || right.has_string_type() {
                     Ok(Value::String(
-                        self.display_value(&left) + &self.display_value(&right),
+                        self.stringify_value(&left) + &self.stringify_value(&right),
                     ))
                 } else {
                     match (&left, &right) {
@@ -3035,192 +3218,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         element_type
     }
 
-    fn values_equal(&self, left: &Value, right: &Value) -> bool {
-        match (left, right) {
-            (Value::String(left), Value::String(right)) => left == right,
-            (Value::Boolean(left), Value::Boolean(right)) => left == right,
-            (Value::Integer(left), Value::Integer(right)) => left == right,
-            (Value::Decimal(left), Value::Decimal(right)) => left == right,
-            (Value::Date(left), Value::Date(right)) => left == right,
-            (Value::Datetime(left), Value::Datetime(right)) => left == right,
-            (Value::Time(left), Value::Time(right)) => left == right,
-            (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
-            (Value::Platform(left), Value::Platform(right)) => left == right,
-            (Value::Collection(left), Value::Collection(right)) => {
-                self.collections_equal(*left, *right)
-            }
-            (Value::Object(left), Value::Object(right)) => left == right,
-            (Value::SObject(left), Value::SObject(right)) => left == right,
-            (Value::Exception(left), Value::Exception(right)) => left == right,
-            (Value::Null(_), Value::Null(_)) => true,
-            (Value::Void, Value::Void) => true,
-            _ => false,
-        }
-    }
-
-    fn operator_values_equal(&self, left: &Value, right: &Value) -> bool {
-        match (left, right) {
-            (Value::String(left), Value::String(right)) => {
-                left.to_lowercase() == right.to_lowercase()
-            }
-            _ => self.values_equal(left, right),
-        }
-    }
-
-    fn collections_equal(&self, left: CollectionId, right: CollectionId) -> bool {
-        if left == right {
-            return true;
-        }
-        match (self.collection(left), self.collection(right)) {
-            (
-                Collection::List { elements: left, .. },
-                Collection::List {
-                    elements: right, ..
-                },
-            ) => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right)
-                        .all(|(left, right)| self.values_equal(left, right))
-            }
-            (
-                Collection::Set { elements: left, .. },
-                Collection::Set {
-                    elements: right, ..
-                },
-            ) => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .all(|left| right.iter().any(|right| self.values_equal(left, right)))
-            }
-            (Collection::Map { entries: left, .. }, Collection::Map { entries: right, .. }) => {
-                left.len() == right.len()
-                    && left.iter().all(|(left_key, left_value)| {
-                        right.iter().any(|(right_key, right_value)| {
-                            self.values_equal(left_key, right_key)
-                                && self.values_equal(left_value, right_value)
-                        })
-                    })
-            }
-            _ => false,
-        }
-    }
-
-    fn display_value(&self, value: &Value) -> String {
-        match value {
-            Value::String(value) => value.clone(),
-            Value::Boolean(value) => value.to_string(),
-            Value::Integer(value) => value.to_string(),
-            Value::Decimal(value) => value.normalize().to_string(),
-            Value::Date(value) => value.format("%Y-%m-%d").to_string(),
-            Value::Datetime(value) => value.format("%Y-%m-%d %H:%M:%S").to_string(),
-            Value::Time(value) => value.format("%H:%M:%S%.3f").to_string(),
-            Value::Id(value) => value.clone(),
-            Value::Platform(id) => match self.store.platform(*id) {
-                PlatformValue::Blob(bytes) => format!("Blob[{}]", bytes.len()),
-                PlatformValue::Pattern(pattern) => pattern.clone(),
-                PlatformValue::Matcher { .. } => "Matcher".to_owned(),
-                PlatformValue::Http => "Http".to_owned(),
-                PlatformValue::HttpRequest(request) => {
-                    format!("HttpRequest[{} {}]", request.method, request.endpoint)
-                }
-                PlatformValue::HttpResponse(response) => {
-                    format!("HttpResponse[{} {}]", response.status_code, response.status)
-                }
-                PlatformValue::SObjectType(object_id)
-                | PlatformValue::DescribeSObject(object_id) => {
-                    self.program().schema().object_at(*object_id).map_or_else(
-                        || "Schema".to_owned(),
-                        |object| object.api_name().to_owned(),
-                    )
-                }
-                PlatformValue::AsyncContext { ty, job_id } => {
-                    format!("{}[{job_id}]", ty.apex_name())
-                }
-            },
-            Value::Collection(id) => match self.collection(*id) {
-                Collection::List { elements, .. } => format!(
-                    "({})",
-                    elements
-                        .iter()
-                        .map(|value| self.display_value(value))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Collection::Set { elements, .. } => format!(
-                    "{{{}}}",
-                    elements
-                        .iter()
-                        .map(|value| self.display_value(value))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Collection::Map { entries, .. } => format!(
-                    "{{{}}}",
-                    entries
-                        .iter()
-                        .map(|(key, value)| format!(
-                            "{}={}",
-                            self.display_value(key),
-                            self.display_value(value)
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
-            Value::Object(id) => {
-                let instance = self.store.object(*id);
-                format!(
-                    "{}@{}",
-                    self.classes()[instance.class_id].name.spelling,
-                    id.0
-                )
-            }
-            Value::SObject(id) => {
-                let instance = self.store.sobject(*id);
-                let object = self
-                    .program()
-                    .schema()
-                    .object_at(instance.object_id)
-                    .expect("runtime SObject schema index is valid");
-                let fields = instance
-                    .fields
-                    .iter()
-                    .map(|(field_id, value)| {
-                        let field = object
-                            .field_at(*field_id)
-                            .expect("runtime SObject field index is valid");
-                        format!("{}={}", field.api_name(), self.display_value(value))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}:{{{fields}}}", object.api_name())
-            }
-            Value::AggregateResult(id) => {
-                let fields = self
-                    .store
-                    .aggregate_result(*id)
-                    .iter()
-                    .map(|(name, value)| format!("{name}={value:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("AggregateResult:{{{fields}}}")
-            }
-            Value::Exception(exception) => {
-                let exception_type = exception.exception_type.as_deref().unwrap_or("Exception");
-                if exception.message.is_empty() {
-                    exception_type.to_owned()
-                } else {
-                    format!("{exception_type}: {}", exception.message)
-                }
-            }
-            Value::Null(_) => "null".to_owned(),
-            Value::Void => "void".to_owned(),
-        }
-    }
-
     fn allocate(&mut self, collection: Collection) -> Value {
         self.store.allocate_collection(collection)
     }
@@ -3257,49 +3254,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.scopes
             .last_mut()
             .expect("interpreter always has a scope")
-    }
-
-    fn capture_debug_snapshot(&mut self, span: Span) {
-        let mut visible = BTreeMap::<String, DebugVariable>::new();
-        for scope in &self.scopes {
-            for (canonical, slot) in scope {
-                visible.insert(
-                    canonical.clone(),
-                    DebugVariable {
-                        name: canonical.clone(),
-                        type_name: slot.ty.apex_name(),
-                        value: self.display_value(&slot.value),
-                    },
-                );
-            }
-        }
-        let mut frames = Vec::with_capacity(self.call_stack.len().max(1));
-        let leaf_name = self
-            .call_stack
-            .last()
-            .map_or("<anonymous>", |call| call.method.as_str());
-        frames.push(DebugFrame {
-            name: leaf_name.to_owned(),
-            span,
-        });
-        for index in (0..self.call_stack.len().saturating_sub(1)).rev() {
-            frames.push(DebugFrame {
-                name: self.call_stack[index].method.clone(),
-                span: self.call_stack[index + 1].call_span,
-            });
-        }
-        if let Some(call) = self.call_stack.first() {
-            frames.push(DebugFrame {
-                name: "<anonymous>".to_owned(),
-                span: call.call_span,
-            });
-        }
-        self.debug_snapshots.push(DebugSnapshot {
-            span,
-            frames,
-            variables: visible.into_values().collect(),
-            transaction_event_count: self.host.transaction_event_count(),
-        });
     }
 
     fn value_has_type(&self, value: &Value, target: &TypeName) -> bool {

@@ -188,6 +188,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             kind,
             work,
             span,
+            execution_context: self.execution_context.for_async_job(),
         });
         self.host.async_event(AsyncEvent {
             job_id: id.clone(),
@@ -221,9 +222,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 id: job.id.clone(),
                 kind: job.kind,
             });
-            self.begin_transaction(job.span)?;
-            let execution = self.execute_async_job(&job);
-            let result = self.finish_transaction(execution, job.span);
+            let previous_execution_context =
+                std::mem::replace(&mut self.execution_context, job.execution_context);
+            let result = self.execute_async_transaction(&job);
+            self.execution_context = previous_execution_context;
             self.current_async = previous;
             self.host.async_event(AsyncEvent {
                 job_id: job.id,
@@ -238,6 +240,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             result?;
         }
         Ok(())
+    }
+
+    fn execute_async_transaction(&mut self, job: &PendingAsyncJob) -> Result<(), Diagnostic> {
+        self.begin_transaction(job.span)?;
+        let execution = self.execute_async_job(job);
+        self.finish_transaction(execution, job.span)
     }
 
     fn execute_async_job(&mut self, job: &PendingAsyncJob) -> Result<(), Diagnostic> {

@@ -11,6 +11,9 @@
     "Programming Languages",
     "Debuggers"
   ],
+  "scripts": {
+    "test": "node --check extension.js"
+  },
   "activationEvents": [
     "onLanguage:apex",
     "onDebug:apex-exec"

@@ -1,6 +1,7 @@
 use super::{
     AggregateResultId, Collection, CollectionId, ObjectId, ObjectInstance, PlatformValue,
     PlatformValueId, SObjectId, SObjectInstance, Slot, Value,
+    class_initialization::ClassInitializationState,
 };
 use crate::hir::ClassMemberId;
 use crate::platform::DataValue;
@@ -19,6 +20,7 @@ pub(super) struct ExecutionStore {
     aggregate_results: Vec<BTreeMap<String, DataValue>>,
     platform_values: Vec<PlatformValue>,
     static_fields: HashMap<ClassMemberId, Slot>,
+    class_initialization: HashMap<usize, ClassInitializationState>,
 }
 
 impl ExecutionStore {
@@ -126,5 +128,33 @@ impl ExecutionStore {
 
     pub(super) fn static_slot_mut(&mut self, target: &ClassMemberId) -> Option<&mut Slot> {
         self.static_fields.get_mut(target)
+    }
+
+    pub(super) fn class_initialization(&self, class_id: usize) -> ClassInitializationState {
+        self.class_initialization
+            .get(&class_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(super) fn set_class_initialization(
+        &mut self,
+        class_id: usize,
+        state: ClassInitializationState,
+    ) {
+        self.class_initialization.insert(class_id, state);
+    }
+
+    #[cfg(test)]
+    pub(super) fn initialized_class_count(&self) -> usize {
+        self.class_initialization
+            .values()
+            .filter(|state| matches!(state, ClassInitializationState::Initialized))
+            .count()
+    }
+
+    #[cfg(test)]
+    pub(super) fn static_slot_count(&self) -> usize {
+        self.static_fields.len()
     }
 }

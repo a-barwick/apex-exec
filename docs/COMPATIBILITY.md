@@ -43,7 +43,7 @@ for the documented case.
 | Integer arithmetic | Yes | Yes | Yes | Simplified | `+`, `-`, `*`, `/`, `%`, unary signs; checked `i64` runtime behavior |
 | Comparison and equality | Yes | Yes | Yes | Compatible | Integer ordering; case-insensitive String `==`; same-type collection and null equality |
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&`, <code>&#124;&#124;</code>, and unary `!` |
-| String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; collection text uses deterministic local formatting |
+| String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; complete String content is preserved and collection text uses deterministic cycle-safe local formatting |
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on `Integer` variables and List indexes |
 | Ternary expression | Yes | Yes | Yes | Compatible | Right-associative, checked Boolean condition, common result type, lazy selected arm, and branch coverage |
 | `instanceof` | Yes | Yes | Yes | Compatible | Viable runtime alternatives over supported types, invariant generic identity, single evaluation, and null-false current-profile behavior |
@@ -59,16 +59,16 @@ for the documented case.
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
 | `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot |
-| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction supported |
+| Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction validates and supports primitive, `Object`, known custom-class, and core-exception elements |
 | Collection literals | Yes | Yes | Yes | Compatible | List/Set elements and Map `key => value` entries |
 | Collection indexing | Yes | Yes | Yes | Compatible | List/array reads and writes; Set/Map indexing is rejected |
 | Built-in method calls | Yes | Yes | Yes | Compatible | Fixed case-insensitive collection, String, Math, System, and core-exception surface; checked calls carry typed intrinsic IDs |
 | User-defined methods | Yes | Yes | Yes | Simplified | Class instance/static methods plus backwards-compatible top-level declarations; typed returns, overloads, recursion, and checked targets |
-| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts; invalid runtime casts throw `TypeException` |
+| Explicit casts | Yes | Yes | Yes | Simplified | Same-type, Object, core-exception, and related user-class/interface casts, structurally disambiguated from grouped member/index/postfix expressions; invalid runtime casts throw `TypeException` |
 | Exception control flow | Yes | Yes | Yes | Simplified | `try`, typed `catch`, `finally`, `throw`, rethrow, and core exception construction |
 | Runtime exception promotion | N/A | N/A | Yes | Compatible | Null dereference, bounds, arithmetic, String-range, and cast faults are catchable typed exceptions |
 | Runtime source stacks | N/A | N/A | Yes | Simplified | Method failures retain deterministic innermost-to-outermost source call frames, including independently mapped cross-file callers |
-| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, and interface contracts |
+| Classes/interfaces | Yes | Yes | Yes | Simplified | Top-level classes/interfaces, construction, object identity, member calls, `interface extends`, cycle-checked hierarchy edges, and visited iterative subtype traversal |
 | Nested types and enums | No | No | No | Unsupported | Qualified nested identities, enums, and type literals are planned in M20 |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
@@ -80,21 +80,21 @@ for the documented case.
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
-| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, initialization, overloads, checked dispatch, and static entry-point invocation |
+| Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
 | Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override, and virtual dispatch |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
-| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, and method-only `@TestSetup`; `SeeAllData=true` is explicit |
+| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, method-only `@TestSetup`, and correct `Test.isRunningTest()` mode in tests and their queued work; `SeeAllData=true` is explicit |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
-| Batch Apex | Yes | Yes | Via drain | Simplified | Checked `Database.Batchable<T>` contract with List-returning `start`, deterministic chunking, context job ID, and `finish` |
+| Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract whose declared `T` binds the List-returning `start` and `execute` scope types, plus deterministic chunking, context job ID, and `finish` |
 | Scheduled Apex | Yes | Yes | Via drain | Simplified | Checked Schedulable contract, seven-field cron shape validation, deterministic submission, and trigger ID |
 | Platform events | Yes | Yes | Via drain | Simplified | `EventBus.publish` queues imported `__e` records for after-insert trigger delivery; no retention or replay |
-| JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization and recursive untyped deserialization |
+| JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization, catchable cycle/limit failures, and recursive untyped deserialization |
 | Regex | Yes | Yes | Yes | Compatible | `Pattern.compile`/`quote` and stateful `Matcher` match/find/group/start/end |
-| Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag |
+| Schema describe | Yes | Yes | Yes | Simplified | Imported-object global describe, name, key prefix, and custom flag; qualified and unqualified Schema type spellings are accepted |
 | HTTP callouts | Yes | Yes | Via host | Simplified | Stateful request/response APIs, queued mock responses, captured requests, and no live network |
 | Persistent REPL | Yes | Yes | Yes | Simplified | Accepted snippets share deterministic replayed state; failed snippets do not commit |
-| Statement debugger | N/A | N/A | Yes | Simplified | Breakpoints, step in/over/out, frames, variables, database events, and transaction timelines over immutable snapshots |
+| Statement debugger | N/A | N/A | Yes | Simplified | Opt-in breakpoints, step in/over/out, frames, cycle-safe variables, database events, and transaction timelines over bounded immutable snapshots |
 | Editor navigation | N/A | Via HIR | N/A | Simplified | Project class/member definitions, references, rename edits, and source-mapped inline diagnostics |
 | Coverage overlays | N/A | N/A | Via runner | Compatible | Every executable production line is exposed as covered or uncovered to editor clients |
 
@@ -179,17 +179,25 @@ implemented.
 Top-level class and interface names are case-insensitive and participate in
 cross-file resolution. Supported class members are constructors, fields,
 properties, and methods. Fields receive typed null before explicit
-initialization; static state belongs to the interpreter and instance state uses
-object identity. Auto properties use interpreter-owned backing storage, while
-custom accessors execute checked bodies. `this`, `super`, static access, and
-bare member access resolve at compile time.
+initialization; static state belongs to the interpreter and initializes lazily
+per class, while instance state uses object identity. Static fields and auto
+properties are all allocated to typed null before source-order field
+initializers run. Base classes initialize first; successful and failed outcomes
+are cached. Cross-class dependency cycles and chains deeper than 64 active
+classes raise catchable `TypeException` values. Auto properties use
+interpreter-owned backing storage, while custom accessors execute checked
+bodies. `this`, `super`, static access, and bare member access resolve at
+compile time.
 
 Classes may extend one virtual/abstract class and implement interfaces.
 Abstract, virtual, and override declarations are validated, interface
-obligations are enforced, and instance calls use virtual dispatch. User types
-participate in assignment, overload ranking, and related up/downcasts. Access
-checks cover public, private, protected, and global members, including
-accessor-specific property visibility. Nested types, enums, explicit
+obligations are enforced, every superclass/interface edge participates in
+iterative cycle validation, and instance calls use virtual dispatch. Interfaces
+extend interfaces; an `implements` clause on an interface is rejected as
+invalid syntax before contract traversal. User types participate in assignment,
+overload ranking, and related up/downcasts through a visited iterative subtype
+walk. Access checks cover public, private, protected, and global members,
+including accessor-specific property visibility. Nested types, enums, explicit
 superclass-constructor calls, custom exception classes, and the full Apex
 conversion system remain unsupported.
 Sharing modifiers parse so class declarations remain structurally inspectable,
@@ -227,11 +235,13 @@ catchable `AssertException` on failure. The legacy `testMethod` modifier, newer
 Project tests are discovered and sorted case-insensitively by `Class.method`.
 Filters accept a class, method, exact qualified name, or `*` glob. Every test
 receives a new interpreter; setup methods execute before that test in the same
-interpreter. A bounded worker pool can therefore run tests in parallel without
-sharing static fields, object/collection/SObject identity, default
-recording-host output, runtime stacks, or database records. M8 makes setup DML
-visible inside that test interpreter. One-time setup snapshot optimization
-remains future work.
+interpreter. Its explicit execution context makes `Test.isRunningTest()` true
+for setup/test methods and deterministic async work they submit; ordinary and
+debugger entry points remain false. A bounded worker pool can therefore run
+tests in parallel without sharing static fields, object/collection/SObject
+identity, default recording-host output, runtime stacks, or database records.
+M8 makes setup DML visible inside that test interpreter. One-time setup
+snapshot optimization remains future work.
 
 Console output and JUnit XML report pass/failure results. Coverage includes
 executable statement lines in non-test classes and the true/false outcomes of
@@ -352,7 +362,9 @@ surface produce a compile diagnostic naming the API and profile.
   `scale`, and deterministic text conversion.
 - `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
   `size`; `EncodingUtil`: Base64 encode/decode.
-- `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`.
+- `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`; structural
+  serialization rejects cycles or exhausted traversal budgets with catchable
+  `IllegalArgumentException`.
 - Regex: `Pattern.compile`/`quote` and
   `Matcher.matches`/`find`/`group`/`start`/`end`.
 - Describe: `Schema.getGlobalDescribe`, `SObjectType.getDescribe`, and
@@ -360,7 +372,8 @@ surface produce a compile diagnostic naming the API and profile.
 - Deterministic services: `System.now`/`today`/`currentTimeMillis`,
   `Datetime.now`, `Date.today`, `Math.random`, and common `UserInfo` methods.
 - Tests/limits: `Test.startTest`, `stopTest`, `isRunningTest`, and current/limit
-  query, DML statement, and callout counters.
+  query, DML statement, and callout counters. `isRunningTest` reads the
+  explicit execution context rather than a hardcoded value.
 - Callouts: common `HttpRequest`/`HttpResponse` state plus `Http.send`.
   `PlatformHost` supplies responses; `RecordingHost` queues mocks and captures
   requests. An unmocked callout throws `CalloutException` and no live network
@@ -370,6 +383,8 @@ Date/time formatting is fixed UTC rather than locale/time-zone aware. Decimal
 does not expose every Apex rounding mode. Typed JSON deserialization, arbitrary
 user-object reflection, field describe, `HttpCalloutMock`/`Test.setMock`, named
 credentials, and namespace-qualified `System.JSON` syntax remain unsupported.
+Runtime user objects therefore keep their existing identity-string JSON
+surface rather than recursively exposing fields.
 SObject Id/reference fields retain their earlier String surface; standalone
 `Id` values are validated but full field-level integration is future work.
 
@@ -378,9 +393,12 @@ SObject Id/reference fields retain their earlier String surface; standalone
 Classes may implement the checked built-in `Queueable`,
 `Database.Batchable<T>`, and `Schedulable` contracts. The checker records their
 execute/start/finish targets in HIR, validates context and scope types, and
-rejects incomplete contracts before runtime. `@future` methods must be
-public/global static void methods and accept only supported primitive values or
-Lists/Sets of those primitives.
+rejects incomplete contracts before runtime. `Database.Batchable` requires
+exactly one retained type argument, and that declared type determines the
+`List<T>` returned by `start` and the `List<T>` passed to `execute`. Generic
+arguments on `Queueable`, `Schedulable`, and user-defined interfaces are
+rejected explicitly. `@future` methods must be public/global static void methods
+and accept only supported primitive values or Lists/Sets of those primitives.
 
 `System.enqueueJob`, future calls, `Database.executeBatch`, `System.schedule`,
 and `EventBus.publish` append work to one interpreter-owned FIFO. Submission
@@ -394,7 +412,9 @@ Queued work never runs on a background thread. `Test.stopTest` is the explicit
 drain point and processes work in submission order, including work chained by a
 running job, up to a deterministic 100-job bound. Each job uses a nested
 database checkpoint and publishes structured queued, started, completed, or
-failed lifecycle events. A failure rolls back that job and fails the drain.
+failed lifecycle events. It captures the submitting test/debug mode, installs
+that context for the job, and restores its caller after success or failure. A
+failure rolls back that job and fails the drain.
 
 Batch `start` currently returns `List<T>`; `QueryLocator`, `Iterable`, stateful
 serialization between chunks, flex-queue policy, monitoring, abort, and
@@ -419,8 +439,18 @@ Project launches use a public static zero-argument `Class.method`; scripts run
 their anonymous statements. Custom `apex/database` and
 `apex/transactionTimeline` requests expose source-stop-aware platform events.
 Debugging navigates deterministic pre-statement snapshots, not a suspended live
-runtime, so expression evaluation and value mutation from the debug console are
-not supported.
+runtime. Debugger launches alone opt into snapshot allocation and retain the
+earliest 4,096 snapshots under an estimated 16 MiB snapshot-memory ceiling,
+with at most 256 variables and 128 frames per snapshot and 16 KiB per rendered
+value. `DebugExecution::trace_status` reports when any bound truncates the
+trace. Rendered values also use a 64-level, 4,096-node, and 4,096-element graph
+budget, mark cycles as `<cycle>`, and mark exhausted display budgets as `…`.
+That 16 KiB limit applies only to debug and debugger presentation; semantic
+String conversion and ordinary invocation preserve complete scalar and nested
+String content while retaining the structural graph budgets. Ordinary
+execute/invoke paths select no instrumentation, while the test runner records
+coverage facts without debugger snapshots. Expression evaluation and value
+mutation from the debug console are not supported.
 
 `apex-exec lsp [project]` implements stdio Language Server Protocol
 initialization, full-document synchronization, inline diagnostic publication,
@@ -586,13 +616,21 @@ language or Salesforce compatibility claim.
 
 - Unknown characters and invalid strings fail lexing.
 - Invalid or unsupported syntax fails parsing.
+- Public raw-token parser construction requires exactly one terminal EOF, one
+  source identity, and ordered non-overlapping spans; malformed streams return
+  structured `TokenStreamError` values before parsing.
 - Unknown variables, generic mismatches, invalid iteration/indexing, and
   invalid built-in or user-defined calls fail semantic checking.
+- Unknown element types in constructed collections and sized arrays fail
+  semantic checking before execution.
 - Duplicate method signatures, ambiguous/no-match overloads, invalid return
   paths, invalid catches, and unsupported casts fail semantic checking.
 - Duplicate/unknown classes, inheritance cycles, inaccessible members, invalid
   static/instance access, bad overrides, and missing abstract/interface
   implementations fail semantic checking.
+- Invalid interface hierarchy syntax and unsupported hierarchy type arguments
+  fail explicitly; `Database.Batchable<T>` retains and checks its declared
+  element type rather than inferring it from methods.
 - Supported runtime language faults are typed, catchable exceptions. Internal
   checked-state violations remain distinct diagnostics.
 - Unsupported built-in methods are rejected explicitly rather than silently

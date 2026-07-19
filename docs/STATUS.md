@@ -2,13 +2,35 @@
 
 **Last updated:** 2026-07-18
 
-## Active milestone
+## Active program gate
 
-M18 — Null-aware expressions
+S0 — Phase 2 stabilization
+
+The pre-open-source audit and execution strategy are now captured in
+[`docs/STABILIZATION.md`](STABILIZATION.md). M18 — null-aware expressions
+remains the next feature milestone, but feature implementation is gated until
+the bounded S0 process-safety and correctness criteria pass.
+
+S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
+S0-04 execution context/lazy class initialization merged as `c847fb2` after
+fresh runtime review, one setup-context regression remediation, re-review, and
+an independent adversarial audit. The complete post-integration Rust,
+reproduction, website, editor, documentation, maintainability, and dependency
+matrix is green. S0-GATE is in Review pending the repository owner's merge
+decision. A fresh read-only review approved evidence checkpoint `a7ac474` with
+no blocking findings; therefore only the explicit owner merge decision
+remains. Package status, dependencies, acceptance criteria, branch rules, and
+the coordinator prompt live under `docs/stabilization/`.
 
 ## Completed
 
 - Rust binary and library crate
+- Required GitHub Actions layers for Rust, website, dependency, editor,
+  documentation, whitespace, and maintainability verification, aggregated by
+  the stable `Required CI gate` check
+- Pinned per-function Lizard debt caps, RustSec/Cargo Deny/npm advisory
+  policies, offline documentation checks, and contribution/security/release
+  scaffolding without selecting the pending owner license or public API policy
 - Separate lexer, parser, AST, semantic-analysis, diagnostic, and runtime modules
 - `String`, `Boolean`, simplified `Integer`, and `null` values
 - Explicit initialization, right-associative assignment, and variable references
@@ -27,7 +49,9 @@ M18 — Null-aware expressions
 - Recursive `List<T>`, `Set<T>`, and `Map<K,V>` types, including nested
   collections
 - One-dimensional `T[]` syntax as an alias for `List<T>`
-- Empty, copy, literal, and sized-array construction
+- Empty, copy, literal, and sized-array construction, including custom,
+  `Object`, and core-exception element types, with complete constructed-element
+  type validation
 - List indexing, indexed assignment, and indexed increment/decrement
 - Collection reference aliasing with independent shallow copies from copy
   constructors and `clone()`
@@ -45,12 +69,17 @@ M18 — Null-aware expressions
 - `try`, typed `catch`, `finally`, `throw`, and catchable core exception values
 - Minimal `Object` assignment and explicit casts, including catchable invalid
   downcasts
+- Structural cast/group disambiguation for parenthesized member access,
+  indexing, postfix mutation, signed operators, and supported genuine casts
 - Catchable `NullPointerException`, `ListException`, `MathException`,
   `TypeException`, `StringException`, `IllegalArgumentException`, and
   `FinalException` behavior
 - Source-mapped runtime call stacks and exception type/message/accessor support
 - `tokens`, `ast`, `check`, and `run` CLI commands
 - Source-span compile and runtime diagnostics
+- Public raw-token parser construction that rejects empty, malformed-EOF,
+  mixed-source, reversed, overlapping, and non-monotonic streams before
+  lookahead
 - Focused compiler/runtime unit tests and public-pipeline integration tests
 - Disk-backed scenarios run through every compiler stage and the CLI
 - The unchanged M3 acceptance program executes from both the library and CLI
@@ -70,7 +99,8 @@ M18 — Null-aware expressions
 - Public, private, protected, and global member access checks, including
   accessor-specific visibility
 - Class inheritance, abstract/virtual methods, overrides, interfaces, subtype
-  assignment, and contract validation
+  assignment, iterative cycle validation across every hierarchy edge, and
+  visited iterative subtype and interface-contract traversal
 - Object identity, inherited storage, class casts, and source-mapped class call
   execution
 - SFDX `packageDirectories` discovery, recursive `.cls` loading, filename/type
@@ -186,7 +216,8 @@ M18 — Null-aware expressions
   coverage, plus ten Rust integration tests covering success, failure,
   determinism, mocking, checking, and runtime boundaries
 - Checked platform contracts for `Queueable`, `Database.Batchable<T>`, and
-  `Schedulable`, including their context parameter types and required methods
+  `Schedulable`, including preserved declared batch element types, matching
+  start/execute signatures, context parameter types, and required methods
 - Checked `@future` methods with public/global static void signatures and
   serializable primitive or primitive-collection parameters
 - Deterministic `System.enqueueJob`, `Database.executeBatch`, and
@@ -212,12 +243,29 @@ M18 — Null-aware expressions
 - Statement-boundary debugger snapshots with verified breakpoints, entry stops,
   step in/over/out, source-mapped Apex frames, visible typed variables, runtime
   exceptions, debug output, database DML inspection, and transaction timelines
+- Explicit runtime instrumentation policies keep ordinary execute/invoke paths
+  free of coverage and debugger state, limit test execution to consumed
+  coverage facts, and bound debugger traces with reported truncation
+- An explicit runtime execution context keeps ordinary and debugger launches
+  outside test mode, marks isolated Apex tests as test mode, and captures,
+  installs, and restores that mode across successful or failed deterministic
+  async jobs independently of instrumentation
+- Lazy per-class static initialization allocates typed-null field/property
+  slots before source-order field initializers, initializes base classes first,
+  caches successful and failed outcomes, rejects cross-class cycles with a
+  catchable typed failure, and bounds dependency depth without touching unused
+  classes
+- Shared runtime value-graph traversal renders cyclic List, Set, Map, and
+  reachable SObject fields deterministically, bounds debug and debugger
+  presentation without truncating observable semantic String conversions,
+  makes JSON cycles and traversal-limit failures catchable, and compares
+  cyclic or deeply nested collections without using the host call stack
 - A stdio Debug Adapter Protocol server covering launch/configuration, threads,
   frames, scopes, variables, stepping, continue, terminate, and disconnect for
   both anonymous scripts and project `Class.method` entry points
 - Checked project symbol indexing for class/member go-to-definition,
-  references, case-insensitive rename edits, and source-mapped inline
-  diagnostics
+  hierarchy generic-argument definitions, references, case-insensitive rename
+  edits, and source-mapped inline diagnostics
 - Per-executable-line coverage data and an LSP `apex/coverage` request that
   preserves covered/uncovered state rather than aggregate counts alone
 - A stdio Language Server Protocol server covering initialization,
@@ -313,18 +361,18 @@ M18 — Null-aware expressions
 - Cross-version Salesforce retrieve handling that uses a project-local isolated
   output directory, prepares the legacy `main/default` shape, and collapses
   method-qualified local selections to unique Metadata API test-class flags
-- 302 ordinary tests pass with no failures (14 separate North Star goal tests
+- 353 ordinary tests pass with no failures (14 separate North Star goal tests
   remain intentionally ignored); LLVM source-line coverage is 84.33% overall
   and 83.57% across the three changed production modules (`ci`, `hybrid`, and
   the CLI)
 
 ## Immediate target
 
-Implement M18 safe-navigation and null-coalescing expressions as complete
-lexer/parser/semantic/runtime slices, including precedence, chaining, lazy
-evaluation, side-effect, diagnostic-phase, and integration coverage. The
-complete Phase 2 sequence and its evidence baseline are in `ROADMAP.md` and
-`docs/PHASE_2_BASELINE.md`.
+Freeze the reviewed stabilization candidate and obtain explicit owner approval
+before merging it to `main`. M18 safe-navigation and null-coalescing work
+remains gated until that owner handoff completes. The package tracker is in
+`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
+baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
@@ -462,12 +510,17 @@ lexer 5/7, parser 0/7, total 5/14.
 - Async execution is a deterministic local profile, not a wall-clock scheduler:
   only `Test.stopTest` drains queued work, jobs run FIFO with a 100-job drain
   bound, batch `start` returns `List<T>` rather than `QueryLocator`/`Iterable`,
-  and batch scope sizes are limited to 1–2000. Async jobs share one interpreter
-  execution store, so Salesforce's fully serialized cross-transaction static
-  isolation is not yet claimed. Cron expressions are shape-checked but not
-  calendar-evaluated; job monitoring, abort/reschedule APIs, flex queue
-  behavior, finalizers, future callout options, and platform-event replay or
-  retention are unsupported.
+  and batch scope sizes are limited to 1–2000. Async jobs inherit the explicit
+  test/debug execution mode captured at submission and restore their caller's
+  mode, but still share one interpreter execution store, so Salesforce's fully
+  serialized cross-transaction static isolation is not yet claimed. Cron
+  expressions are shape-checked but not calendar-evaluated; job monitoring,
+  abort/reschedule APIs, flex queue behavior, finalizers, future callout
+  options, and platform-event replay or retention are unsupported.
+- Static state initializes lazily per class and caches failures. Cross-class
+  cycles and dependency chains beyond 64 simultaneously initializing classes
+  raise catchable `TypeException` values; M20 initializer blocks and
+  Salesforce-exact class-initialization exception wording remain future work.
 - Coverage counts executable production statement lines and both outcomes of
   `if`, ternary, `while`, `do`/`while`, and condition-bearing `for` branches.
   It is not a claim of Salesforce-exact coverage accounting.
@@ -486,9 +539,18 @@ lexer 5/7, parser 0/7, total 5/14.
 - The REPL reconstructs accepted state by deterministic whole-session replay.
   It does not preserve host effects that fall outside the deterministic local
   platform profile.
-- Debugger stops are immutable pre-statement snapshots. Debug-console
-  expression evaluation, mutation, conditional breakpoints, data breakpoints,
-  exception filters, and reverse execution are not implemented.
+- Debugger stops are immutable pre-statement snapshots. One launch retains the
+  earliest 4,096 snapshots and an estimated 16 MiB of snapshot structures and
+  text, with per-snapshot limits of 256 variables and 128 frames and a 16 KiB
+  rendered-value limit; `DebugExecution::trace_status` reports truncation.
+  Runtime values additionally stop at 64 graph levels, 4,096 visited nodes,
+  and 4,096 traversed elements; cycles use `<cycle>` and exhausted presentation
+  budgets use `…`. These presentation limits do not truncate String
+  concatenation, `String.valueOf`/`join`, `Object.toString`, assertion
+  messages, or ordinary invocation results. User-class objects retain
+  identity-only `Class@id` rendering. Debug-console expression evaluation,
+  mutation, conditional breakpoints, data breakpoints, exception filters, and
+  reverse execution are not implemented.
 - LSP navigation and rename cover checked project classes and members.
   Local-variable rename, completion, hover, formatting, semantic tokens, code
   actions, and unsaved multi-file semantic linking remain future work.

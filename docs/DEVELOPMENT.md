@@ -52,9 +52,17 @@ cargo run -- run examples/hello.apex
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
+python3 -m unittest discover -s tools/tests -p 'test_*.py' -v
+python3 tools/docs/check_docs.py
+tools/maintainability/check_lizard.sh
 ```
 
 Run the relevant CLI example after changing command behavior or execution.
+Website changes also require `npm ci`, `npm run build`, `npm test`, and
+`npm run lint` from `website/`. VS Code thin-client changes require `npm ci`
+and `npm test` from `editors/vscode/`. Dependency verification and the exact
+advisory exception policy are documented in
+[`DEPENDENCY_POLICY.md`](DEPENDENCY_POLICY.md).
 
 ## Git workflow
 
@@ -70,8 +78,9 @@ Run the relevant CLI example after changing command behavior or execution.
 
 ## Change workflow
 
-1. Create an appropriately named branch from `main`.
-2. Read `docs/STATUS.md` and the active milestone in `ROADMAP.md`.
+1. Create an appropriately named branch from the active integration base.
+2. Read `docs/STATUS.md`, the active milestone in `ROADMAP.md`, and any active
+   stabilization control documents.
 3. Identify the affected compiler phase and compatibility rows.
 4. Add tests that demonstrate the desired behavior and important failures.
 5. Implement the smallest complete language slice across all required phases.
@@ -80,7 +89,8 @@ Run the relevant CLI example after changing command behavior or execution.
 8. Update `docs/STATUS.md` and `docs/COMPATIBILITY.md`.
 9. Add an ADR when the change makes a consequential or expensive-to-reverse
    design decision.
-10. Merge the branch into `main` after the milestone exit criterion passes.
+10. Merge through the active integration process after its exit criterion
+    passes.
 
 ## Testing strategy
 

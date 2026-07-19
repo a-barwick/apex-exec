@@ -1,0 +1,16 @@
+# Security advisories must be resolved or explicitly documented in a reviewed
+# repository policy. S0-05 intentionally carries no RustSec exceptions.
+[advisories]
+ignore = []
+informational_warnings = ["unmaintained"]
+severity_threshold = "low"
+
+[output]
+deny = ["unmaintained"]
+format = "terminal"
+quiet = false
+show_tree = true
+
+[yanked]
+enabled = true
+update_index = true

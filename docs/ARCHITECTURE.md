@@ -96,15 +96,46 @@ queued event. `Test.stopTest` explicitly drains jobs in deterministic order;
 each job runs inside a nested platform transaction checkpoint and emits
 started/completed/failed events. No worker thread or wall-clock scheduler exists.
 
+S0-04 adds an explicit private execution context beside, not inside, runtime
+instrumentation. Ordinary and debugger entry points select non-test mode; the
+test runner selects test mode. Queued work captures the submitting context,
+installs it around its transaction, and restores the caller's context on every
+result. The existing deterministic async profile still shares its
+`ExecutionStore`; the context seam does not claim Salesforce cross-transaction
+static isolation.
+
+Static storage is now lazy per class. First active use initializes base classes
+first, allocates every static field and auto-property slot for one class to
+typed null, and evaluates that class's field initializers in source order.
+Explicit `Uninitialized`, `Initializing`, `Initialized`, and
+`Failed(Diagnostic)` states cache both success and failure. An active class
+stack permits legal same-class helper/default-order access, detects cross-class
+reentry, and enforces a 64-class dependency-depth budget.
+
 M12 adds deterministic statement-boundary debug snapshots above the runtime.
-Snapshots contain visible scopes, rendered values, call frames, source spans,
-and transaction-timeline boundaries. Debug Adapter Protocol clients navigate
-the completed immutable trace, so editor response timing never changes Apex
-execution. The Language Server Protocol adapter uses checked HIR targets and
-the project source map for definitions, references, rename, diagnostics, and
-coverage overlays. The persistent REPL commits a snippet only after the
-accumulated source checks and executes successfully, then reconstructs state by
-deterministic replay.
+An explicit runtime instrumentation policy keeps ordinary execution at
+`None`, test execution at `Coverage`, and debugger launches at `Debugger`.
+Only debugger launches render scopes and retain snapshots. Their immutable
+trace keeps the earliest pre-statement observations and is bounded to 4,096
+snapshots, an estimated 16 MiB of retained snapshot structures and text, 256
+variables and 128 frames per snapshot, and 16 KiB per rendered value.
+`DebugExecution::trace_status` reports retained bytes and any truncation.
+Semantic String conversion, bounded presentation rendering, JSON
+serialization, equality, and debugger capture share runtime value-graph
+traversal state. Debug and debugger presentation use fixed depth, node,
+element, and UTF-8 output budgets with deterministic `<cycle>` and `…`
+markers. Semantic conversion preserves complete scalar and nested String
+content while retaining the structural budgets and cycle marker. JSON uses
+the same identity path and structural budgets but turns cycles or exhausted
+budgets into catchable `IllegalArgumentException` values. Collection equality
+uses an explicit work stack and a rollback-aware visited-pair trail, so cyclic
+and deeply nested graphs do not consume the host call stack.
+Debug Adapter Protocol clients navigate the completed immutable trace, so
+editor response timing never changes Apex execution. The Language Server
+Protocol adapter uses checked HIR targets and the project source map for
+definitions, references, rename, diagnostics, and coverage overlays. The
+persistent REPL commits a snippet only after the accumulated source checks and
+executes successfully, then reconstructs state by deterministic replay.
 
 M13 adds a provider-neutral differential boundary above project compilation,
 runtime hosting, and the test runner. Versioned fixture manifests select a
@@ -146,9 +177,11 @@ The CLI is a thin adapter over those functions.
 M6 discovers tests from checked annotation metadata and executes each test in
 its own interpreter. Setup methods share that test's interpreter and run before
 the test method. Each test receives a fresh execution store, default recording
-host, call stack, and coverage trace, so the bounded worker pool does not share
-observable runtime state. Results are sorted by case-insensitive qualified test
-name after execution so parallel scheduling is never observable in reports.
+host, call stack, and coverage-only instrumentation trace; debugger snapshots
+are never allocated by the test runner. The bounded worker pool therefore does
+not share observable runtime state. Results are sorted by case-insensitive
+qualified test name after execution so parallel scheduling is never observable
+in reports.
 
 The interpreter records executed statement spans and true/false statement or
 ternary conditional outcomes. The test runner discovers ternary conditions
@@ -162,7 +195,7 @@ user-defined calls carry a selected declaration target. Runtime dispatch
 therefore never repeats case-insensitive built-in lookup. An interpreter
 borrows immutable checked code through a `RuntimeImage`; its execution scopes
 and traces remain isolated, while an `ExecutionStore` owns its collection
-arena, object arena, and static slots. `System.debug` crosses a structured
+arena, object arena, lazy class states, and static slots. `System.debug` crosses a structured
 `PlatformHost` boundary whose default owned host records output for the
 existing convenience APIs. A custom host may intentionally share external
 state between interpreters.
@@ -181,6 +214,10 @@ state between interpreters.
 | `parser::declarations` | Class, interface, member, annotation, and trigger declaration grammar |
 | `semantic` | Compiler façade with declaration/body checking, shared overload ordering, and intrinsic validation |
 | `runtime` | Execution façade, borrowed runtime image, mutable execution store, platform host, intrinsic execution, environments, and values |
+| `runtime::context` | Ordinary, test, and debugger execution mode plus deterministic async inheritance |
+| `runtime::class_initialization` | Lazy per-class state model and bounded dependency depth |
+| `runtime::instrumentation` | Explicit none/coverage/debugger policy, coverage facts, and bounded debugger snapshot retention |
+| `runtime::value_graph` | Cycle-aware, budgeted value rendering and JSON traversal plus iterative collection equality |
 | `project` | Compilation façade over discovery, source-unit caching, dependency graphs, and diagnostic source mapping |
 | `platform` | Storage-independent normalized schema and transactional record-storage contracts |
 | `platform::metadata` | SFDX custom-object and field metadata import |

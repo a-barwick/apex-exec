@@ -38,12 +38,17 @@ pub(crate) fn tokenize_with_source(
 
 pub fn parse(source: &str) -> Result<Program, Diagnostic> {
     let tokens = tokenize(source)?;
-    parser::Parser::new(tokens).parse_program()
+    parser_from_lexer(tokens).parse_program()
 }
 
 pub(crate) fn parse_with_source(source: &str, source_id: SourceId) -> Result<Program, Diagnostic> {
     let tokens = tokenize_with_source(source, source_id)?;
-    parser::Parser::new(tokens).parse_program()
+    parser_from_lexer(tokens).parse_program()
+}
+
+fn parser_from_lexer(tokens: Vec<Token>) -> parser::Parser {
+    parser::Parser::new(tokens)
+        .expect("the lexer always emits one ordered, single-source, terminal EOF token stream")
 }
 
 pub fn check(source: &str) -> Result<hir::Program, Diagnostic> {

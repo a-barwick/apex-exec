@@ -335,16 +335,19 @@ and project-scale incremental performance.
 
 The milestones are deliberately ordered. M16 starts with ternary and
 `instanceof`; M17 then opens the real staging-org validation track. M17 cannot
-be completed until an authorized validation-org alias is supplied, but M18–M24
-may continue locally while that external dependency is pending. M17 remains a
-hard dependency for the profile, metadata, and final evidence gates; later
-local milestones must not be declared as substitutes for it.
+be completed until an authorized validation-org alias is supplied. Before M18
+feature implementation, the S0 stabilization gate closes the process-safety,
+silent-correctness, instrumentation, and maintainability findings recorded in
+`docs/STABILIZATION.md`. M17 remains a hard dependency for the profile,
+metadata, and final evidence gates; later local milestones must not be declared
+as substitutes for it.
 
 | Milestone | Primary gate | Depends on |
 |---|---|---|
 | M16 | Ternary and `instanceof` complete slices | M15 |
 | M17 | Candidate-bound live validation | M16 and a supplied org |
-| M18 | Safe navigation and null coalescing | M16 |
+| S0 | Phase 2 process-safety and maintainability stabilization | M17 |
+| M18 | Safe navigation and null coalescing | M16, S0 |
 | M19 | Bitwise/shift closure; lexer 7/7 | M18 |
 | M20 | Nested declarations, enums, and type literals | M19 |
 | M21 | North Star lexer/parser 14/14 | M16, M18–M20 |
@@ -418,9 +421,34 @@ A reviewed Salesforce evidence bundle for one exact sealed candidate passes
 both the authenticated run and offline replay. A controlled drift or deployment
 failure blocks release, and altered or expired evidence cannot be replayed.
 
-### M18 — Null-aware expressions
+### S0 — Phase 2 stabilization gate
 
 **Status:** Active
+
+#### Scope
+
+- Eliminate the recorded interface-cycle and runtime-value process aborts
+- Preserve or explicitly reject generic arguments rather than erasing them
+- Correct the recorded cast/group, custom-array, and parser-invariant failures
+- Make debugger/coverage instrumentation explicit, opt-in, and bounded
+- Introduce an execution context and lazy per-class static initialization
+- Add CI, dependency, complexity-regression, and public-documentation gates
+- Preserve the evidence, work queue, dependencies, and handoff state in
+  `docs/STABILIZATION.md` and `docs/stabilization/`
+
+S0 is a bounded stabilization gate, not a rewrite or substitute for the
+compatibility milestones.
+
+#### Exit criterion
+
+Every S0 criterion in `docs/STABILIZATION.md` passes on the integrated
+stabilization branch, the recorded reproductions cannot abort or silently
+approximate behavior, the full verification suite is green, and the owner
+approves resuming M18.
+
+### M18 — Null-aware expressions
+
+**Status:** Planned (gated by active S0)
 
 #### Scope
 

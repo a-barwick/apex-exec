@@ -68,6 +68,92 @@ enum ClassCallKind {
     Super,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HierarchyVisit {
+    Unvisited,
+    Visiting,
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HierarchyTraversal {
+    nodes_started: usize,
+    edges_examined: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InheritanceTraversal {
+    matched: bool,
+    nodes_visited: usize,
+    edges_examined: usize,
+}
+
+struct HierarchyGraph {
+    edges: Vec<Vec<usize>>,
+}
+
+impl HierarchyGraph {
+    fn new(node_count: usize) -> Self {
+        Self {
+            edges: vec![Vec::new(); node_count],
+        }
+    }
+
+    fn add_edges(&mut self, node: usize, edges: Vec<usize>) {
+        self.edges[node] = edges;
+    }
+
+    fn edge_count(&self) -> usize {
+        self.edges.iter().map(Vec::len).sum()
+    }
+
+    fn validate_acyclic(
+        &self,
+        classes: &[ClassDeclaration],
+    ) -> Result<HierarchyTraversal, Diagnostic> {
+        let mut visits = vec![HierarchyVisit::Unvisited; self.edges.len()];
+        let mut traversal = HierarchyTraversal {
+            nodes_started: 0,
+            edges_examined: 0,
+        };
+        let mut stack = Vec::new();
+
+        for root in 0..self.edges.len() {
+            if visits[root] != HierarchyVisit::Unvisited {
+                continue;
+            }
+            visits[root] = HierarchyVisit::Visiting;
+            traversal.nodes_started += 1;
+            stack.push((root, 0usize));
+            while let Some((node, next_edge)) = stack.last_mut() {
+                let Some(target) = self.edges[*node].get(*next_edge).copied() else {
+                    visits[*node] = HierarchyVisit::Complete;
+                    stack.pop();
+                    continue;
+                };
+                *next_edge += 1;
+                traversal.edges_examined += 1;
+                match visits[target] {
+                    HierarchyVisit::Unvisited => {
+                        visits[target] = HierarchyVisit::Visiting;
+                        traversal.nodes_started += 1;
+                        stack.push((target, 0));
+                    }
+                    HierarchyVisit::Visiting => {
+                        let class = &classes[target];
+                        return Err(Diagnostic::new(
+                            format!("cyclic inheritance involving `{}`", class.name.spelling),
+                            class.name.span,
+                        ));
+                    }
+                    HierarchyVisit::Complete => {}
+                }
+            }
+        }
+        Ok(traversal)
+    }
+}
+
 struct Checker {
     scopes: Vec<HashMap<String, TypeName>>,
     loop_depth: usize,
@@ -152,6 +238,12 @@ impl Checker {
     }
 
     fn check_trigger(&mut self, trigger: &TriggerDeclaration) -> Result<(), Diagnostic> {
+        if !trigger.object.type_arguments.is_empty() {
+            return Err(Diagnostic::new(
+                "trigger SObject types cannot have generic arguments",
+                trigger.object.span,
+            ));
+        }
         let object_id = self
             .schema
             .object_index(&trigger.object.spelling)
@@ -218,113 +310,176 @@ impl Checker {
     }
 
     fn validate_class_hierarchy(&self) -> Result<(), Diagnostic> {
+        let mut graph = HierarchyGraph::new(self.classes.len());
         for (class_id, class) in self.classes.iter().enumerate() {
-            self.validate_test_class(class)?;
-            validate_modifier_set(&class.modifiers, class.name.span, "type")?;
-            let mut rejected = vec![Modifier::Protected, Modifier::Static, Modifier::Override];
-            if !class_is_test(class) {
-                rejected.push(Modifier::Private);
-            }
-            reject_modifiers(
-                &class.modifiers,
-                &rejected,
+            self.validate_type_declaration_header(class)?;
+            graph.add_edges(class_id, self.validated_hierarchy_edges(class)?);
+        }
+        let traversal = graph.validate_acyclic(&self.classes)?;
+        debug_assert!(traversal.nodes_started <= self.classes.len());
+        debug_assert!(traversal.edges_examined <= graph.edge_count());
+        Ok(())
+    }
+
+    fn validate_type_declaration_header(&self, class: &ClassDeclaration) -> Result<(), Diagnostic> {
+        self.validate_test_class(class)?;
+        validate_modifier_set(&class.modifiers, class.name.span, "type")?;
+        let mut rejected = vec![Modifier::Protected, Modifier::Static, Modifier::Override];
+        if !class_is_test(class) {
+            rejected.push(Modifier::Private);
+        }
+        reject_modifiers(
+            &class.modifiers,
+            &rejected,
+            class.name.span,
+            "top-level type",
+        )?;
+        if class.modifiers.iter().any(|modifier| {
+            matches!(
+                modifier,
+                Modifier::WithSharing | Modifier::WithoutSharing | Modifier::InheritedSharing
+            )
+        }) {
+            return Err(Diagnostic::new(
+                "sharing modifiers are parsed but not supported by the active compatibility profile",
                 class.name.span,
-                "top-level type",
-            )?;
-            if class.modifiers.iter().any(|modifier| {
-                matches!(
-                    modifier,
-                    Modifier::WithSharing | Modifier::WithoutSharing | Modifier::InheritedSharing
-                )
-            }) {
+            ));
+        }
+        Ok(())
+    }
+
+    fn validated_hierarchy_edges(
+        &self,
+        class: &ClassDeclaration,
+    ) -> Result<Vec<usize>, Diagnostic> {
+        let mut edges = Vec::new();
+        let mut saw_batchable = false;
+        if let Some(superclass) = &class.superclass {
+            if !superclass.type_arguments.is_empty() {
                 return Err(Diagnostic::new(
-                    "sharing modifiers are parsed but not supported by the active compatibility profile",
-                    class.name.span,
+                    "generic arguments are unsupported on inherited user-defined types",
+                    superclass.span,
                 ));
             }
-            if let Some(superclass) = &class.superclass {
-                let parent_id = self
-                    .class_ids
-                    .get(&superclass.canonical)
-                    .copied()
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            format!("unknown superclass `{}`", superclass.spelling),
-                            superclass.span,
-                        )
-                    })?;
-                let parent = &self.classes[parent_id];
-                if class.kind == ClassKind::Class && parent.kind != ClassKind::Class {
-                    return Err(Diagnostic::new(
-                        format!("class cannot extend interface `{}`", superclass.spelling),
+            let parent_id = self
+                .class_ids
+                .get(&superclass.canonical)
+                .copied()
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown superclass `{}`", superclass.spelling),
                         superclass.span,
-                    ));
-                }
-                if class.kind == ClassKind::Interface && parent.kind != ClassKind::Interface {
-                    return Err(Diagnostic::new(
-                        format!("interface cannot extend class `{}`", superclass.spelling),
-                        superclass.span,
-                    ));
-                }
-                if parent.modifiers.contains(&Modifier::Final) {
-                    return Err(Diagnostic::new(
-                        format!("cannot extend final class `{}`", superclass.spelling),
-                        superclass.span,
-                    ));
-                }
-                if class.kind == ClassKind::Class
-                    && !(parent.modifiers.contains(&Modifier::Virtual)
-                        || parent.modifiers.contains(&Modifier::Abstract))
+                    )
+                })?;
+            self.validate_superclass_edge(class, superclass, parent_id)?;
+            edges.push(parent_id);
+        }
+
+        for interface in &class.interfaces {
+            if is_platform_async_interface(&interface.canonical) {
+                if is_batchable_interface(&interface.canonical)
+                    && std::mem::replace(&mut saw_batchable, true)
                 {
                     return Err(Diagnostic::new(
-                        format!("cannot extend non-virtual class `{}`", superclass.spelling),
-                        superclass.span,
-                    ));
-                }
-            }
-            for interface in &class.interfaces {
-                if is_platform_async_interface(&interface.canonical) {
-                    if class.kind != ClassKind::Class {
-                        return Err(Diagnostic::new(
-                            "platform async interfaces can only be implemented by classes",
-                            interface.span,
-                        ));
-                    }
-                    continue;
-                }
-                let interface_id = self
-                    .class_ids
-                    .get(&interface.canonical)
-                    .copied()
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            format!("unknown interface `{}`", interface.spelling),
-                            interface.span,
-                        )
-                    })?;
-                if self.classes[interface_id].kind != ClassKind::Interface {
-                    return Err(Diagnostic::new(
-                        format!("`{}` is not an interface", interface.spelling),
+                        "a class cannot implement Database.Batchable more than once",
                         interface.span,
                     ));
                 }
+                self.validate_platform_interface_edge(class, interface)?;
+                continue;
             }
+            if !interface.type_arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!(
+                        "generic arguments on user-defined interface `{}` are unsupported",
+                        interface.spelling
+                    ),
+                    interface.span,
+                ));
+            }
+            let interface_id = self
+                .class_ids
+                .get(&interface.canonical)
+                .copied()
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown interface `{}`", interface.spelling),
+                        interface.span,
+                    )
+                })?;
+            if self.classes[interface_id].kind != ClassKind::Interface {
+                return Err(Diagnostic::new(
+                    format!("`{}` is not an interface", interface.spelling),
+                    interface.span,
+                ));
+            }
+            edges.push(interface_id);
+        }
+        Ok(edges)
+    }
 
-            let mut seen = vec![false; self.classes.len()];
-            let mut cursor = Some(class_id);
-            while let Some(id) = cursor {
-                if seen[id] {
-                    return Err(Diagnostic::new(
-                        format!("cyclic inheritance involving `{}`", class.name.spelling),
-                        class.name.span,
-                    ));
-                }
-                seen[id] = true;
-                cursor = self.classes[id]
-                    .superclass
-                    .as_ref()
-                    .and_then(|name| self.class_ids.get(&name.canonical).copied());
-            }
+    fn validate_superclass_edge(
+        &self,
+        class: &ClassDeclaration,
+        superclass: &crate::ast::NamedType,
+        parent_id: usize,
+    ) -> Result<(), Diagnostic> {
+        let parent = &self.classes[parent_id];
+        if class.kind == ClassKind::Class && parent.kind != ClassKind::Class {
+            return Err(Diagnostic::new(
+                format!("class cannot extend interface `{}`", superclass.spelling),
+                superclass.span,
+            ));
+        }
+        if class.kind == ClassKind::Interface && parent.kind != ClassKind::Interface {
+            return Err(Diagnostic::new(
+                format!("interface cannot extend class `{}`", superclass.spelling),
+                superclass.span,
+            ));
+        }
+        if parent.modifiers.contains(&Modifier::Final) {
+            return Err(Diagnostic::new(
+                format!("cannot extend final class `{}`", superclass.spelling),
+                superclass.span,
+            ));
+        }
+        if class.kind == ClassKind::Class
+            && !(parent.modifiers.contains(&Modifier::Virtual)
+                || parent.modifiers.contains(&Modifier::Abstract))
+        {
+            return Err(Diagnostic::new(
+                format!("cannot extend non-virtual class `{}`", superclass.spelling),
+                superclass.span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_platform_interface_edge(
+        &self,
+        class: &ClassDeclaration,
+        interface: &crate::ast::NamedType,
+    ) -> Result<(), Diagnostic> {
+        if class.kind != ClassKind::Class {
+            return Err(Diagnostic::new(
+                "platform async interfaces can only be implemented by classes",
+                interface.span,
+            ));
+        }
+        if is_batchable_interface(&interface.canonical) {
+            let [argument] = interface.type_arguments.as_slice() else {
+                return Err(Diagnostic::new(
+                    "Database.Batchable requires exactly one type argument",
+                    interface.span,
+                ));
+            };
+            return self.validate_type(&argument.ty, argument.span);
+        }
+        if !interface.type_arguments.is_empty() {
+            return Err(Diagnostic::new(
+                format!("`{}` does not accept generic arguments", interface.spelling),
+                interface.span,
+            ));
         }
         Ok(())
     }
@@ -768,16 +923,12 @@ impl Checker {
     }
 
     fn validate_async_contract(&mut self, class_id: usize) -> Result<(), Diagnostic> {
-        let interfaces = self.classes[class_id]
-            .interfaces
-            .iter()
-            .map(|interface| interface.canonical.clone())
-            .collect::<Vec<_>>();
         let mut contract = hir::AsyncClassContract::default();
 
-        if interfaces
+        if self.classes[class_id]
+            .interfaces
             .iter()
-            .any(|interface| is_queueable_interface(interface))
+            .any(|interface| is_queueable_interface(&interface.canonical))
         {
             contract.queueable = Some(self.require_async_method(
                 class_id,
@@ -788,9 +939,10 @@ impl Checker {
             )?);
         }
 
-        if interfaces
+        if self.classes[class_id]
+            .interfaces
             .iter()
-            .any(|interface| is_schedulable_interface(interface))
+            .any(|interface| is_schedulable_interface(&interface.canonical))
         {
             contract.schedulable = Some(self.require_async_method(
                 class_id,
@@ -801,63 +953,77 @@ impl Checker {
             )?);
         }
 
-        if interfaces
+        let batch_scope_type = self.classes[class_id]
+            .interfaces
             .iter()
-            .any(|interface| is_batchable_interface(interface))
-        {
-            let start_candidates = self
-                .async_methods_named(class_id, "start")
-                .collect::<Vec<_>>();
-            let [(start, start_method)] = start_candidates.as_slice() else {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    "Batchable requires exactly one public or global `start(Database.BatchableContext)` method",
-                ));
-            };
-            if start_method.parameters.len() != 1
-                || start_method.parameters[0].ty != TypeName::BatchableContext
-            {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    "Batchable `start` must accept Database.BatchableContext",
-                ));
-            }
-            let ReturnType::Value(TypeName::List(scope_type)) = &start_method.return_type else {
-                return Err(async_contract_error(
-                    &self.classes[class_id],
-                    "Batchable `start` must return List<T> in the supported profile",
-                ));
-            };
-            let scope_type = (**scope_type).clone();
-            let execute = self.require_async_method(
-                class_id,
-                "execute",
-                &[
-                    TypeName::BatchableContext,
-                    TypeName::List(Box::new(scope_type.clone())),
-                ],
-                &ReturnType::Void,
-                "Batchable",
-            )?;
-            let finish = self.require_async_method(
-                class_id,
-                "finish",
-                &[TypeName::BatchableContext],
-                &ReturnType::Void,
-                "Batchable",
-            )?;
-            contract.batch = Some(hir::BatchContract {
-                start: *start,
-                execute,
-                finish,
-                scope_type,
-            });
+            .find(|interface| is_batchable_interface(&interface.canonical))
+            .and_then(|interface| interface.type_arguments.first())
+            .map(|argument| argument.ty.clone());
+        if let Some(scope_type) = batch_scope_type {
+            contract.batch = Some(self.validate_batch_contract(class_id, scope_type)?);
         }
 
         if contract != hir::AsyncClassContract::default() {
             self.async_contracts.insert(class_id, contract);
         }
         Ok(())
+    }
+
+    fn validate_batch_contract(
+        &self,
+        class_id: usize,
+        scope_type: TypeName,
+    ) -> Result<hir::BatchContract, Diagnostic> {
+        let start_candidates = self
+            .async_methods_named(class_id, "start")
+            .collect::<Vec<_>>();
+        let [(start, start_method)] = start_candidates.as_slice() else {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                "Batchable requires exactly one public or global `start(Database.BatchableContext)` method",
+            ));
+        };
+        if start_method.parameters.len() != 1
+            || start_method.parameters[0].ty != TypeName::BatchableContext
+        {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                "Batchable `start` must accept Database.BatchableContext",
+            ));
+        }
+        let expected_start_return = ReturnType::Value(TypeName::List(Box::new(scope_type.clone())));
+        if start_method.return_type != expected_start_return {
+            return Err(async_contract_error(
+                &self.classes[class_id],
+                format!(
+                    "Batchable `start` must return {} to match the declared Database.Batchable type argument",
+                    expected_start_return.apex_name()
+                ),
+            ));
+        }
+        let execute = self.require_async_method(
+            class_id,
+            "execute",
+            &[
+                TypeName::BatchableContext,
+                TypeName::List(Box::new(scope_type.clone())),
+            ],
+            &ReturnType::Void,
+            "Batchable",
+        )?;
+        let finish = self.require_async_method(
+            class_id,
+            "finish",
+            &[TypeName::BatchableContext],
+            &ReturnType::Void,
+            "Batchable",
+        )?;
+        Ok(hir::BatchContract {
+            start: *start,
+            execute,
+            finish,
+            scope_type,
+        })
     }
 
     fn async_methods_named<'a>(
@@ -1013,6 +1179,7 @@ impl Checker {
 
     fn required_abstract_methods(&self, class_id: usize) -> Vec<ClassMethodSignature> {
         let mut required = Vec::new();
+        let mut visited_interfaces = vec![false; self.classes.len()];
         let mut cursor = Some(class_id);
         while let Some(id) = cursor {
             for method in self.own_class_methods(id) {
@@ -1025,7 +1192,11 @@ impl Checker {
                     continue;
                 }
                 let interface_id = self.class_ids[&interface.canonical];
-                self.collect_interface_methods(interface_id, &mut required);
+                self.collect_interface_methods(
+                    interface_id,
+                    &mut required,
+                    &mut visited_interfaces,
+                );
             }
             cursor = self.parent_class_id(id);
         }
@@ -1036,18 +1207,24 @@ impl Checker {
         &self,
         interface_id: usize,
         required: &mut Vec<ClassMethodSignature>,
+        visited: &mut [bool],
     ) {
-        for method in self.own_class_methods(interface_id) {
-            push_unique_signature(required, method);
-        }
-        if let Some(parent) = self.parent_class_id(interface_id) {
-            self.collect_interface_methods(parent, required);
-        }
-        for interface in &self.classes[interface_id].interfaces {
-            if is_platform_async_interface(&interface.canonical) {
+        let mut pending = vec![interface_id];
+        while let Some(current) = pending.pop() {
+            if std::mem::replace(&mut visited[current], true) {
                 continue;
             }
-            self.collect_interface_methods(self.class_ids[&interface.canonical], required);
+            for method in self.own_class_methods(current) {
+                push_unique_signature(required, method);
+            }
+            if let Some(parent) = self.parent_class_id(current) {
+                pending.push(parent);
+            }
+            for interface in self.classes[current].interfaces.iter().rev() {
+                if !is_platform_async_interface(&interface.canonical) {
+                    pending.push(self.class_ids[&interface.canonical]);
+                }
+            }
         }
     }
 
@@ -1184,20 +1361,45 @@ impl Checker {
     }
 
     fn class_is_or_inherits(&self, actual_id: usize, expected_id: usize) -> bool {
-        if actual_id == expected_id {
-            return true;
+        self.class_inheritance_traversal(actual_id, expected_id)
+            .matched
+    }
+
+    fn class_inheritance_traversal(
+        &self,
+        actual_id: usize,
+        expected_id: usize,
+    ) -> InheritanceTraversal {
+        let mut traversal = InheritanceTraversal {
+            matched: false,
+            nodes_visited: 0,
+            edges_examined: 0,
+        };
+        let mut visited = vec![false; self.classes.len()];
+        let mut pending = vec![actual_id];
+        while let Some(class_id) = pending.pop() {
+            if visited[class_id] {
+                continue;
+            }
+            visited[class_id] = true;
+            traversal.nodes_visited += 1;
+            if class_id == expected_id {
+                traversal.matched = true;
+                break;
+            }
+            for interface in self.classes[class_id].interfaces.iter().rev() {
+                if let Some(interface_id) = self.class_ids.get(&interface.canonical).copied() {
+                    traversal.edges_examined += 1;
+                    pending.push(interface_id);
+                }
+            }
+            if let Some(parent_id) = self.parent_class_id(class_id) {
+                traversal.edges_examined += 1;
+                pending.push(parent_id);
+            }
         }
-        if self
-            .parent_class_id(actual_id)
-            .is_some_and(|parent| self.class_is_or_inherits(parent, expected_id))
-        {
-            return true;
-        }
-        self.classes[actual_id].interfaces.iter().any(|interface| {
-            self.class_ids
-                .get(&interface.canonical)
-                .is_some_and(|interface_id| self.class_is_or_inherits(*interface_id, expected_id))
-        })
+        debug_assert!(traversal.nodes_visited <= self.classes.len());
+        traversal
     }
 
     fn require_assignable(
@@ -1650,9 +1852,7 @@ impl Checker {
                 self.require_assignable(&expected, &actual, value.span())?;
                 Ok(ExpressionType::Value(expected))
             }
-            Expression::NewCollection {
-                ty, initializer, ..
-            } => self.new_collection_type(ty, initializer),
+            Expression::NewCollection { .. } => self.new_collection_expression_type(expression),
             Expression::NewException {
                 exception_type,
                 arguments,
@@ -1719,6 +1919,21 @@ impl Checker {
                 ..
             } => self.binary_type(left, *operator, right, *operator_span),
         }
+    }
+
+    fn new_collection_expression_type(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Expression::NewCollection {
+            ty,
+            initializer,
+            span,
+        } = expression
+        else {
+            unreachable!("collection expression helper requires a NewCollection node");
+        };
+        self.new_collection_type(ty, initializer, *span)
     }
 
     fn variable_type(&mut self, identifier: &Identifier) -> Result<ExpressionType, Diagnostic> {
@@ -2399,7 +2614,9 @@ impl Checker {
         &mut self,
         ty: &TypeName,
         initializer: &CollectionInitializer,
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        self.validate_type(ty, span)?;
         match initializer {
             CollectionInitializer::Arguments(arguments) => {
                 self.check_collection_constructor(ty, arguments)?;

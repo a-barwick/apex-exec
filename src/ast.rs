@@ -716,8 +716,10 @@ impl TypeName {
             "queueablecontext" | "system.queueablecontext" => Some(Self::QueueableContext),
             "batchablecontext" | "database.batchablecontext" => Some(Self::BatchableContext),
             "schedulablecontext" | "system.schedulablecontext" => Some(Self::SchedulableContext),
-            "sobjecttype" => Some(Self::SObjectType),
-            "describesobjectresult" => Some(Self::DescribeSObjectResult),
+            "sobjecttype" | "schema.sobjecttype" => Some(Self::SObjectType),
+            "describesobjectresult" | "schema.describesobjectresult" => {
+                Some(Self::DescribeSObjectResult)
+            }
             "exception" => Some(Self::Exception),
             "nullpointerexception" => Some(Self::NullPointerException),
             "listexception" => Some(Self::ListException),
@@ -798,19 +800,39 @@ impl TypeName {
     }
 }
 
+/// A preserved generic argument on a named hierarchy or trigger type.
+#[derive(Clone, Debug)]
+pub struct TypeArgument {
+    /// Parsed argument type.
+    pub ty: TypeName,
+    /// Exact source span of the argument syntax.
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct NamedType {
     pub spelling: String,
     pub canonical: String,
+    /// Generic arguments preserved from source for semantic validation.
+    pub type_arguments: Vec<TypeArgument>,
     pub span: Span,
 }
 
 impl NamedType {
     pub fn new(spelling: String, span: Span) -> Self {
+        Self::with_type_arguments(spelling, Vec::new(), span)
+    }
+
+    pub fn with_type_arguments(
+        spelling: String,
+        type_arguments: Vec<TypeArgument>,
+        span: Span,
+    ) -> Self {
         let canonical = spelling.to_ascii_lowercase();
         Self {
             spelling,
             canonical,
+            type_arguments,
             span,
         }
     }
@@ -819,6 +841,11 @@ impl NamedType {
 impl PartialEq for NamedType {
     fn eq(&self, other: &Self) -> bool {
         self.canonical == other.canonical
+            && self
+                .type_arguments
+                .iter()
+                .map(|argument| &argument.ty)
+                .eq(other.type_arguments.iter().map(|argument| &argument.ty))
     }
 }
 
@@ -827,6 +854,10 @@ impl Eq for NamedType {}
 impl Hash for NamedType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.canonical.hash(state);
+        self.type_arguments.len().hash(state);
+        for argument in &self.type_arguments {
+            argument.ty.hash(state);
+        }
     }
 }
 

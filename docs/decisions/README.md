@@ -51,3 +51,4 @@ history.
 - [0019 — Compose hybrid validation above hermetic CI](0019-compose-hybrid-validation-above-hermetic-ci.md)
 - [0020 — Check runtime-type expressions before execution](0020-check-runtime-type-expressions-before-execution.md)
 - [0021 — Bind live validation to sealed candidate evidence](0021-bind-live-validation-to-candidate-evidence.md)
+- [0022 — Gate Phase 2 through a stabilization program](0022-gate-phase-2-through-stabilization.md)

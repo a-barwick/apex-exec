@@ -80,23 +80,7 @@ impl Parser {
             ClassKind::Interface
         };
         let name = self.expect_identifier("expected a type name")?;
-        let superclass = if self.check(&TokenKind::Extends) {
-            self.advance();
-            Some(self.parse_named_type()?)
-        } else {
-            None
-        };
-        let mut interfaces = Vec::new();
-        if self.check(&TokenKind::Implements) {
-            self.advance();
-            loop {
-                interfaces.push(self.parse_named_type()?);
-                if !self.check(&TokenKind::Comma) {
-                    break;
-                }
-                self.advance();
-            }
-        }
+        let (superclass, interfaces) = self.parse_hierarchy_edges(kind)?;
         self.expect_simple(TokenKind::LeftBrace, "expected `{` after type declaration")?;
         let mut members = Vec::new();
         while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
@@ -113,6 +97,38 @@ impl Parser {
             members,
             span: start.merge(end.span),
         })
+    }
+
+    fn parse_hierarchy_edges(
+        &mut self,
+        kind: ClassKind,
+    ) -> Result<(Option<crate::ast::NamedType>, Vec<crate::ast::NamedType>), Diagnostic> {
+        let superclass = if self.check(&TokenKind::Extends) {
+            self.advance();
+            Some(self.parse_named_type()?)
+        } else {
+            None
+        };
+
+        if kind == ClassKind::Interface && self.check(&TokenKind::Implements) {
+            return Err(Diagnostic::new(
+                "interfaces extend other interfaces; `implements` is invalid here",
+                self.current().span,
+            ));
+        }
+
+        let mut interfaces = Vec::new();
+        if kind == ClassKind::Class && self.check(&TokenKind::Implements) {
+            self.advance();
+            loop {
+                interfaces.push(self.parse_named_type()?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        Ok((superclass, interfaces))
     }
 
     pub(super) fn parse_class_member(

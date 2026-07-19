@@ -20,11 +20,13 @@ check-only Salesforce validation complete the current local feedback loop and
 release-confidence gate.
 Apex identifiers, types, and method names are case-insensitive.
 
-M16 completes checked ternary and `instanceof` expressions. Phase 2 is now
-active at M17, whose next gate is live candidate-bound Salesforce evidence.
-The primary syntax gate remains all 14 pinned North Star lexer/parser
-indicators passing; M16 moves the audited 1-of-14 baseline to 5 of 14. The
-phase then carries that syntax foundation into a representative 60–80%
+M16 completes checked ternary and `instanceof` expressions, and M17 records
+reviewed candidate-bound live Salesforce evidence. Phase 2 is now active at
+the bounded S0 stabilization gate. M18 null-aware expression work remains
+gated until the recorded process-safety, correctness, instrumentation, and
+maintainability criteria pass. The primary syntax gate remains all 14 pinned
+North Star lexer/parser indicators passing; the current frontier is 5 of 14.
+The phase then carries that syntax foundation into a representative 60–80%
 enterprise test benchmark, broader metadata accounting, selected platform
 fidelity, and persistent incremental compiler work. See
 [the baseline audit](docs/PHASE_2_BASELINE.md) for the evidence and the
@@ -188,14 +190,29 @@ top-level methods remain available to anonymous scripts, while project code
 uses ordinary classes. Platform, test, and exception surfaces are deliberately
 curated; unsupported behavior is rejected explicitly.
 
+## Release status
+
+Apex Exec has no authorized public release yet. The repository owner must
+select a license and decide whether the initial supported product is
+binary-first or which Rust modules form a semver API. `Cargo.toml` therefore
+contains no license field and keeps publication disabled. These are explicit
+release blockers, not implied permissions or hidden TODOs. See
+[the release checklist](docs/RELEASING.md).
+
 ## Project documentation
 
 - [Vision](docs/VISION.md) — north star, enterprise value, and product principles
 - [Roadmap](ROADMAP.md) — milestones and their exit criteria
 - [Phase 2 baseline](docs/PHASE_2_BASELINE.md) — audited gaps and reproducible evidence
+- [Stabilization](docs/STABILIZATION.md) — active S0 gate, packages, and owner decisions
 - [Current status](docs/STATUS.md) — completed work and immediate next target
 - [Architecture](docs/ARCHITECTURE.md) — current and target system design
 - [Compatibility](docs/COMPATIBILITY.md) — supported Apex surface and fidelity
 - [Development](docs/DEVELOPMENT.md) — commands and contribution workflow
+- [Dependency policy](docs/DEPENDENCY_POLICY.md) — enforced advisory handling
+- [Release process](docs/RELEASING.md) — blockers and reproducible checklist
 - [Decisions](docs/decisions/README.md) — durable architectural rationale
 - [Specifications](docs/specifications/README.md) — intended language behavior
+
+Community policies are in [CONTRIBUTING.md](CONTRIBUTING.md),
+[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
