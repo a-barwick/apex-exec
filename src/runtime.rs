@@ -854,7 +854,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         .initializer
                         .as_ref()
                         .expect("field initialization metadata requires an initializer");
-                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                    let value =
+                        typed_value(self.evaluate(initializer)?, &field.ty, initializer.span())?;
                     self.store
                         .static_slot_mut(&target)
                         .expect("static field was allocated")
@@ -1033,7 +1034,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 initializer,
                 ..
             } => {
-                let value = typed_value(self.evaluate(initializer)?, ty);
+                let value = typed_value(self.evaluate(initializer)?, ty, initializer.span())?;
                 self.bind_local(name, ty, value);
             }
             Statement::LocalDeclaration {
@@ -1044,7 +1045,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         || Ok(Value::Null(Some(ty.clone()))),
                         |initializer| {
                             self.evaluate(initializer)
-                                .map(|value| typed_value(value, ty))
+                                .and_then(|value| typed_value(value, ty, initializer.span()))
                         },
                     )?;
                     self.bind_local(&declarator.name, ty, value);
@@ -1229,7 +1230,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     self.record_branch(*pattern_span, matched);
                     if matched {
                         self.scopes.push(HashMap::new());
-                        self.bind_local(binding, ty, typed_value(value.clone(), ty));
+                        self.bind_local(
+                            binding,
+                            ty,
+                            typed_value(value.clone(), ty, *pattern_span)?,
+                        );
                         let result = self.execute_statement(&arm.body);
                         self.scopes.pop();
                         return result;
@@ -1454,7 +1459,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     name.canonical.clone(),
                     Slot {
                         ty: element_type.clone(),
-                        value: typed_value(element, element_type),
+                        value: typed_value(element, element_type, iterable.span())?,
                     },
                 );
                 match self.execute_statement(body)? {
@@ -2791,7 +2796,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         }
-        let value = typed_value(value, &field_type);
+        let value = typed_value(value, &field_type, span)?;
         self.store
             .sobject_mut(receiver)
             .fields
@@ -2869,7 +2874,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
-                let value = typed_value(value, &field.ty);
+                let value = typed_value(value, &field.ty, span)?;
                 if field.modifiers.contains(&Modifier::Static) {
                     self.store
                         .static_slot_mut(&target)
@@ -2941,7 +2946,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         let ty = property.ty.clone();
         let is_static = property.modifiers.contains(&Modifier::Static);
-        let value = typed_value(value, &ty);
+        let value = typed_value(value, &ty, span)?;
         if is_static {
             self.store
                 .static_slot_mut(&target)
@@ -2968,7 +2973,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let value = typed_value(value, &property.ty);
+        let value = typed_value(value, &property.ty, span)?;
         let accessor = property
             .accessors
             .iter()
@@ -3280,15 +3285,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .iter()
             .zip(current_arguments)
             .map(|(parameter, argument)| {
-                (
+                Ok((
                     parameter.name.canonical.clone(),
                     Slot {
                         ty: parameter.ty.clone(),
-                        value: typed_value(argument.value.clone(), &parameter.ty),
+                        value: typed_value(argument.value.clone(), &parameter.ty, argument.span)?,
                     },
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<HashMap<_, _>, Diagnostic>>()?;
         let caller_scopes = std::mem::replace(&mut self.scopes, vec![scope]);
         let saved_receiver = self.current_receiver.replace(object);
         let saved_declaring = self.current_declaring_class.replace(class_id);
@@ -3348,7 +3353,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             .initializer
                             .as_ref()
                             .expect("field initialization metadata requires an initializer");
-                        let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                        let value = typed_value(
+                            self.evaluate(initializer)?,
+                            &field.ty,
+                            initializer.span(),
+                        )?;
                         self.store
                             .object_mut(object)
                             .fields
@@ -3569,11 +3578,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         let mut method_scope = HashMap::new();
         for (parameter, argument) in parameters.iter().zip(arguments) {
+            let value = typed_value(argument.value, &parameter.ty, argument.span)?;
             method_scope.insert(
                 parameter.name.canonical.clone(),
                 Slot {
                     ty: parameter.ty.clone(),
-                    value: typed_value(argument.value, &parameter.ty),
+                    value,
                 },
             );
         }
@@ -3602,7 +3612,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match outcome {
             Ok(Flow::Return(value)) => match (return_type, value) {
                 (ReturnType::Void, None) => Ok(Value::Void),
-                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                (ReturnType::Value(ty), Some(value)) => typed_value(value, ty, span),
                 _ => Err(Diagnostic::new(
                     "invalid callable return escaped semantic validation",
                     span,
@@ -3689,11 +3699,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
         let mut method_scope = HashMap::new();
         for (parameter, argument) in method.parameters.iter().zip(arguments) {
+            let value = typed_value(argument.value, &parameter.ty, argument.span)?;
             method_scope.insert(
                 parameter.name.canonical.clone(),
                 Slot {
                     ty: parameter.ty.clone(),
-                    value: typed_value(argument.value, &parameter.ty),
+                    value,
                 },
             );
         }
@@ -3713,7 +3724,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match outcome {
             Ok(Flow::Return(value)) => match (&method.return_type, value) {
                 (ReturnType::Void, None) => Ok(Value::Void),
-                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                (ReturnType::Value(ty), Some(value)) => typed_value(value, ty, span),
                 _ => Err(Diagnostic::new(
                     "invalid method return escaped semantic validation",
                     method.name.span,
@@ -3745,7 +3756,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match (&value, target) {
             (Value::Integer(value), TypeName::Long) => return Ok(Value::Long(*value)),
             (Value::Integer(_) | Value::Long(_) | Value::Decimal(_), TypeName::Double) => {
-                return Ok(typed_value(value, target));
+                return typed_value(value, target, span);
             }
             (Value::Long(value), TypeName::Integer) => {
                 return i32::try_from(*value)
@@ -4086,7 +4097,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Collection::List { element_type, .. } => element_type.clone(),
                     _ => return Err(invalid_runtime_operands(span)),
                 };
-                let value = typed_value(value, &element_type);
+                let value = typed_value(value, &element_type, span)?;
                 let Collection::List { elements, .. } = self.collection_mut(*collection) else {
                     unreachable!("List place was resolved above")
                 };
@@ -4217,8 +4228,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let source_elements = self.sequence_snapshot(source_id, source.span)?;
                 let elements = source_elements
                     .into_iter()
-                    .map(|value| typed_value(value, element_type))
-                    .collect();
+                    .map(|value| typed_value(value, element_type, source.span))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate(Collection::List {
                     element_type: (**element_type).clone(),
                     elements,
@@ -4229,7 +4240,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let source_elements = self.sequence_snapshot(source_id, source.span)?;
                 let mut elements = Vec::new();
                 for value in source_elements {
-                    let value = typed_value(value, element_type);
+                    let value = typed_value(value, element_type, source.span)?;
                     if !elements
                         .iter()
                         .any(|existing| self.values_equal(existing, &value))
@@ -4302,8 +4313,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             TypeName::List(element_type) => {
                 let elements = values
                     .into_iter()
-                    .map(|argument| typed_value(argument.value, element_type))
-                    .collect();
+                    .map(|argument| typed_value(argument.value, element_type, argument.span))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate(Collection::List {
                     element_type: (**element_type).clone(),
                     elements,
@@ -4313,7 +4324,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             TypeName::Set(element_type) => {
                 let mut elements = Vec::new();
                 for argument in values {
-                    let value = typed_value(argument.value, element_type);
+                    let value = typed_value(argument.value, element_type, argument.span)?;
                     if !elements
                         .iter()
                         .any(|existing| self.values_equal(existing, &value))
@@ -4345,8 +4356,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         let mut entries: Vec<(Value, Value)> = Vec::new();
         for (key, value) in values {
-            let key = typed_value(key, key_type);
-            let value = typed_value(value, value_type);
+            let key = typed_value(key, key_type, span)?;
+            let value = typed_value(value, value_type, span)?;
             if let Some(index) = entries
                 .iter()
                 .position(|(existing, _)| self.values_equal(existing, &key))
@@ -4571,7 +4582,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
     ) -> Result<Value, Diagnostic> {
         let ty = self.lookup(identifier)?.ty.clone();
-        let value = typed_value(value, &ty);
+        let value = typed_value(value, &ty, identifier.span)?;
         self.lookup_mut(identifier)?.value = value.clone();
         Ok(value)
     }
@@ -4891,9 +4902,15 @@ fn require_no_constructor_arguments(
     }
 }
 
-fn typed_value(value: Value, ty: &TypeName) -> Value {
-    match value {
+fn typed_value(value: Value, ty: &TypeName, span: Span) -> Result<Value, Diagnostic> {
+    Ok(match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
+        Value::String(value) if *ty == TypeName::Id => {
+            crate::platform::RecordId::parse(value.clone()).map_err(|_| {
+                runtime_exception("StringException", format!("Invalid id: {value}"), span)
+            })?;
+            Value::Id(value)
+        }
         Value::Integer(value) if *ty == TypeName::Long => Value::Long(value),
         Value::Integer(value) | Value::Long(value) if *ty == TypeName::Decimal => {
             Value::Decimal(Decimal::from(value))
@@ -4910,7 +4927,7 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
             .map_or(Value::Decimal(value), Value::Double),
         Value::Id(value) if *ty == TypeName::String => Value::String(value),
         value => value,
-    }
+    })
 }
 
 fn double_value(value: &Value, span: Span) -> Result<f64, Diagnostic> {

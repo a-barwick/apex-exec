@@ -2146,7 +2146,10 @@ impl Checker {
         if self.same_type_identity(actual, expected) || *expected == TypeName::Object {
             return true;
         }
-        if *actual == TypeName::Id && *expected == TypeName::String {
+        if matches!(
+            (actual, expected),
+            (TypeName::Id, TypeName::String) | (TypeName::String, TypeName::Id)
+        ) {
             return true;
         }
         if let (TypeName::List(actual), TypeName::List(expected)) = (actual, expected)

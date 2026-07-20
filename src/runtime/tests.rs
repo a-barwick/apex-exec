@@ -205,8 +205,8 @@ fn system_debug_crosses_the_platform_host_boundary() {
 #[test]
 fn typed_nulls_retain_static_string_behavior_and_compare_as_null() {
     let interpreter = Interpreter::new();
-    let string_null = typed_value(Value::Null(None), &TypeName::String);
-    let integer_null = typed_value(Value::Null(None), &TypeName::Integer);
+    let string_null = typed_value(Value::Null(None), &TypeName::String, Span::new(0, 0)).unwrap();
+    let integer_null = typed_value(Value::Null(None), &TypeName::Integer, Span::new(0, 0)).unwrap();
 
     assert!(string_null.has_string_type());
     assert!(!integer_null.has_string_type());

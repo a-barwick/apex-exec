@@ -608,7 +608,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 [value] => {
                     self.ensure_collection_mutable(id, span)?;
                     let element_type = self.list_type(id).clone();
-                    let value = typed_value(value.value.clone(), &element_type);
+                    let value = typed_value(value.value.clone(), &element_type, value.span)?;
                     let Collection::List { elements, .. } = self.collection_mut(id) else {
                         unreachable!()
                     };
@@ -627,7 +627,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         _ => unreachable!(),
                     };
                     let index = checked_list_index(index_value, size, true, index.span)?;
-                    let value = typed_value(value.value.clone(), &element_type);
+                    let value = typed_value(value.value.clone(), &element_type, value.span)?;
                     let Collection::List { elements, .. } = self.collection_mut(id) else {
                         unreachable!()
                     };
@@ -646,8 +646,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let element_type = self.list_type(id).clone();
                 let values: Vec<Value> = source_elements
                     .into_iter()
-                    .map(|value| typed_value(value, &element_type))
-                    .collect();
+                    .map(|value| typed_value(value, &element_type, source.span))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let Collection::List { elements, .. } = self.collection_mut(id) else {
                     unreachable!()
                 };
@@ -741,7 +741,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => unreachable!(),
                 };
                 let index = checked_list_index(index_value, size, false, index.span)?;
-                let value = typed_value(value.value.clone(), &element_type);
+                let value = typed_value(value.value.clone(), &element_type, value.span)?;
                 let Collection::List { elements, .. } = self.collection_mut(id) else {
                     unreachable!()
                 };
@@ -952,7 +952,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 self.ensure_collection_mutable(id, span)?;
                 let element_type = self.set_type(id).clone();
-                let value = typed_value(value.value.clone(), &element_type);
+                let value = typed_value(value.value.clone(), &element_type, value.span)?;
                 let changed = {
                     let Collection::Set { elements, .. } = self.collection(id) else {
                         unreachable!()
@@ -983,7 +983,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 let original_len = current.len();
                 for value in source_elements {
-                    let value = typed_value(value, &element_type);
+                    let value = typed_value(value, &element_type, source.span)?;
                     if !current
                         .iter()
                         .any(|existing| self.values_equal(existing, &value))
@@ -1202,8 +1202,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     } => (key_type.clone(), value_type.clone()),
                     _ => unreachable!(),
                 };
-                let key = typed_value(key.value.clone(), &key_type);
-                let value = typed_value(value.value.clone(), &value_type);
+                let key = typed_value(key.value.clone(), &key_type, key.span)?;
+                let value = typed_value(value.value.clone(), &value_type, value.span)?;
                 self.ensure_collection_mutable(id, span)?;
                 Ok(self.map_put(id, key, value))
             }
@@ -1226,11 +1226,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 self.ensure_collection_mutable(id, span)?;
                 for (key, value) in source_entries {
-                    self.map_put(
-                        id,
-                        typed_value(key, &key_type),
-                        typed_value(value, &value_type),
-                    );
+                    let key = typed_value(key, &key_type, source.span)?;
+                    let value = typed_value(value, &value_type, source.span)?;
+                    self.map_put(id, key, value);
                 }
                 Ok(Value::Void)
             }

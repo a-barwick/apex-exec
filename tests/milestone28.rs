@@ -439,7 +439,7 @@ public class SObjectIdBindDemo {
 }
 
 #[test]
-fn id_values_widen_to_strings_without_losing_their_text() {
+fn id_and_string_assignments_convert_text_and_validate_ids() {
     let source = r#"
 public class IdStringWideningDemo {
     public static void run() {
@@ -447,6 +447,20 @@ public class IdStringWideningDemo {
         String text = identifier;
         M28Alpha__c record = new M28Alpha__c(Name = identifier);
         System.debug(text + ':' + record.Name);
+
+        String validText = '001000000000001AAA';
+        Id converted = validText;
+        List<Id> identifiers = new List<Id>();
+        identifiers.add(validText);
+        System.debug(converted + ':' + identifiers[0]);
+
+        try {
+            String invalidText = 'not-an-id';
+            Id invalid = invalidText;
+            System.debug(invalid);
+        } catch (StringException error) {
+            System.debug(error.getMessage());
+        }
     }
 }
 "#;
@@ -454,7 +468,11 @@ public class IdStringWideningDemo {
     let compilation = project::compile(&root).unwrap();
     assert_eq!(
         compilation.invoke("IdStringWideningDemo.run").unwrap(),
-        ["a00000000000001AAA:a00000000000001AAA"]
+        [
+            "a00000000000001AAA:a00000000000001AAA",
+            "001000000000001AAA:001000000000001AAA",
+            "Invalid id: not-an-id",
+        ]
     );
     fs::remove_dir_all(root).unwrap();
 }
