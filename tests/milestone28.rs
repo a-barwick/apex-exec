@@ -236,6 +236,34 @@ public class LexicalPrivateDemo {
 }
 
 #[test]
+fn nested_type_identity_is_stable_across_qualified_collection_spelling() {
+    let source = r#"
+public class NestedTypeIdentityDemo {
+    public List<RecordInput> records { get; private set; }
+
+    public static void run() {
+        NestedTypeIdentityDemo demo = new NestedTypeIdentityDemo();
+        demo.records = new List<NestedTypeIdentityDemo.RecordInput>();
+        List<RecordInput> localRecords =
+            new List<NestedTypeIdentityDemo.RecordInput>();
+        localRecords.add(new RecordInput());
+        demo.records.addAll(localRecords);
+        System.debug(demo.records.size());
+    }
+
+    public class RecordInput {}
+}
+"#;
+    let root = test_project("NestedTypeIdentityDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("NestedTypeIdentityDemo.run").unwrap(),
+        ["1"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn enterprise_string_helpers_are_typed_utf16_aware_and_regex_checked() {
     let source = r#"
 public class EnterpriseStringDemo {

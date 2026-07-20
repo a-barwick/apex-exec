@@ -2136,7 +2136,7 @@ impl Checker {
     }
 
     fn is_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
-        if actual == expected || *expected == TypeName::Object {
+        if self.same_type_identity(actual, expected) || *expected == TypeName::Object {
             return true;
         }
         if (*actual == TypeName::Integer
@@ -2153,7 +2153,7 @@ impl Checker {
         if let (TypeName::List(actual) | TypeName::Set(actual), TypeName::Iterable(expected)) =
             (actual, expected)
         {
-            return actual == expected;
+            return self.same_type_identity(actual, expected);
         }
         if *expected == TypeName::Exception && self.is_exception_type(actual) {
             return true;
@@ -2177,6 +2177,30 @@ impl Checker {
             return false;
         };
         self.class_is_or_inherits(actual_id, expected_id)
+    }
+
+    fn same_type_identity(&self, left: &TypeName, right: &TypeName) -> bool {
+        match (left, right) {
+            (TypeName::Custom(left), TypeName::Custom(right)) => {
+                match (
+                    self.class_ids.get(&left.canonical),
+                    self.class_ids.get(&right.canonical),
+                ) {
+                    (Some(left), Some(right)) => left == right,
+                    _ => left.canonical == right.canonical,
+                }
+            }
+            (TypeName::List(left), TypeName::List(right))
+            | (TypeName::Set(left), TypeName::Set(right))
+            | (TypeName::Iterable(left), TypeName::Iterable(right)) => {
+                self.same_type_identity(left, right)
+            }
+            (TypeName::Map(left_key, left_value), TypeName::Map(right_key, right_value)) => {
+                self.same_type_identity(left_key, right_key)
+                    && self.same_type_identity(left_value, right_value)
+            }
+            _ => left == right,
+        }
     }
 
     fn class_implements_platform_contract(&self, class_id: usize, expected: &TypeName) -> bool {
@@ -6295,7 +6319,7 @@ impl Checker {
     }
 
     fn is_runtime_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
-        if actual == expected || *expected == TypeName::Object {
+        if self.same_type_identity(actual, expected) || *expected == TypeName::Object {
             return true;
         }
         if *expected == TypeName::Exception && self.is_exception_type(actual) {
