@@ -1,144 +1,176 @@
 # Milestone 28 checkpoint
 
-Date: 2026-07-19
+Date: 2026-07-20
 
 Branch: `codex/milestone-28-enterprise-compatibility`
 
 Starting commit: `647d8ef1f1146c442046d0d0efdfc8b66f8559d9`
 
-## Milestone contract
+Bounded implementation head: `ae5b52d9b38dc36bc628a09e7ab344660716da1d`
+
+## Milestone contract and stop decision
 
 M28 closes the highest-impact blockers in the frozen M22 Nebula Logger
 denominator without changing benchmark source, expected Salesforce outcomes,
 or the 1,159-test denominator. Completion requires at least 60% strict
 compatibility, repeatable across three clean local runs. The stretch target is
-80%. This checkpoint does not satisfy that exit criterion and must not be
-merged to `main` as a completed milestone.
+80%.
+
+This checkpoint does not satisfy that exit criterion. Work stopped
+deliberately after the already-open
+`Map.putAll(List<SObject>)` slice was implemented, verified, and committed.
+The newly exposed blocker families listed below were not started. This branch
+must not be merged to `main` as a completed milestone.
 
 The pre-milestone North Star baseline was lexer 7/7, parser 7/7, total 14/14.
 Those counts are syntax indicators, not runtime or Salesforce compatibility
 percentages.
 
-## Starting evidence
+## Frozen inputs
 
-- `main`, `origin/main`, and the working HEAD all started at
+- The branch started from
   `647d8ef1f1146c442046d0d0efdfc8b66f8559d9`.
-- The worktree was clean before the branch was created.
-- The pinned representative project remained at
+- The representative project remains pinned at
   `55ba832d1d51680dd5e291d67ffe2104fa48977f`.
-- The unchanged pre-M28 replay was 0/1,159 strict compatible and 0/1,159
-  parsed. A typed SObject `switch when` pattern affected every test.
+- Manifest SHA-256:
+  `c352505e5ade7662919f4f32fea230a72342e8dccfbf2bf4725b31ae4c47cbcd`.
+- Salesforce snapshot SHA-256:
+  `1d0972ced93edca0053675229378fd805e4feae5596f60d60737a237df80ada0`.
+- The raw denominator remains 1,159 tests.
+- No benchmark source, expected Salesforce outcome, pinned project revision,
+  manifest, snapshot, or denominator was changed.
 
-## Implemented slices
+## Commit and slice ledger
 
-The current branch contains these bounded language and platform slices:
+The original checkpoint commit was:
 
-1. Typed SObject `switch when` patterns, including schema-qualified names,
-   arm-scoped bindings, duplicate-pattern rejection, first-match execution,
-   null/else behavior, and evaluate-once switching.
-2. Lossless `@IsTest(IsParallel=...)` parsing and checking plus deterministic
-   serial/parallel test-runner partitioning.
-3. Imported `MetadataRelationship` fields with target and controlling-field
-   retention through normalized schema and SQLite registry boundaries.
-4. Read-only roll-up summary fields for count, sum, minimum, maximum, and
-   equality filters. Definitions remain lossless, values are computed before
-   query filtering, and multiple summaries over one child object share one
-   child scan.
-5. Exact equality operators `===` and `!==`, with primitive exact-value
-   comparison, reference identity, normal equality precedence, and
-   evaluate-once operands.
-6. Static SOQL `ALL ROWS`, soft-deleted record visibility, read-only
-   `IsDeleted`, and undelete integration.
-7. Validated runtime-neutral `@SuppressWarnings(String)` declarations.
-8. `@TestVisible` access for annotated private fields, properties, methods,
-   constructors, and nested types from lexical test-class contexts only.
-9. `System.Comparable` contract validation and HIR-bound custom `List.sort`
-   dispatch using a stable bottom-up merge. Comparator exceptions propagate
-   without partially rewriting the list.
-10. `Database.Stateful` marker handling. Stateful batch receivers retain
-    instance state across start, execute chunks, and finish; non-stateful
-    receivers are restored from the enqueue-time snapshot for each transaction.
+- `94771dd` — typed SObject `switch when`; lossless
+  `@IsTest(IsParallel=...)`; imported metadata relationships; bounded roll-up
+  summaries; exact equality operators; SOQL `ALL ROWS` and soft deletion;
+  validated `@SuppressWarnings`; lexical `@TestVisible`; stable custom
+  `System.Comparable` sorting; and `Database.Stateful` batch state.
 
-## Enterprise replay progression
+Every implementation commit after that checkpoint, through the deliberate
+stop point, is recorded here:
 
-All entries below used the unchanged
-`benchmarks/milestone22/manifest.json` and
-`evidence/milestone22/salesforce.json`.
+| Commit | Bounded slice |
+|---|---|
+| `cfaf5c6` | Lexical-family private access; UTF-16-aware String helpers; `Database.AllowsCallouts`; `Database.BatchableContext`; typed async context/mocks and request values; transient fields and JSON omission; `@AuraEnabled` options; `HttpCalloutMock`; `Callable` and type-reflection dispatch; deterministic platform-cache unavailability; scalar and enum switch dispatch. |
+| `8dedceb` | Typed `LoggingLevel`; final field assignment rules; lazy static final properties; finite `Double` values; typed JSON deserialization; VisualEditor dynamic picklists; custom-metadata accessors and bounded deep clone; schema tokens, describe fields, and field sets. |
+| `9fb0b5a` | `TriggerOperation` enum semantics. |
+| `d2a1e95` | Canonical nested collection type identity. |
+| `a34935a` | Typed `Id` access on dynamic SObjects. |
+| `bf20478` | `Database.DMLOptions` modeling and all-or-none behavior. |
+| `c05f1f7` | Checked covariant SObject list downcasts. |
+| `9b9a87f` | Exactly-once assignment enforcement for final locals. |
+| `64e2e90` | Named SObject constructor-field initialization. |
+| `5536e6e` | SObject-ID extraction for SOQL collection binds. |
+| `f60d5a6` | Assignment-compatible widening from `Id` to `String`. |
+| `497f9e3` | Typed `Queueable` interface values. |
+| `8d96b81` | `Long.valueOf` and epoch Datetime conversion. |
+| `87066cc` | Standard platform-event `EventUuid` metadata. |
+| `9a9e7ab` | Unqualified SObject static type tokens. |
+| `cf57e38` | Validated implicit `String`-to-`Id` conversion. |
+| `a046bea` | `String instanceof Id` validation. |
+| `4c62e4b` | Explicit Network context plus measured governor counters and Salesforce-aligned maxima. |
+| `9aad967` | `Map<Id/String, SObject>(List<SObject>)` indexing by record ID with Salesforce-shaped duplicate/null failures. |
+| `ca4c9a9` | `FlowVersionView` runtime fields and `FlowDefinitionView` relationship metadata. |
+| `0284f5d` | Mixed lexical static/instance method-overload resolution. |
+| `ae5b52d` | `Map.putAll(List<SObject>)` for compatible `Id`/`String` keyed SObject maps, including replacement, full pre-mutation validation, and exact duplicate/null row failures. |
 
-| Checkpoint | Parse | Check | Strict | Sole blocker | Cold / warm / warm |
-|---|---:|---:|---:|---|---|
-| Pre-M28 | 0/1,159 | 0/1,159 | 0/1,159 | typed SObject switch pattern | not retained |
-| Syntax/schema slices | 1,159/1,159 | 0/1,159 | 0/1,159 | `@SuppressWarnings` | 405,506 / 161 / 161 ms |
-| `@SuppressWarnings` | 1,159/1,159 | 0/1,159 | 0/1,159 | `@TestVisible` | 414,698 / 161 / 159 ms |
-| `@TestVisible` | 1,159/1,159 | 0/1,159 | 0/1,159 | `System.Comparable` | 414,112 / 161 / 161 ms |
+The final `Map.putAll` slice reuses the constructor's bounded list-to-map
+validation. A failing list does not partially mutate the target map.
 
-The Comparable and Stateful slices have focused executable tests but have not
-received another full 1,159-test replay. The last completed isolated package
-check cleared Comparable and identified `Database.Stateful` as the next first
-error. Stateful was then implemented and its focused test passed; the
-subsequent isolated check was intentionally stopped when this checkpoint was
-requested.
+## Latest frozen enterprise funnel
 
-## Focused verification completed
+The post-`ae5b52d` replay used the unchanged frozen inputs:
 
-- `cargo check --locked --all-targets` passed after the Stateful slice.
-- `cargo test --locked --test milestone28 -- --nocapture` passed 9/9 before
-  the Stateful test was added.
-- The focused Stateful test passed after it was added.
-- Metadata importer tests passed 3/3.
-- SQLite platform tests passed 7/7.
-- The unchanged M21 North Star grammar census passed after the two newly
-  supported annotations were classified explicitly.
-- `git diff --check` passed before the final Stateful additions.
+```bash
+cargo +1.88.0 run --release --locked -- enterprise run \
+  benchmarks/milestone22/manifest.json \
+  --salesforce evidence/milestone22/salesforce.json \
+  --output /tmp/apex-exec-m28-after-sobject-put-all.json
+```
 
-No full milestone completion verification, coverage run, final North Star run,
-live Salesforce differential capture, or post-merge verification has been
-performed. Do not infer those results from this checkpoint.
+| Stage | Count | Denominator | Basis points |
+|---|---:|---:|---:|
+| Discovery | 1,159 | 1,159 | 10,000 |
+| Parse | 1,159 | 1,159 | 10,000 |
+| Check | 0 | 1,159 | 0 |
+| Execution | 0 | 1,159 | 0 |
+| Salesforce agreement | 0 | 1,159 | 0 |
+| Strict compatible | 0 | 1,159 | 0 |
 
-## Resume sequence
+Matching passes, matching failures, and outcome mismatches were all zero
+because no test passed semantic checking. Measured replay durations were
+206,042 ms cold, 70 ms warm, and 69 ms warm.
 
-1. Confirm the branch and worktree:
+The latest replay therefore remains 0/1,159 strict compatible. It is a
+checkpoint measurement, not completion evidence.
 
-   ```bash
-   git switch codex/milestone-28-enterprise-compatibility
-   git status --short --branch
-   ```
+## Exact remaining first blockers
 
-2. Run the isolated core check to identify the next first blocker:
+The latest report assigned the full denominator to these three first-error
+families:
 
-   ```bash
-   cargo run --locked -- check /tmp/apex-exec-m28-check
-   ```
+1. 1,126 tests — check / `semantic.unsupported`:
+   ``unsupported API `Id.getSObjectType` in compatibility profile
+   `salesforce-api-65.0` `` in
+   `nebula-logger/core/main/log-management/classes/LogEntryHandler.cls`.
+2. 18 tests — check / `semantic.unsupported`:
+   ``unknown type `Flow.Interview` `` in
+   `nebula-logger/core/main/log-management/classes/LogBatchPurger.cls`.
+3. 15 tests — check / `semantic.unsupported`:
+   ``unknown variable `System` `` in
+   `nebula-logger/core/main/log-management/classes/LogBatchPurgeController.cls`.
 
-   If the temporary project no longer exists, recreate an SFDX project whose
-   sole package directory is the absolute path to
-   `benchmarks/milestone22/nebula-logger/nebula-logger/core` at API 65.0.
+These impacted-test counts total 1,159. None of these blocker families was
+implemented after the replay.
 
-3. After the next complete slice, refresh the frozen per-test funnel:
+## Verification at the bounded stop point
 
-   ```bash
-   cargo run --locked -- enterprise run \
-     benchmarks/milestone22/manifest.json \
-     --salesforce evidence/milestone22/salesforce.json \
-     --output /tmp/apex-exec-m28-next-report.json
-   ```
+The following checks passed after the `Map.putAll(List<SObject>)` changes:
 
-4. Continue by impacted-test count until at least 696/1,159 tests satisfy the
-   strict numerator. Then run three clean repeatability runs, the complete
-   verification/coverage/North Star workflow, relevant CLI examples, and live
-   differential evidence before marking M28 complete or merging to `main`.
+- Focused SObject list-map constructor/`putAll` regression: 1/1.
+- `cargo +1.88.0 test --locked --test milestone28`: 46/46.
+- Existing typed map-method regression in `tests/milestone3.rs`: 1/1.
+- `cargo +1.88.0 check --locked --all-targets`.
+- `cargo +1.88.0 fmt --check`.
+- `git diff --check`.
+- The frozen enterprise cold/warm/warm replay described above.
 
-## Explicit remaining limitations
+No post-slice full `cargo test`, Clippy gate, coverage run, final North Star
+run, three-clean-run acceptance sequence, or post-merge verification was
+performed. Those remain milestone-completion work and must not be inferred
+from this checkpoint.
 
-- The strict compatibility numerator is still 0/1,159 at the last completed
-  enterprise replay.
-- Heterogeneous `List<Object>` sorting and SObject natural ordering are not
-  modeled; custom sorting currently requires a statically typed Comparable
-  class.
-- Roll-up support is limited to imported count/sum/min/max definitions over
-  supported Integer/Date/Datetime fields and equality filters.
-- Metadata-relationship describe traversal remains outside the implemented
-  scalar storage surface.
-- Salesforce-exact cross-transaction static isolation is not claimed for
-  asynchronous work.
-- M28 documentation remains a checkpoint, not release evidence.
+Live Salesforce probes used during the post-checkpoint work were guarded
+against disposable org ID `00DdL000010oTXlUAM`. They bound Network/Limits
+behavior, SObject-list map duplicate/null failures, and `FlowVersionView`
+describe fields at API 67.0 with Salesforce CLI 2.30.8. They were development
+differentials, not final M28 release evidence.
+
+## Clean resume command
+
+Resume only from the published milestone branch:
+
+```bash
+git fetch origin
+git switch codex/milestone-28-enterprise-compatibility
+git pull --ff-only origin codex/milestone-28-enterprise-compatibility
+git status --short --branch
+cargo +1.88.0 run --release --locked -- enterprise run \
+  benchmarks/milestone22/manifest.json \
+  --salesforce evidence/milestone22/salesforce.json \
+  --output /tmp/apex-exec-m28-resume.json
+```
+
+Before implementing anything, confirm the two SHA-256 values, denominator,
+funnel, and three blocker entries above. The next dominant family is
+`Id.getSObjectType`; it has not been claimed or designed in this checkpoint.
+
+M28 can be marked complete only after at least 696/1,159 tests satisfy the
+strict numerator, three clean runs reproduce the result, all repository gates
+and relevant CLI examples pass, required coverage/North Star/live
+differential evidence is captured, and the completion documentation is
+reviewed. Do not merge this checkpoint to `main`.
