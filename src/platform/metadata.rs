@@ -153,6 +153,11 @@ impl ObjectBuilder {
                 FieldSchema::new("QualifiedApiName", FieldType::String, false),
             ]);
         }
+        if builder.api_name.ends_with("__e") {
+            builder
+                .fields
+                .push(FieldSchema::new("EventUuid", FieldType::String, true));
+        }
         builder
     }
 

@@ -524,6 +524,33 @@ public class LongValueDemo {
 }
 
 #[test]
+fn platform_event_metadata_includes_the_standard_event_uuid_field() {
+    let source = r#"
+public class PlatformEventUuidDemo {
+    public static void run() {
+        M28Signal__e event = new M28Signal__e();
+        String uuid = event.EventUuid;
+        Schema.SObjectField token = Schema.M28Signal__e.EventUuid;
+        System.debug(uuid == null);
+        System.debug(token.getDescribe().getName());
+    }
+}
+"#;
+    let root = test_project("PlatformEventUuidDemo", source, &[]);
+    write_object(
+        &root.join("force-app/main/default"),
+        "M28Signal__e",
+        "M28 Signal",
+    );
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("PlatformEventUuidDemo.run").unwrap(),
+        ["true", "EventUuid"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {
