@@ -551,6 +551,27 @@ public class PlatformEventUuidDemo {
 }
 
 #[test]
+fn unqualified_sobject_names_expose_the_static_sobject_type_token() {
+    let source = r#"
+public class UnqualifiedSObjectTypeDemo {
+    public static void run() {
+        Schema.SObjectType token = M28Alpha__c.SObjectType;
+        System.debug(token.getDescribe().getName());
+    }
+}
+"#;
+    let root = test_project("UnqualifiedSObjectTypeDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("UnqualifiedSObjectTypeDemo.run")
+            .unwrap(),
+        ["M28Alpha__c"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {

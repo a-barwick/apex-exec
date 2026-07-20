@@ -4210,6 +4210,24 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if let Expression::Variable(identifier) = receiver
+            && name.canonical == "sobjecttype"
+            && self.lookup(&identifier.canonical).is_none()
+            && !self.class_ids.contains_key(&identifier.canonical)
+            && self.current_class.is_none_or(|class_id| {
+                self.lexical_class_value_member(class_id, &identifier.canonical)
+                    .is_none()
+            })
+            && let Some(object_id) = self.schema.object_index(&identifier.spelling)
+        {
+            return Some(self.checked_schema_member(
+                span,
+                name,
+                for_write,
+                hir::SchemaMemberTarget::SObjectType { object_id },
+                TypeName::SObjectType,
+            ));
+        }
         let owner = qualified_expression_name(receiver);
         if matches!(owner.as_deref(), Some("schema" | "schema.sobjecttype")) {
             let object_id = self.schema.object_index(&name.spelling)?;
