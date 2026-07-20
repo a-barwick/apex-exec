@@ -3,7 +3,12 @@ use super::{
     StorageTransaction,
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
-use std::{cmp::Ordering, collections::BTreeMap, error::Error, fmt};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DmlOperation {
@@ -30,6 +35,9 @@ pub struct DmlRow {
 pub struct DmlRequest {
     pub operation: DmlOperation,
     pub all_or_none: bool,
+    pub access: super::AccessLevel,
+    pub sharing: super::SharingMode,
+    pub user_id: String,
     pub external_id: Option<DmlExternalId>,
     pub rows: Vec<DmlRow>,
 }
@@ -41,6 +49,7 @@ pub enum DmlStatus {
     DuplicateValue,
     InvalidCrossReferenceKey,
     InvalidFieldForInsertUpdate,
+    InsufficientAccessOrReadonly,
     MissingArgument,
     RequiredFieldMissing,
     UnknownException,
@@ -54,6 +63,7 @@ impl DmlStatus {
             "DUPLICATE_VALUE" => Some(Self::DuplicateValue),
             "INVALID_CROSS_REFERENCE_KEY" => Some(Self::InvalidCrossReferenceKey),
             "INVALID_FIELD_FOR_INSERT_UPDATE" => Some(Self::InvalidFieldForInsertUpdate),
+            "INSUFFICIENT_ACCESS_OR_READONLY" => Some(Self::InsufficientAccessOrReadonly),
             "MISSING_ARGUMENT" => Some(Self::MissingArgument),
             "REQUIRED_FIELD_MISSING" => Some(Self::RequiredFieldMissing),
             "UNKNOWN_EXCEPTION" => Some(Self::UnknownException),
@@ -68,6 +78,7 @@ impl DmlStatus {
             Self::DuplicateValue => "DUPLICATE_VALUE",
             Self::InvalidCrossReferenceKey => "INVALID_CROSS_REFERENCE_KEY",
             Self::InvalidFieldForInsertUpdate => "INVALID_FIELD_FOR_INSERT_UPDATE",
+            Self::InsufficientAccessOrReadonly => "INSUFFICIENT_ACCESS_OR_READONLY",
             Self::MissingArgument => "MISSING_ARGUMENT",
             Self::RequiredFieldMissing => "REQUIRED_FIELD_MISSING",
             Self::UnknownException => "UNKNOWN_EXCEPTION",
@@ -305,6 +316,10 @@ pub struct SoqlRequest {
     pub object: String,
     pub select: Vec<QuerySelect>,
     pub condition: Option<QueryCondition>,
+    pub access: super::QueryAccessMode,
+    pub sharing: super::SharingMode,
+    pub user_id: String,
+    pub visible_record_ids: Option<BTreeSet<RecordId>>,
     pub group_by: Vec<QueryField>,
     pub having: Option<QueryCondition>,
     pub order_by: Vec<QueryOrder>,
@@ -366,8 +381,35 @@ impl LocalDatabase {
         self.storage.schema()
     }
 
+    pub fn load_fixture(
+        &mut self,
+        records: impl IntoIterator<Item = Record>,
+    ) -> Result<(), DatabaseError> {
+        self.storage
+            .load_fixture(records)
+            .map_err(DatabaseError::storage)?;
+        self.sequences.clear();
+        self.recycle_bin.clear();
+        Ok(())
+    }
+
     pub fn last_query_object_scans(&self) -> usize {
         self.last_query_object_scans
+    }
+
+    pub(crate) fn records_for_security(
+        &mut self,
+        object_api_name: &str,
+    ) -> Result<Vec<Record>, DatabaseError> {
+        let mut transaction = self
+            .storage
+            .begin_transaction()
+            .map_err(DatabaseError::storage)?;
+        let records = transaction
+            .scan(object_api_name)
+            .map_err(DatabaseError::storage)?;
+        transaction.commit().map_err(DatabaseError::storage)?;
+        Ok(records)
     }
 
     pub fn migrate(&mut self, schema: SchemaCatalog) -> Result<(), DatabaseError> {
@@ -441,6 +483,13 @@ impl LocalDatabase {
         let records = transaction
             .scan(&request.object)
             .map_err(DatabaseError::storage)?;
+        let records = match &request.visible_record_ids {
+            Some(visible) => records
+                .into_iter()
+                .filter(|record| visible.contains(record.id()))
+                .collect(),
+            None => records,
+        };
         self.last_query_object_scans = 1;
         let mut rows = hydrate_rows(
             &schema,

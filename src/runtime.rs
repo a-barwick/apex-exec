@@ -8,7 +8,7 @@ use crate::{
     hir::{
         CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
         DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId,
-        PlaceTarget, Program, ReferenceTarget, TriggerContextVariable,
+        PlaceTarget, Program, ReferenceTarget, SecurityDecisionMethod, TriggerContextVariable,
     },
     platform::{DmlError as PlatformDmlError, DmlRowOutcome, FieldType},
     span::Span,
@@ -30,6 +30,7 @@ mod instrumentation;
 mod intrinsics;
 mod numeric;
 mod platform_intrinsics;
+mod security;
 mod store;
 mod value_graph;
 
@@ -137,6 +138,12 @@ enum PlatformValue {
     },
     DmlError(PlatformDmlError),
     DmlStatus(crate::platform::DmlStatus),
+    AccessLevel(crate::platform::AccessLevel),
+    AccessType(crate::platform::AccessType),
+    SecurityDecision {
+        records: CollectionId,
+        removed_fields: BTreeMap<String, Vec<String>>,
+    },
 }
 
 impl PlatformValue {
@@ -155,6 +162,9 @@ impl PlatformValue {
             Self::DmlResult { ty, .. } => ty.clone(),
             Self::DmlError(_) => TypeName::DatabaseError,
             Self::DmlStatus(_) => TypeName::StatusCode,
+            Self::AccessLevel(_) => TypeName::AccessLevel,
+            Self::AccessType(_) => TypeName::AccessType,
+            Self::SecurityDecision { .. } => TypeName::SObjectAccessDecision,
         }
     }
 }
@@ -251,6 +261,7 @@ struct PendingAsyncJob {
     work: AsyncWork,
     span: Span,
     execution_context: ExecutionContext,
+    user_context: UserContext,
 }
 
 #[derive(Clone, Debug)]
@@ -326,6 +337,7 @@ pub struct Interpreter<'program, H = RecordingHost> {
     initialization_stack: Vec<usize>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
+    user_override: Option<UserContext>,
     next_async_sequence: u64,
 }
 
@@ -417,6 +429,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             initialization_stack: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
+            user_override: None,
             next_async_sequence: 1,
         }
     }
@@ -495,7 +508,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.classes()[class_id].name.span,
             ));
         };
-        self.evaluate_class_method(
+        let saved_execution_context = self.execution_context;
+        self.execution_context = self.execution_context.for_entry_class(
+            self.program()
+                .class_metadata(ClassId::from_index(class_id))
+                .sharing,
+        );
+        let result = self.evaluate_class_method(
             ClassMemberId {
                 class_id,
                 member_id: *member_id,
@@ -504,7 +523,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             &[],
             *span,
             false,
-        )
+        );
+        self.execution_context = saved_execution_context;
+        result
     }
 
     pub(crate) fn run_test(
@@ -693,7 +714,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.initialization_stack.push(class_id);
         let saved_declaring = self.current_declaring_class.replace(class_id);
         let saved_receiver = self.current_receiver.take();
+        let saved_execution_context = self.execution_context;
+        self.execution_context = self.execution_context.for_class(
+            self.program()
+                .class_metadata(ClassId::from_index(class_id))
+                .sharing,
+        );
         let result = self.initialize_class_members(class_id);
+        self.execution_context = saved_execution_context;
         self.current_receiver = saved_receiver;
         self.current_declaring_class = saved_declaring;
         let popped = self.initialization_stack.pop();
@@ -910,6 +938,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     )),
                 }
             }
+            Statement::RunAs { user, body, span } => self.execute_run_as(user, body, *span),
             Statement::Dml { .. } => self.execute_dml_statement(statement),
         }
     }
@@ -974,6 +1003,66 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         self.execute_dml(target, value, *span)?;
         Ok(Flow::Normal)
+    }
+
+    fn execute_run_as(
+        &mut self,
+        user: &Expression,
+        body: &Statement,
+        span: Span,
+    ) -> Result<Flow, Diagnostic> {
+        if !self.execution_context.is_test() {
+            return Err(runtime_exception(
+                "IllegalArgumentException",
+                "System.runAs is only valid in a test context",
+                span,
+            ));
+        }
+        let Value::SObject(user_handle) = self.evaluate(user)? else {
+            return Err(invalid_runtime_operands(user.span()));
+        };
+        let instance = self.store.sobject(user_handle);
+        let object = self
+            .program()
+            .schema()
+            .object_at(instance.object_id)
+            .expect("runtime SObject type belongs to its schema");
+        if !object.api_name().eq_ignore_ascii_case("User") {
+            return Err(Diagnostic::new(
+                "System.runAs requires a User SObject",
+                user.span(),
+            ));
+        }
+        let id_field = object.field_index("Id").expect("User schema contains Id");
+        let username_field = object
+            .field_index("Username")
+            .expect("User schema contains Username");
+        let user_id = match instance.fields.get(&id_field) {
+            Some(Value::Id(value) | Value::String(value)) => value.clone(),
+            _ => {
+                return Err(runtime_exception(
+                    "IllegalArgumentException",
+                    "System.runAs requires an inserted User",
+                    span,
+                ));
+            }
+        };
+        let username = match instance.fields.get(&username_field) {
+            Some(Value::String(value)) => value.clone(),
+            _ => format!("{user_id}@local.invalid"),
+        };
+        let saved = self
+            .user_override
+            .replace(UserContext { user_id, username });
+        let result = self.execute_statement(body);
+        self.user_override = saved;
+        result
+    }
+
+    pub(super) fn current_user_context(&self) -> UserContext {
+        self.user_override
+            .clone()
+            .unwrap_or_else(|| self.host.user_context())
     }
 
     fn execute_try(
@@ -1349,7 +1438,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::DatabaseQuery { .. }
                     | CallTarget::AggregateResultGet
                     | CallTarget::DmlResultMethod(_)
-                    | CallTarget::DmlErrorMethod(_) => Err(Diagnostic::new(
+                    | CallTarget::DmlErrorMethod(_)
+                    | CallTarget::SecurityDecisionMethod(_) => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -1514,19 +1604,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Some(CallTarget::SObjectPut) => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
             }
-            Some(CallTarget::DatabaseDml(target)) => {
-                self.evaluate_database_dml_call(target, arguments, span)
-            }
-            Some(CallTarget::DatabaseQuery {
-                kind,
-                expected_object_id,
-            }) => self.evaluate_database_query_call(kind, expected_object_id, arguments, span),
-            Some(CallTarget::AggregateResultGet) => {
-                self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
-            }
-            Some(target @ (CallTarget::DmlResultMethod(_) | CallTarget::DmlErrorMethod(_))) => {
-                self.evaluate_dml_support_call(target, receiver, evaluated_receiver, span)
-            }
+            Some(
+                target @ (CallTarget::DatabaseDml(_)
+                | CallTarget::DatabaseQuery { .. }
+                | CallTarget::AggregateResultGet
+                | CallTarget::DmlResultMethod(_)
+                | CallTarget::DmlErrorMethod(_)
+                | CallTarget::SecurityDecisionMethod(_)),
+            ) => self.evaluate_data_method_target(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
             Some(target @ CallTarget::EnumMethod { .. }) => self.evaluate_checked_enum_call(
                 target,
                 receiver,
@@ -1545,6 +1636,95 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 "unresolved method call escaped semantic validation",
                 method.span,
             ),
+        }
+    }
+
+    fn evaluate_data_method_target(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            CallTarget::DatabaseDml(target) => {
+                self.evaluate_database_dml_call(target, arguments, span)
+            }
+            CallTarget::DatabaseQuery {
+                kind,
+                expected_object_id,
+                access_level_argument,
+            } => self.evaluate_database_query_call(
+                kind,
+                expected_object_id,
+                access_level_argument,
+                arguments,
+                span,
+            ),
+            CallTarget::AggregateResultGet => {
+                self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
+            }
+            target @ (CallTarget::DmlResultMethod(_) | CallTarget::DmlErrorMethod(_)) => {
+                self.evaluate_dml_support_call(target, receiver, evaluated_receiver, span)
+            }
+            CallTarget::SecurityDecisionMethod(target) => self.evaluate_security_decision_method(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            _ => unreachable!("only data method targets use this helper"),
+        }
+    }
+
+    fn evaluate_security_decision_method(
+        &mut self,
+        target: SecurityDecisionMethod,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if !arguments.is_empty() {
+            return Err(invalid_runtime_operands(span));
+        }
+        let value = match evaluated_receiver {
+            Some(value) => value,
+            None => self.evaluate(receiver)?,
+        };
+        let Value::Platform(id) = value else {
+            return Err(invalid_runtime_operands(receiver.span()));
+        };
+        let PlatformValue::SecurityDecision {
+            records,
+            removed_fields,
+        } = self.store.platform(id).clone()
+        else {
+            return Err(invalid_runtime_operands(receiver.span()));
+        };
+        match target {
+            SecurityDecisionMethod::GetRecords => Ok(Value::Collection(records)),
+            SecurityDecisionMethod::GetRemovedFields => {
+                let entries = removed_fields
+                    .into_iter()
+                    .map(|(object, fields)| {
+                        let values = fields.into_iter().map(Value::String).collect();
+                        let set = self.store.allocate_collection(Collection::Set {
+                            element_type: TypeName::String,
+                            elements: values,
+                            iteration_depth: 0,
+                        });
+                        (Value::String(object), set)
+                    })
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::Map {
+                    key_type: TypeName::String,
+                    value_type: TypeName::Set(Box::new(TypeName::String)),
+                    entries,
+                }))
+            }
         }
     }
 
@@ -1716,7 +1896,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             },
             None => true,
         };
-        let outcomes = self.execute_dml_value(target, value, all_or_none, span)?;
+        let access = match target.access_level_argument {
+            Some(index) => {
+                let access = self.evaluate(&arguments[index])?;
+                self.runtime_access_level(access, arguments[index].span())?
+            }
+            None => target
+                .statement_access
+                .unwrap_or(crate::platform::AccessLevel::SystemMode),
+        };
+        let outcomes = self.execute_dml_value(target, value, all_or_none, access, span)?;
         let result_type = match self.program().expression_type(span) {
             Some(ExpressionType::Value(ty)) => ty.clone(),
             _ => {
@@ -1727,6 +1916,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
         };
         self.dml_outcomes_value(outcomes, &result_type, span)
+    }
+
+    fn runtime_access_level(
+        &self,
+        value: Value,
+        span: Span,
+    ) -> Result<crate::platform::AccessLevel, Diagnostic> {
+        let Value::Platform(id) = value else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match self.store.platform(id) {
+            PlatformValue::AccessLevel(access) => Ok(*access),
+            _ => Err(invalid_runtime_operands(span)),
+        }
     }
 
     fn null_short_circuit_value(&self, span: Span) -> Value {
@@ -1803,18 +2006,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ),
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
-            MemberTarget::DmlStatus(status) => Ok(self.dml_status_value(status)),
-            MemberTarget::EnumConstant { class_id, ordinal } => Ok(enum_value(class_id, ordinal)),
-            MemberTarget::TypeReference { class_id } => Ok(Value::TypeLiteral(TypeName::Custom(
-                crate::ast::NamedType::new(
+            target @ (MemberTarget::DmlStatus(_)
+            | MemberTarget::AccessLevel(_)
+            | MemberTarget::AccessType(_)
+            | MemberTarget::EnumConstant { .. }
+            | MemberTarget::TypeReference { .. }) => self.evaluate_constant_member(target, span),
+        }
+    }
+
+    fn evaluate_constant_member(
+        &mut self,
+        target: MemberTarget,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        Ok(match target {
+            MemberTarget::DmlStatus(status) => self.dml_status_value(status),
+            MemberTarget::AccessLevel(access) => self
+                .store
+                .allocate_platform(PlatformValue::AccessLevel(access)),
+            MemberTarget::AccessType(access) => self
+                .store
+                .allocate_platform(PlatformValue::AccessType(access)),
+            MemberTarget::EnumConstant { class_id, ordinal } => enum_value(class_id, ordinal),
+            MemberTarget::TypeReference { class_id } => {
+                Value::TypeLiteral(TypeName::Custom(crate::ast::NamedType::new(
                     self.classes()[class_id.index()]
                         .qualified_name
                         .spelling
                         .clone(),
                     span,
-                ),
-            ))),
-        }
+                )))
+            }
+            _ => unreachable!("only constant members use this helper"),
+        })
     }
 
     fn evaluate_optional_safe_receiver(
@@ -2787,6 +3011,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let caller_scopes = std::mem::replace(&mut self.scopes, vec![method_scope]);
         let saved_receiver = std::mem::replace(&mut self.current_receiver, receiver);
         let saved_declaring = self.current_declaring_class.replace(declaring_class);
+        let saved_execution_context = self.execution_context;
+        self.execution_context = self.execution_context.for_class(
+            self.program()
+                .class_metadata(ClassId::from_index(declaring_class))
+                .sharing,
+        );
         self.call_stack.push(ActiveCall {
             method: name.to_owned(),
             call_span: span,
@@ -2799,6 +3029,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.scopes = caller_scopes;
         self.current_receiver = saved_receiver;
         self.current_declaring_class = saved_declaring;
+        self.execution_context = saved_execution_context;
         match outcome {
             Ok(Flow::Return(value)) => match (return_type, value) {
                 (ReturnType::Void, None) => Ok(Value::Void),

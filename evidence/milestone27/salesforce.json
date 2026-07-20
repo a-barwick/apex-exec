@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "sharing-security-profile-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M27InheritedOracle.cls",
+          "apiVersion": "66.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M27SecurityOracleTest.cls",
+          "apiVersion": "66.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M27WithOracle.cls",
+          "apiVersion": "66.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M27WithoutOracle.cls",
+          "apiVersion": "66.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "tests": [
+        {
+          "name": "M27SecurityOracleTest.securityProfilesMatchSalesforce",
+          "outcome": "pass"
+        }
+      ]
+    }
+  ]
+}

@@ -189,6 +189,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             work,
             span,
             execution_context: self.execution_context.for_async_job(),
+            user_context: self.current_user_context(),
         });
         self.host.async_event(AsyncEvent {
             job_id: id.clone(),
@@ -224,7 +225,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             });
             let previous_execution_context =
                 std::mem::replace(&mut self.execution_context, job.execution_context);
+            let previous_user_context = self.user_override.replace(job.user_context.clone());
             let result = self.execute_async_transaction(&job);
+            self.user_override = previous_user_context;
             self.execution_context = previous_execution_context;
             self.current_async = previous;
             self.host.async_event(AsyncEvent {

@@ -1,7 +1,7 @@
 use crate::{
     ast,
     compatibility::{CompatibilityProfile, SourceProfiles},
-    platform::{DataValue, FieldType, SchemaCatalog},
+    platform::{DataValue, FieldType, QueryAccessMode, SchemaCatalog},
     span::Span,
 };
 use std::{
@@ -145,10 +145,20 @@ impl Program {
 pub(crate) struct ClassRuntimeMetadata {
     pub parent: Option<ClassId>,
     pub lineage_base_first: Vec<ClassId>,
+    pub sharing: ClassSharing,
     pub static_slots: Vec<ClassMemberId>,
     pub static_steps: Vec<ClassInitializationStep>,
     pub instance_slots: Vec<ClassMemberId>,
     pub instance_steps: Vec<ClassInitializationStep>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ClassSharing {
+    With,
+    Without,
+    Inherited,
+    #[default]
+    Omitted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +229,15 @@ fn class_runtime_metadata(
     let mut metadata = ClassRuntimeMetadata {
         parent: parents[class_id],
         lineage_base_first,
+        sharing: if class.modifiers.contains(&ast::Modifier::WithSharing) {
+            ClassSharing::With
+        } else if class.modifiers.contains(&ast::Modifier::WithoutSharing) {
+            ClassSharing::Without
+        } else if class.modifiers.contains(&ast::Modifier::InheritedSharing) {
+            ClassSharing::Inherited
+        } else {
+            ClassSharing::Omitted
+        },
         ..ClassRuntimeMetadata::default()
     };
     for (member_id, member) in class.members.iter().enumerate() {
@@ -349,9 +368,11 @@ pub enum CallTarget {
     DatabaseDml(DatabaseDmlTarget),
     DmlResultMethod(DmlResultMethod),
     DmlErrorMethod(DmlErrorMethod),
+    SecurityDecisionMethod(SecurityDecisionMethod),
     DatabaseQuery {
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
+        access_level_argument: Option<usize>,
     },
     AggregateResultGet,
     EnumMethod {
@@ -362,10 +383,18 @@ pub enum CallTarget {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecurityDecisionMethod {
+    GetRecords,
+    GetRemovedFields,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DatabaseDmlTarget {
     pub operation: ast::DmlOperation,
     pub external_id: Option<(ObjectTypeId, FieldId)>,
     pub all_or_none_argument: Option<usize>,
+    pub access_level_argument: Option<usize>,
+    pub statement_access: Option<crate::platform::AccessLevel>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -516,6 +545,8 @@ pub enum MemberTarget {
     },
     TriggerContext(TriggerContextVariable),
     DmlStatus(crate::platform::DmlStatus),
+    AccessLevel(crate::platform::AccessLevel),
+    AccessType(crate::platform::AccessType),
     EnumConstant {
         class_id: ClassId,
         ordinal: usize,
@@ -552,6 +583,7 @@ pub struct CheckedSoqlQuery {
     pub object_id: usize,
     pub select: Vec<CheckedSelectItem>,
     pub condition: Option<CheckedCondition>,
+    pub access: QueryAccessMode,
     pub group_by: Vec<CheckedFieldPath>,
     pub having: Option<CheckedCondition>,
     pub order_by: Vec<CheckedOrderBy>,

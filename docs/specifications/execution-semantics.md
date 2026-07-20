@@ -268,6 +268,12 @@ reviewed null-`instanceof` difference. Null-aware syntax and the curated M10
 platform surface require a current profile. Unmodeled versions fail during
 project discovery, and profile selection remains outside expression syntax.
 M27 adds the separate sharing/security context at the compiler/host boundary.
+The context preserves four declaration states long enough to distinguish
+explicit inherited sharing from an omitted declaration at an entry point.
+Query and DML requests also carry an operation access mode and current user;
+the host applies CRUD/FLS and visible-record decisions before database
+windowing or mutation preparation. Detailed behavior and limits are specified
+in `sharing-security.md`.
 
 ## Transactions
 

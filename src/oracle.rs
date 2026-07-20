@@ -517,6 +517,8 @@ fn observe_local_invocation(
         return;
     };
     let mut host = RecordingHost::default();
+    host.set_security_policy(compilation.security.clone());
+    host.set_database_fixtures(compilation.database_fixtures.clone());
     let result =
         Interpreter::with_host(&mut host).invoke_static(&compilation.program, class, method);
     let output = match result {

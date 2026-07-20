@@ -144,8 +144,10 @@ pub enum PlatformIntrinsic {
     LimitsGetLimitCallouts,
     UserInfoGetUserId,
     UserInfoGetUserName,
+    UserInfoGetProfileId,
     EncodingBase64Encode,
     EncodingBase64Decode,
+    SecurityStripInaccessible,
     HttpRequestSetEndpoint,
     HttpRequestGetEndpoint,
     HttpRequestSetMethod,
@@ -208,8 +210,10 @@ impl PlatformIntrinsic {
                 | Self::LimitsGetLimitCallouts
                 | Self::UserInfoGetUserId
                 | Self::UserInfoGetUserName
+                | Self::UserInfoGetProfileId
                 | Self::EncodingBase64Encode
                 | Self::EncodingBase64Decode
+                | Self::SecurityStripInaccessible
         )
     }
 }

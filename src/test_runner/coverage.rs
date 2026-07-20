@@ -208,6 +208,7 @@ fn visit_statement(
             statements,
             branches,
         ),
+        Statement::RunAs { body, .. } => visit_statement(body, statements, branches),
         Statement::VariableDeclaration { .. }
         | Statement::LocalDeclaration { .. }
         | Statement::Expression { .. }

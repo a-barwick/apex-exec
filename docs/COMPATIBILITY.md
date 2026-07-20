@@ -206,9 +206,12 @@ including accessor-specific property visibility and private nested-type
 ownership. Explicit `this(...)` and `super(...)` delegation is checked for
 overloads, access, and cycles. The full Apex conversion system remains
 unsupported.
-Sharing modifiers parse so class declarations remain structurally inspectable,
-but semantic checking rejects them because sharing/security behavior is
-deferred rather than silently ignored.
+Sharing modifiers execute for API 60.0–66.0. Checked metadata preserves
+`with sharing`, `without sharing`, explicit `inherited sharing`, and an omitted
+declaration separately. Nested inherited/omitted classes use the caller mode;
+at a modeled legacy entry point inherited enters with sharing and omitted
+enters without sharing. Triggers use system sharing, and deterministic queued
+work carries its submission context.
 
 SFDX project compilation finds `sfdx-project.json`, loads package-directory
 paths, recursively discovers `.cls` units, and requires one top-level type whose
@@ -710,7 +713,7 @@ are not a runtime or general Salesforce compatibility percentage.
 | Governor limits | Deferred | Post-core compatibility profile |
 | Candidate-bound live validation evidence | Implemented (schema v4 with effective profiles, metadata accounting, exact replay, repeated retrieval, and reviewed clean/blocked live bundles) | M17/M25/M26 |
 | Broad metadata accounting and org-only drift | Implemented (548 catalog types, complete file dispositions, separate metrics, type-wide org discovery) | M26 |
-| Sharing/security behavior | Planned (profile-scoped) | M27 |
+| Sharing/security behavior | Implemented and live-reviewed (API 60.0–66.0 class propagation, owner/OWD/roles/groups/grants, CRUD/FLS, query/DML access modes, `stripInaccessible`; Salesforce 2/2 selected dimensions) | M27 |
 | API-version differences | Implemented (API 31.0 and current API 60.0–66.0 family; strict rejection outside modeled versions) | M25 |
 | Runtime isolation for untrusted code | Out of scope | None |
 

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "objectPermissions": [
+    {
+      "principal": "*",
+      "object": "M27SecureRow__c",
+      "readable": false,
+      "creatable": false,
+      "updatable": false,
+      "deletable": false
+    }
+  ],
+  "records": [
+    {
+      "object": "Profile",
+      "id": "00e000000000002AAA",
+      "fields": {
+        "Name": "Standard User"
+      }
+    }
+  ]
+}

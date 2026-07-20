@@ -15,6 +15,7 @@ use std::{
 mod dependency;
 mod diagnostics;
 mod discovery;
+mod security;
 
 pub use dependency::DependencyGraph;
 use dependency::{build_dependency_graph, dependent_closure};
@@ -36,6 +37,8 @@ pub struct Compilation {
     pub dependencies: DependencyGraph,
     pub incremental: IncrementalReport,
     pub schema: SchemaCatalog,
+    pub security: crate::platform::SecurityPolicy,
+    pub(crate) database_fixtures: Vec<crate::platform::Record>,
     pub profiles: Vec<EffectiveProfile>,
     source_map: SourceMap,
 }
@@ -45,7 +48,10 @@ impl Compilation {
         let (class, method) = target.split_once('.').ok_or_else(|| {
             ProjectError::message("invocation target must have the form Class.method")
         })?;
-        crate::runtime::Interpreter::new()
+        let mut host = crate::runtime::RecordingHost::default();
+        host.set_security_policy(self.security.clone());
+        host.set_database_fixtures(self.database_fixtures.clone());
+        crate::runtime::Interpreter::with_host(host)
             .invoke_static(&self.program, class, method)
             .map_err(|diagnostic| self.source_map.project_error(diagnostic))
     }
@@ -88,6 +94,7 @@ pub struct ProjectCompiler {
     last_dependencies: DependencyGraph,
     last_compilation: Option<Compilation>,
     last_schema: SchemaCatalog,
+    last_security: security::LoadedSecurityFixture,
 }
 
 impl Default for ProjectCompiler {
@@ -99,6 +106,7 @@ impl Default for ProjectCompiler {
             last_dependencies: DependencyGraph::default(),
             last_compilation: None,
             last_schema: SchemaCatalog::new(),
+            last_security: security::LoadedSecurityFixture::default(),
         }
     }
 }
@@ -110,8 +118,14 @@ impl ProjectCompiler {
 
     pub fn compile(&mut self, path: impl AsRef<Path>) -> Result<Compilation, ProjectError> {
         let project = discover(path)?;
-        let schema = import_metadata(&project.source_roots)
+        let mut schema_roots = project.source_roots.clone();
+        let local_schema = project.root.join(".apex-exec/schema");
+        if local_schema.is_dir() {
+            schema_roots.push(local_schema);
+        }
+        let schema = import_metadata(&schema_roots)
             .map_err(|error| ProjectError::message(error.to_string()))?;
+        let security = security::load(&project.root).map_err(ProjectError::message)?;
         let fingerprints = project
             .files
             .iter()
@@ -120,6 +134,7 @@ impl ProjectCompiler {
 
         if fingerprints == self.last_fingerprints
             && schema == self.last_schema
+            && security == self.last_security
             && let Some(previous) = &self.last_compilation
         {
             let mut cached = previous.clone();
@@ -202,12 +217,15 @@ impl ProjectCompiler {
                 invalidated_files: invalidated.into_iter().collect(),
             },
             schema,
+            security: security.policy.clone(),
+            database_fixtures: security.records.clone(),
             profiles,
             source_map,
         };
         self.last_fingerprints = fingerprints;
         self.last_dependencies = dependencies;
         self.last_schema = compilation.schema.clone();
+        self.last_security = security;
         self.last_compilation = Some(compilation.clone());
         Ok(compilation)
     }
@@ -358,6 +376,8 @@ pub(crate) fn compile_source_subset(
             invalidated_files: Vec::new(),
         },
         schema: schema.clone(),
+        security: crate::platform::SecurityPolicy::default(),
+        database_fixtures: Vec::new(),
         profiles,
         source_map,
     })

@@ -1,4 +1,4 @@
-use crate::compatibility::CompatibilityProfile;
+use crate::{compatibility::CompatibilityProfile, hir::ClassSharing, platform::SharingMode};
 
 /// Runtime modes that affect observable Apex behavior.
 ///
@@ -9,6 +9,7 @@ pub(super) struct ExecutionContext {
     test: bool,
     debug: bool,
     profile: CompatibilityProfile,
+    sharing: SharingMode,
 }
 
 impl ExecutionContext {
@@ -17,6 +18,7 @@ impl ExecutionContext {
             test: false,
             debug: false,
             profile: CompatibilityProfile::default(),
+            sharing: SharingMode::WithoutSharing,
         }
     }
 
@@ -25,6 +27,7 @@ impl ExecutionContext {
             test: true,
             debug: false,
             profile: CompatibilityProfile::default(),
+            sharing: SharingMode::WithoutSharing,
         }
     }
 
@@ -33,6 +36,7 @@ impl ExecutionContext {
             test: false,
             debug: true,
             profile: CompatibilityProfile::default(),
+            sharing: SharingMode::WithoutSharing,
         }
     }
 
@@ -52,6 +56,34 @@ impl ExecutionContext {
         Self { profile, ..self }
     }
 
+    pub(super) const fn sharing_mode(self) -> SharingMode {
+        self.sharing
+    }
+
+    pub(super) const fn for_class(self, sharing: ClassSharing) -> Self {
+        let sharing = match sharing {
+            ClassSharing::With => SharingMode::WithSharing,
+            ClassSharing::Without => SharingMode::WithoutSharing,
+            ClassSharing::Inherited | ClassSharing::Omitted => self.sharing,
+        };
+        Self { sharing, ..self }
+    }
+
+    pub(super) const fn for_entry_class(self, sharing: ClassSharing) -> Self {
+        let sharing = match sharing {
+            ClassSharing::With | ClassSharing::Inherited => SharingMode::WithSharing,
+            ClassSharing::Without | ClassSharing::Omitted => SharingMode::WithoutSharing,
+        };
+        Self { sharing, ..self }
+    }
+
+    pub(super) const fn for_trigger(self) -> Self {
+        Self {
+            sharing: SharingMode::WithoutSharing,
+            ..self
+        }
+    }
+
     /// Deterministic queued work inherits the mode active at submission.
     pub(super) const fn for_async_job(self) -> Self {
         self
@@ -67,6 +99,31 @@ mod tests {
         let ordinary = ExecutionContext::ordinary();
         assert!(!ordinary.is_test());
         assert!(!ordinary.is_debug());
+        assert_eq!(
+            ordinary
+                .for_class(crate::hir::ClassSharing::With)
+                .sharing_mode(),
+            crate::platform::SharingMode::WithSharing
+        );
+        assert_eq!(
+            ordinary
+                .for_class(crate::hir::ClassSharing::With)
+                .for_class(crate::hir::ClassSharing::Inherited)
+                .sharing_mode(),
+            crate::platform::SharingMode::WithSharing
+        );
+        assert_eq!(
+            ordinary
+                .for_entry_class(crate::hir::ClassSharing::Inherited)
+                .sharing_mode(),
+            crate::platform::SharingMode::WithSharing
+        );
+        assert_eq!(
+            ordinary
+                .for_entry_class(crate::hir::ClassSharing::Omitted)
+                .sharing_mode(),
+            crate::platform::SharingMode::WithoutSharing
+        );
 
         let test = ExecutionContext::test();
         assert!(test.is_test());

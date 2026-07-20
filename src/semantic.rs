@@ -407,14 +407,23 @@ impl Checker {
             }
         }
         reject_modifiers(&class.modifiers, &rejected, class.name.span, subject)?;
-        if class.modifiers.iter().any(|modifier| {
-            matches!(
-                modifier,
-                Modifier::WithSharing | Modifier::WithoutSharing | Modifier::InheritedSharing
-            )
-        }) {
+        let sharing_count = [
+            Modifier::WithSharing,
+            Modifier::WithoutSharing,
+            Modifier::InheritedSharing,
+        ]
+        .iter()
+        .filter(|modifier| class.modifiers.contains(modifier))
+        .count();
+        if sharing_count > 1 {
             return Err(Diagnostic::new(
-                "sharing modifiers are parsed but not supported by the active compatibility profile",
+                "a type cannot declare more than one sharing modifier",
+                class.name.span,
+            ));
+        }
+        if class.kind != ClassKind::Class && sharing_count != 0 {
+            return Err(Diagnostic::new(
+                "sharing modifiers are valid only on classes",
                 class.name.span,
             ));
         }
@@ -2160,12 +2169,38 @@ impl Checker {
                     ))
                 }
             }
+            Statement::RunAs { user, body, span } => {
+                self.require_current_syntax("System.runAs", *span)?;
+                let in_test_class = self
+                    .current_class
+                    .is_some_and(|class_id| class_is_test(&self.classes[class_id]));
+                if !in_test_class {
+                    return Err(Diagnostic::new(
+                        "System.runAs is only valid in an @IsTest class",
+                        *span,
+                    ));
+                }
+                let actual = self.expression_type(user)?;
+                let is_user = matches!(
+                    actual,
+                    ExpressionType::Value(TypeName::Custom(ref name))
+                        if name.canonical.eq_ignore_ascii_case("user")
+                );
+                if !is_user {
+                    return Err(Diagnostic::new(
+                        format!("System.runAs requires a User, found {}", actual.name()),
+                        user.span(),
+                    ));
+                }
+                self.check_statement(body)
+            }
             Statement::Dml {
                 operation,
+                access,
                 value,
                 external_id,
                 span,
-            } => self.check_dml_statement(*operation, value, external_id.as_ref(), *span),
+            } => self.check_dml_statement(*operation, *access, value, external_id.as_ref(), *span),
             Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
         }
     }
@@ -2253,11 +2288,23 @@ impl Checker {
     fn check_dml_statement(
         &mut self,
         operation: crate::ast::DmlOperation,
+        access: crate::ast::DmlAccess,
         value: &Expression,
         external_id: Option<&Identifier>,
         span: Span,
     ) -> Result<(), Diagnostic> {
         let shape = self.check_dml_value(value)?;
+        let statement_access = match access {
+            crate::ast::DmlAccess::Default => None,
+            crate::ast::DmlAccess::UserMode => {
+                self.require_current_syntax("DML AS USER", span)?;
+                Some(crate::platform::AccessLevel::UserMode)
+            }
+            crate::ast::DmlAccess::SystemMode => {
+                self.require_current_syntax("DML AS SYSTEM", span)?;
+                Some(crate::platform::AccessLevel::SystemMode)
+            }
+        };
         let external_id = match external_id {
             Some(field) if operation == crate::ast::DmlOperation::Upsert => {
                 Some(self.resolve_external_id_name(&shape, field)?)
@@ -2276,6 +2323,8 @@ impl Checker {
                 operation,
                 external_id,
                 all_or_none_argument: None,
+                access_level_argument: None,
+                statement_access,
             }),
         );
         Ok(())
@@ -2982,6 +3031,46 @@ impl Checker {
                 })?;
             self.members.insert(span, MemberTarget::DmlStatus(status));
             return Ok(ExpressionType::Value(TypeName::StatusCode));
+        }
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("accesslevel" | "system.accesslevel" | "database.accesslevel")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "AccessLevel constants are read-only",
+                    name.span,
+                ));
+            }
+            let access =
+                crate::platform::AccessLevel::from_apex_name(&name.spelling).ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown AccessLevel constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(span, MemberTarget::AccessLevel(access));
+            return Ok(ExpressionType::Value(TypeName::AccessLevel));
+        }
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("accesstype" | "system.accesstype")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "AccessType constants are read-only",
+                    name.span,
+                ));
+            }
+            let access =
+                crate::platform::AccessType::from_apex_name(&name.spelling).ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown AccessType constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(span, MemberTarget::AccessType(access));
+            return Ok(ExpressionType::Value(TypeName::AccessType));
         }
         if let Some(result) = self.qualified_type_reference(receiver, name, span, for_write) {
             return result;
@@ -3833,6 +3922,8 @@ impl Checker {
                 | MemberTarget::SObjectChildRelationship { .. }
                 | MemberTarget::TriggerContext(_)
                 | MemberTarget::DmlStatus(_)
+                | MemberTarget::AccessLevel(_)
+                | MemberTarget::AccessType(_)
                 | MemberTarget::EnumConstant { .. }
                 | MemberTarget::TypeReference { .. },
             )
@@ -4140,7 +4231,8 @@ impl Checker {
                 _ => Err(unknown_method(receiver_type, method)),
             };
         }
-        if let Some(result) = self.dml_instance_method_type(receiver_type, method, arguments, span)
+        if let Some(result) =
+            self.special_result_instance_method_type(receiver_type, method, arguments, span)
         {
             return result;
         }
@@ -4179,6 +4271,8 @@ impl Checker {
             | TypeName::BatchableContext
             | TypeName::QueryLocator
             | TypeName::StatusCode
+            | TypeName::AccessLevel
+            | TypeName::AccessType
             | TypeName::SchedulableContext
             | TypeName::SObjectType
             | TypeName::DescribeSObjectResult => {
@@ -4191,6 +4285,7 @@ impl Checker {
             | TypeName::DatabaseError => {
                 unreachable!("DML result and error receivers were handled above")
             }
+            TypeName::SObjectAccessDecision => unreachable!("security decision handled above"),
             ty if self.is_exception_type(ty) => {
                 self.exception_instance_method_type(receiver_type, method, arguments)?
             }
@@ -4203,13 +4298,57 @@ impl Checker {
         Ok(result)
     }
 
-    fn dml_instance_method_type(
+    fn security_decision_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[0],
+            arguments,
+        )?;
+        let (target, result) = match method.canonical.as_str() {
+            "getrecords" => (
+                crate::hir::SecurityDecisionMethod::GetRecords,
+                TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+                    "SObject".to_owned(),
+                    method.span,
+                )))),
+            ),
+            "getremovedfields" => (
+                crate::hir::SecurityDecisionMethod::GetRemovedFields,
+                TypeName::Map(
+                    Box::new(TypeName::String),
+                    Box::new(TypeName::Set(Box::new(TypeName::String))),
+                ),
+            ),
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        self.calls
+            .insert(span, CallTarget::SecurityDecisionMethod(target));
+        Ok(ExpressionType::Value(result))
+    }
+
+    fn special_result_instance_method_type(
         &mut self,
         receiver_type: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if receiver_type == &TypeName::SObjectAccessDecision {
+            return Some(self.security_decision_method_type(
+                receiver_type,
+                method,
+                arguments,
+                span,
+            ));
+        }
         let is_result = matches!(
             receiver_type,
             TypeName::SaveResult
@@ -4753,6 +4892,7 @@ impl Checker {
             | CallTarget::AggregateResultGet
             | CallTarget::DmlResultMethod(_)
             | CallTarget::DmlErrorMethod(_) => true,
+            CallTarget::SecurityDecisionMethod(_) => true,
             CallTarget::Intrinsic(intrinsic) => !intrinsic.is_static(),
             CallTarget::TopLevelMethod(_)
             | CallTarget::StaticMethod(_)
@@ -5375,6 +5515,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "limits"
             | "userinfo"
             | "encodingutil"
+            | "security"
             | "eventbus"
     )
 }

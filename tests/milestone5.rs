@@ -149,11 +149,7 @@ fn enforces_access_static_and_abstract_contracts() {
         "cannot construct abstract type `Job`"
     );
 
-    let sharing = "public with sharing class SharedService {}";
-    assert_eq!(
-        check(sharing).unwrap_err().message,
-        "sharing modifiers are parsed but not supported by the active compatibility profile"
-    );
+    check("public with sharing class SharedService {}").unwrap();
 }
 
 #[test]

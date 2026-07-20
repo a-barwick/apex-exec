@@ -1,8 +1,8 @@
 use super::Checker;
 use crate::{
     ast::{
-        Expression, FieldPath, Identifier, SoqlAggregateFunction, SoqlCondition, SoqlInValues,
-        SoqlQuery, SoqlSelectItem, SoqlValue, SoslQuery, TypeName,
+        Expression, FieldPath, Identifier, SoqlAccess, SoqlAggregateFunction, SoqlCondition,
+        SoqlInValues, SoqlQuery, SoqlSelectItem, SoqlValue, SoslQuery, TypeName,
     },
     diagnostic::Diagnostic,
     hir::{
@@ -11,7 +11,7 @@ use crate::{
         CheckedSoslReturning, CheckedValue, DatabaseDmlTarget, DatabaseQueryKind, ExpressionType,
         FieldId, ObjectTypeId, QueryResultKind,
     },
-    platform::{DataValue, FieldType},
+    platform::{DataValue, FieldType, QueryAccessMode},
 };
 
 #[derive(Clone, Copy)]
@@ -23,6 +23,15 @@ pub(super) struct DmlValueShape {
 struct DatabaseDmlOptions {
     external_id: Option<(ObjectTypeId, FieldId)>,
     all_or_none_argument: Option<usize>,
+    access_level_argument: Option<usize>,
+}
+
+fn empty_database_dml_options() -> DatabaseDmlOptions {
+    DatabaseDmlOptions {
+        external_id: None,
+        all_or_none_argument: None,
+        access_level_argument: None,
+    }
 }
 
 impl Checker {
@@ -89,6 +98,21 @@ impl Checker {
             .as_ref()
             .map(|value| self.check_query_value(value, &FieldType::Integer))
             .transpose()?;
+        let access = match query.access {
+            SoqlAccess::Default => QueryAccessMode::Default,
+            SoqlAccess::SecurityEnforced => {
+                self.require_current_syntax("SOQL WITH SECURITY_ENFORCED", query.span)?;
+                QueryAccessMode::SecurityEnforced
+            }
+            SoqlAccess::UserMode => {
+                self.require_current_syntax("SOQL WITH USER_MODE", query.span)?;
+                QueryAccessMode::UserMode
+            }
+            SoqlAccess::SystemMode => {
+                self.require_current_syntax("SOQL WITH SYSTEM_MODE", query.span)?;
+                QueryAccessMode::SystemMode
+            }
+        };
         let (result, ty) =
             query_result_type(&select, &group_by, has_aggregate, expected, object_type);
         self.queries.insert(
@@ -97,6 +121,7 @@ impl Checker {
                 object_id,
                 select,
                 condition,
+                access,
                 group_by,
                 having,
                 order_by,
@@ -772,6 +797,8 @@ impl Checker {
                 operation,
                 external_id: options.external_id,
                 all_or_none_argument: options.all_or_none_argument,
+                access_level_argument: options.access_level_argument,
+                statement_access: None,
             }),
         );
         let result = database_dml_result_type(operation);
@@ -789,57 +816,132 @@ impl Checker {
         arguments: &[Expression],
         method: &Identifier,
     ) -> Result<DatabaseDmlOptions, Diagnostic> {
-        if arguments.len() > 3 {
+        if arguments.len() > 4 {
             return Err(Diagnostic::new(
                 format!("Database.{} received too many arguments", method.spelling),
                 method.span,
             ));
         }
         match arguments.len() {
-            1 => Ok(DatabaseDmlOptions {
-                external_id: None,
-                all_or_none_argument: None,
+            1 => Ok(empty_database_dml_options()),
+            2 => self.database_dml_two_options(operation, shape, arguments, method),
+            3 => self.database_dml_three_options(operation, shape, arguments, method),
+            4 => self.database_dml_four_options(operation, shape, arguments, method),
+            _ => unreachable!("DML argument count was checked"),
+        }
+    }
+
+    fn database_dml_two_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        match self.expression_type(&arguments[1]) {
+            Ok(ExpressionType::Value(TypeName::Boolean)) => Ok(DatabaseDmlOptions {
+                all_or_none_argument: Some(1),
+                ..empty_database_dml_options()
             }),
-            2 => {
-                if self.expression_type(&arguments[1])
-                    == Ok(ExpressionType::Value(TypeName::Boolean))
-                {
-                    Ok(DatabaseDmlOptions {
-                        external_id: None,
-                        all_or_none_argument: Some(1),
-                    })
-                } else if operation == crate::ast::DmlOperation::Upsert {
-                    Ok(DatabaseDmlOptions {
-                        external_id: Some(self.resolve_external_id_token(shape, &arguments[1])?),
-                        all_or_none_argument: None,
-                    })
-                } else {
-                    Err(Diagnostic::new(
-                        format!(
-                            "Database.{} second argument must be allOrNone Boolean",
-                            method.spelling
-                        ),
-                        arguments[1].span(),
-                    ))
-                }
-            }
-            3 if operation == crate::ast::DmlOperation::Upsert => {
-                let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
-                self.require_operand(&arguments[2], &TypeName::Boolean, arguments[2].span())?;
-                Ok(DatabaseDmlOptions {
-                    external_id: Some(external_id),
-                    all_or_none_argument: Some(2),
-                })
-            }
-            3 => Err(Diagnostic::new(
+            Ok(ExpressionType::Value(TypeName::AccessLevel)) => Ok(DatabaseDmlOptions {
+                access_level_argument: Some(1),
+                ..empty_database_dml_options()
+            }),
+            _ if operation == crate::ast::DmlOperation::Upsert => Ok(DatabaseDmlOptions {
+                external_id: Some(self.resolve_external_id_token(shape, &arguments[1])?),
+                ..empty_database_dml_options()
+            }),
+            Err(error) => Err(error),
+            _ => Err(Diagnostic::new(
                 format!(
-                    "Database.{} accepts only a record and optional allOrNone Boolean",
+                    "Database.{} second argument must be allOrNone Boolean or AccessLevel",
+                    method.spelling
+                ),
+                arguments[1].span(),
+            )),
+        }
+    }
+
+    fn database_dml_three_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        let second = self.expression_type(&arguments[1]);
+        let third = self.expression_type(&arguments[2])?;
+        if second == Ok(ExpressionType::Value(TypeName::Boolean))
+            && third == ExpressionType::Value(TypeName::AccessLevel)
+        {
+            return Ok(DatabaseDmlOptions {
+                all_or_none_argument: Some(1),
+                access_level_argument: Some(2),
+                ..empty_database_dml_options()
+            });
+        }
+        if operation == crate::ast::DmlOperation::Upsert {
+            return self.database_upsert_three_options(shape, arguments, third);
+        }
+        second?;
+        Err(Diagnostic::new(
+            format!(
+                "Database.{} three-argument form requires allOrNone and AccessLevel",
+                method.spelling
+            ),
+            method.span,
+        ))
+    }
+
+    fn database_upsert_three_options(
+        &mut self,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        third: ExpressionType,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
+        match third {
+            ExpressionType::Value(TypeName::Boolean) => Ok(DatabaseDmlOptions {
+                external_id: Some(external_id),
+                all_or_none_argument: Some(2),
+                access_level_argument: None,
+            }),
+            ExpressionType::Value(TypeName::AccessLevel) => Ok(DatabaseDmlOptions {
+                external_id: Some(external_id),
+                all_or_none_argument: None,
+                access_level_argument: Some(2),
+            }),
+            _ => Err(Diagnostic::new(
+                "Database.upsert third argument must be allOrNone Boolean or AccessLevel",
+                arguments[2].span(),
+            )),
+        }
+    }
+
+    fn database_dml_four_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        if operation != crate::ast::DmlOperation::Upsert {
+            return Err(Diagnostic::new(
+                format!(
+                    "Database.{} does not support four arguments",
                     method.spelling
                 ),
                 method.span,
-            )),
-            _ => unreachable!("DML argument count was checked"),
+            ));
         }
+        let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
+        self.require_operand(&arguments[2], &TypeName::Boolean, arguments[2].span())?;
+        self.require_operand(&arguments[3], &TypeName::AccessLevel, arguments[3].span())?;
+        Ok(DatabaseDmlOptions {
+            external_id: Some(external_id),
+            all_or_none_argument: Some(2),
+            access_level_argument: Some(3),
+        })
     }
 
     pub(super) fn resolve_external_id_name(
@@ -941,22 +1043,32 @@ impl Checker {
         expected: Option<&TypeName>,
         kind: DatabaseQueryKind,
     ) -> Result<ExpressionType, Diagnostic> {
-        if arguments.len() != 1 {
+        if !(1..=2).contains(&arguments.len()) {
             return Err(Diagnostic::new(
                 format!(
-                    "Database.{} expects exactly one query argument",
+                    "Database.{} expects a query and optional AccessLevel",
                     method.spelling
                 ),
                 method.span,
             ));
         }
+        if arguments.len() == 2 {
+            self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+        }
         let expected_object_id =
             self.check_database_query_argument(&arguments[0], expected, kind)?;
+        let access_level_argument = if arguments.len() == 2 {
+            self.require_operand(&arguments[1], &TypeName::AccessLevel, arguments[1].span())?;
+            Some(1)
+        } else {
+            None
+        };
         self.calls.insert(
             span,
             CallTarget::DatabaseQuery {
                 kind,
                 expected_object_id,
+                access_level_argument,
             },
         );
         Ok(ExpressionType::Value(

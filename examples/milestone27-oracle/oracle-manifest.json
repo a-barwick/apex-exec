@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "sharing-security-profile-fidelity",
+      "project": ".",
+      "entrypoint": {
+        "kind": "test",
+        "filter": "M27SecurityOracleTest.securityProfilesMatchSalesforce"
+      },
+      "compare": [
+        "compile",
+        "tests"
+      ]
+    }
+  ]
+}

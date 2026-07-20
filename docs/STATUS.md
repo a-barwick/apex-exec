@@ -461,11 +461,30 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   Verification passes 439 tests with no failures or ignored tests; LLVM
   source-line coverage is **85.10%** overall (29,348/34,485) and **83.18%**
   across the three changed production Rust modules (2,869/3,449).
+- M27 is complete. Checked class metadata now distinguishes
+  with/without/inherited/omitted sharing; runtime calls, entry points, triggers,
+  and queued work carry a typed sharing context. The host supplies
+  deterministic owner/OWD/role/group/grant visibility and default-deny
+  CRUD/FLS. Static and dynamic user/system queries, Database access levels,
+  statement DML `AS USER` / `AS SYSTEM`, `System.runAs`, and bounded
+  relationship-aware `Security.stripInaccessible` execute locally. The
+  reviewed API 66.0 oracle fixture matches Salesforce 2/2 selected dimensions,
+  and credential-free replay is byte-identical. Verification covers 453 Rust
+  tests with no failures or ignored tests; LLVM source-line coverage is
+  **85.01%** overall (30,986/36,450) and **84.17%** across 26 instrumented
+  changed production Rust modules (18,974/22,542). `src/platform/mod.rs` has
+  no instrumentable lines and is the only changed production module omitted
+  from that aggregate. North Star remains lexer 7/7 and parser 7/7 (14/14,
+  change 0); these are syntax indicators, not runtime or Salesforce
+  compatibility percentages. Formatting, warning-denied Clippy,
+  documentation, the pinned Lizard ratchet, local CLI, and coverage checks
+  pass. Guarded cleanup restored zero active fixture classes and metadata
+  components; the Tooling API retains one inactive soft-deleted object row.
 
 ## Immediate target
 
-M26 metadata accounting and org-configuration breadth is complete. M27 sharing
-and security profiles is the next planned milestone. The package tracker is in
+M27 sharing and security profiles is complete. M28 measured enterprise
+compatibility closure is the next planned milestone. The package tracker is in
 `docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
 baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 

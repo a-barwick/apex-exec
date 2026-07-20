@@ -387,6 +387,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             value @ (PlatformValue::DmlResult { .. }
             | PlatformValue::DmlError(_)
             | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
+            PlatformValue::AccessLevel(access) => traversal.write(output, access.apex_name()),
+            PlatformValue::AccessType(access) => traversal.write(output, access.apex_name()),
+            PlatformValue::SecurityDecision { .. } => {
+                traversal.write(output, "SObjectAccessDecision")
+            }
         }
         .or_else(|error| handle_output_error(error, traversal, output, cycle_behavior))
     }
@@ -822,6 +827,14 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
                         PlatformValue::DmlStatus(left_status),
                         PlatformValue::DmlStatus(right_status),
                     ) => left_status == right_status,
+                    (
+                        PlatformValue::AccessLevel(left_access),
+                        PlatformValue::AccessLevel(right_access),
+                    ) => left_access == right_access,
+                    (
+                        PlatformValue::AccessType(left_access),
+                        PlatformValue::AccessType(right_access),
+                    ) => left_access == right_access,
                     _ => left == right,
                 }
             }

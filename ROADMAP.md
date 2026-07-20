@@ -771,7 +771,7 @@ explicit.
 
 ### M27 — Sharing and security profiles
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 
@@ -791,6 +791,23 @@ call boundaries, user/system query and DML modes, object CRUD, field access,
 `Security.stripInaccessible`, and the scoped owner/OWD/explicit-share
 visibility model. Unsupported security behavior fails explicitly rather than
 running as system mode.
+
+#### Review state
+
+The implementation and reviewed API 66.0 differential fixture cover the four
+sharing declaration states, owner/OWD/role/group and explicit-grant policy,
+query and DML access modes, CRUD/FLS denial, relationship-aware
+`stripInaccessible`, and deterministic `System.runAs`. Guarded Salesforce
+capture and byte-identical credential-free replay match 2/2 selected
+dimensions. Verification passes 453 tests with no failures or ignored tests,
+formatting, warning-denied Clippy, documentation validation, the pinned Lizard
+ratchet, and all relevant CLI examples. LLVM source-line coverage is
+30,986/36,450 (**85.01%**) overall and 18,974/22,542 (**84.17%**) across 26
+instrumented changed production Rust modules; `src/platform/mod.rs` contains
+no instrumentable lines and is the only changed production module omitted
+from that aggregate. Guarded cleanup restored zero active fixture classes and
+metadata components. API 67.0 defaults remain outside the closed modeled
+profile catalog.
 
 ### M28 — Measured enterprise compatibility closure
 

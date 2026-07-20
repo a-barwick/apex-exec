@@ -154,7 +154,10 @@ fn run_internal(
                     let Some(case) = cases.get(index) else {
                         break;
                     };
-                    let execution = Interpreter::new().run_test(
+                    let mut host = crate::runtime::RecordingHost::default();
+                    host.set_security_policy(compilation.security.clone());
+                    host.set_database_fixtures(compilation.database_fixtures.clone());
+                    let execution = Interpreter::with_host(host).run_test(
                         &compilation.program,
                         &case.setup_methods,
                         case.target,
