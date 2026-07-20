@@ -486,6 +486,44 @@ public class QueueableParameterDemo {
 }
 
 #[test]
+fn long_value_of_and_datetime_epoch_conversion_are_checked() {
+    let source = r#"
+public class LongValueDemo {
+    public static void run() {
+        Long timestamp = Long.valueOf('1735689600000');
+        Datetime value = Datetime.valueOf(timestamp);
+        System.debug(timestamp);
+        System.debug(value.getTime());
+    }
+}
+"#;
+    let root = test_project("LongValueDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("LongValueDemo.run").unwrap(),
+        ["1735689600000", "1735689600000"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let root = test_project(
+        "InvalidLongValueDemo",
+        "public class InvalidLongValueDemo {
+            public static void run() {
+                Long invalid = Long.valueOf('not-a-long');
+            }
+        }",
+        &[],
+    );
+    let compilation = project::compile(&root).unwrap();
+    let error = compilation
+        .invoke("InvalidLongValueDemo.run")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid Long `not-a-long`"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {

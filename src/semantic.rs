@@ -7101,6 +7101,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "time"
             | "decimal"
             | "double"
+            | "long"
             | "id"
             | "blob"
             | "json"

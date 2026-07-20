@@ -994,6 +994,7 @@ impl Checker {
             ("time", "valueof") => P::TimeValueOf,
             ("decimal", "valueof") => P::DecimalValueOf,
             ("double", "valueof") => P::DoubleValueOf,
+            ("long", "valueof") => P::LongValueOf,
             ("id", "valueof") => P::IdValueOf,
             ("blob", "valueof") => P::BlobValueOf,
             ("json", "serialize") => P::JsonSerialize,
@@ -1052,7 +1053,26 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Datetime
             }
-            P::DatetimeValueOf | P::DatetimeValueOfGmt => {
+            P::DatetimeValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                let argument = self.expression_type(&arguments[0])?;
+                if !matches!(
+                    argument,
+                    ExpressionType::Value(TypeName::String | TypeName::Long)
+                ) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "{}.{} argument 1 expects String or Long, found {}",
+                            owner,
+                            method.spelling,
+                            argument.apex_name()
+                        ),
+                        arguments[0].span(),
+                    ));
+                }
+                TypeName::Datetime
+            }
+            P::DatetimeValueOfGmt => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_named_argument(
                     owner,
@@ -1100,6 +1120,17 @@ impl Checker {
                     &TypeName::String,
                 )?;
                 TypeName::Double
+            }
+            P::LongValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Long
             }
             P::IdValueOf => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;

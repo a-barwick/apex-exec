@@ -104,6 +104,7 @@ pub enum PlatformIntrinsic {
     DecimalAbs,
     DecimalScale,
     DoubleValueOf,
+    LongValueOf,
     IdValueOf,
     IdTo15,
     IdTo18,
@@ -251,6 +252,7 @@ impl PlatformIntrinsic {
                 | Self::TimeValueOf
                 | Self::DecimalValueOf
                 | Self::DoubleValueOf
+                | Self::LongValueOf
                 | Self::IdValueOf
                 | Self::BlobValueOf
                 | Self::JsonSerialize

@@ -187,8 +187,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let [value] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
-                let value = expect_string(&value.value, value.span)?;
-                parse_datetime(value, value_span(arguments, span)).map(Value::Datetime)
+                let argument_span = value.span;
+                match &value.value {
+                    Value::String(value) => {
+                        parse_datetime(value, argument_span).map(Value::Datetime)
+                    }
+                    Value::Long(value) if intrinsic == P::DatetimeValueOf => {
+                        datetime_from_millis(*value, argument_span).map(Value::Datetime)
+                    }
+                    _ => Err(invalid_runtime_operands(argument_span)),
+                }
             }
             P::DatetimeGetTime => {
                 expect_no_arguments(arguments, span)?;
@@ -309,6 +317,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .and_then(ApexDouble::new)
                     .map(Value::Double)
                     .ok_or_else(|| platform_error(format!("invalid Double `{value}`"), span))
+            }
+            P::LongValueOf => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let value = expect_string(&value.value, value.span)?;
+                value
+                    .parse::<i64>()
+                    .map(Value::Long)
+                    .map_err(|_| platform_error(format!("invalid Long `{value}`"), span))
             }
             P::DecimalSetScale => {
                 let mut decimal = expect_decimal(receiver, span)?;
