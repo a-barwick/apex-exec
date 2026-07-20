@@ -39,6 +39,7 @@ pub struct Program {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     places: HashMap<Span, PlaceTarget>,
+    sobject_constructor_fields: HashMap<Span, Vec<FieldId>>,
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
     type_literals: HashMap<Span, ast::TypeName>,
@@ -71,6 +72,7 @@ impl Program {
             references,
             members,
             places,
+            sobject_constructor_fields,
             binary_operations,
             unary_operations,
             type_literals,
@@ -94,6 +96,7 @@ impl Program {
             references,
             members,
             places,
+            sobject_constructor_fields,
             binary_operations,
             unary_operations,
             type_literals,
@@ -136,6 +139,12 @@ impl Program {
 
     pub(crate) fn place_target(&self, span: Span) -> Option<PlaceTarget> {
         self.places.get(&span).copied()
+    }
+
+    pub(crate) fn sobject_constructor_fields(&self, span: Span) -> Option<&[FieldId]> {
+        self.sobject_constructor_fields
+            .get(&span)
+            .map(Vec::as_slice)
     }
 
     pub(crate) fn binary_operation(&self, span: Span) -> Option<CheckedBinaryOperation> {
@@ -366,6 +375,7 @@ pub(crate) struct ProgramFacts {
     pub references: HashMap<Span, ReferenceTarget>,
     pub members: HashMap<Span, MemberTarget>,
     pub places: HashMap<Span, PlaceTarget>,
+    pub sobject_constructor_fields: HashMap<Span, Vec<FieldId>>,
     pub binary_operations: HashMap<Span, CheckedBinaryOperation>,
     pub unary_operations: HashMap<Span, CheckedUnaryOperation>,
     pub type_literals: HashMap<Span, ast::TypeName>,

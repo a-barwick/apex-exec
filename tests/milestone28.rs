@@ -338,6 +338,58 @@ public class DynamicSObjectIdDemo {
 }
 
 #[test]
+fn typed_sobject_constructors_validate_and_initialize_named_fields() {
+    let source = r#"
+public class NamedSObjectConstructorDemo {
+    public static void run() {
+        M28Alpha__c record = new Schema.M28Alpha__c(
+            Id = 'a00000000000001AAA',
+            Name = 'initialized'
+        );
+        System.debug(record.Id + ':' + record.Name);
+    }
+}
+"#;
+    let root = test_project("NamedSObjectConstructorDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("NamedSObjectConstructorDemo.run")
+            .unwrap(),
+        ["a00000000000001AAA:initialized"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    for (source, expected) in [
+        (
+            "M28Alpha__c row = new M28Alpha__c(Missing__c = 'value');",
+            "unknown field `Missing__c`",
+        ),
+        (
+            "M28Alpha__c row = new M28Alpha__c(Name = 'first', name = 'second');",
+            "duplicate SObject constructor field `name`",
+        ),
+        (
+            "M28Alpha__c row = new M28Alpha__c('value');",
+            "expects `field = value` arguments",
+        ),
+    ] {
+        let root = test_project(
+            "InvalidNamedSObjectConstructor",
+            &format!(
+                "public class InvalidNamedSObjectConstructor {{
+                    public static void run() {{ {source} }}
+                }}"
+            ),
+            &[],
+        );
+        let error = project::compile(&root).unwrap_err().to_string();
+        assert!(error.contains(expected), "{source}: {error}");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {

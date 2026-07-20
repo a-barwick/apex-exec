@@ -213,6 +213,7 @@ struct Checker {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     places: HashMap<Span, PlaceTarget>,
+    sobject_constructor_fields: HashMap<Span, Vec<FieldId>>,
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
     type_literals: HashMap<Span, TypeName>,
@@ -252,6 +253,7 @@ impl Checker {
             references: HashMap::new(),
             members: HashMap::new(),
             places: HashMap::new(),
+            sobject_constructor_fields: HashMap::new(),
             binary_operations: HashMap::new(),
             unary_operations: HashMap::new(),
             type_literals: HashMap::new(),
@@ -303,6 +305,7 @@ impl Checker {
                 references: self.references,
                 members: self.members,
                 places: self.places,
+                sobject_constructor_fields: self.sobject_constructor_fields,
                 binary_operations: self.binary_operations,
                 unary_operations: self.unary_operations,
                 type_literals: self.type_literals,
@@ -2196,7 +2199,13 @@ impl Checker {
                     self.class_ids.get(&right.canonical),
                 ) {
                     (Some(left), Some(right)) => left == right,
-                    _ => left.canonical == right.canonical,
+                    _ => match (
+                        self.schema.object_index(hir::schema_api_name(left)),
+                        self.schema.object_index(hir::schema_api_name(right)),
+                    ) {
+                        (Some(left), Some(right)) => left == right,
+                        _ => left.canonical == right.canonical,
+                    },
                 }
             }
             (TypeName::List(left), TypeName::List(right))
@@ -3703,18 +3712,54 @@ impl Checker {
             ));
         };
         if let Some(object_id) = self.schema.object_index(hir::schema_api_name(name)) {
+            let mut fields = Vec::with_capacity(arguments.len());
+            let mut seen = HashSet::with_capacity(arguments.len());
             for argument in arguments {
-                self.expression_type(argument)?;
+                let Expression::Assignment {
+                    target: AssignmentTarget::Variable(field),
+                    operator: AssignmentOperator::Assign,
+                    value,
+                    ..
+                } = argument
+                else {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "SObject constructor for `{}` expects `field = value` arguments",
+                            name.spelling
+                        ),
+                        argument.span(),
+                    ));
+                };
+                let (field_id, field_type) = {
+                    let object = self
+                        .schema
+                        .object_at(object_id)
+                        .expect("schema object index is valid");
+                    let Some(field_id) = object.field_index(&field.spelling) else {
+                        return Err(Diagnostic::new(
+                            format!("unknown field `{}` on `{}`", field.spelling, name.spelling),
+                            field.span,
+                        ));
+                    };
+                    let field_type = apex_field_type(
+                        object
+                            .field_at(field_id)
+                            .expect("schema field index is valid")
+                            .data_type(),
+                    );
+                    (field_id, field_type)
+                };
+                if !seen.insert(field_id) {
+                    return Err(Diagnostic::new(
+                        format!("duplicate SObject constructor field `{}`", field.spelling),
+                        field.span,
+                    ));
+                }
+                let actual = self.expression_type_for_expected(value, &field_type)?;
+                self.require_assignable(&field_type, &actual, value.span())?;
+                fields.push(FieldId::from_index(field_id));
             }
-            if !arguments.is_empty() {
-                return Err(Diagnostic::new(
-                    format!(
-                        "SObject constructor for `{}` expects no arguments",
-                        name.spelling
-                    ),
-                    arguments[0].span(),
-                ));
-            }
+            self.sobject_constructor_fields.insert(span, fields);
             self.calls.insert(
                 span,
                 CallTarget::SObjectConstructor {

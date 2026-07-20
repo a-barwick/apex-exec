@@ -3107,35 +3107,62 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let object_id = if let Some(object_id) = object_id {
-            if !arguments.is_empty() {
+        if let Some(object_id) = object_id {
+            let fields = self
+                .program()
+                .sobject_constructor_fields(span)
+                .ok_or_else(|| Diagnostic::new("unresolved SObject constructor fields", span))?
+                .to_vec();
+            if fields.len() != arguments.len() {
                 return Err(Diagnostic::new(
-                    "typed SObject constructor received unexpected arguments",
+                    "typed SObject constructor field count mismatch",
                     span,
                 ));
             }
-            object_id
-        } else {
-            let [object_name] = arguments else {
-                return Err(Diagnostic::new(
-                    "dynamic SObject constructor requires one API name",
-                    span,
-                ));
+            let receiver = self.store.allocate_sobject(object_id);
+            let receiver_id = match &receiver {
+                Value::SObject(receiver_id) => *receiver_id,
+                _ => unreachable!("SObject allocation always returns an SObject value"),
             };
-            let Value::String(object_name) = self.evaluate(object_name)? else {
-                return Err(invalid_runtime_operands(object_name.span()));
-            };
-            self.program()
-                .schema()
-                .object_index(&object_name)
-                .ok_or_else(|| {
-                    runtime_exception(
-                        "IllegalArgumentException",
-                        format!("unknown SObject `{object_name}`"),
-                        span,
-                    )
-                })?
+            for (argument, field_id) in arguments.iter().zip(fields) {
+                let Expression::Assignment { value, .. } = argument else {
+                    return Err(Diagnostic::new(
+                        "invalid typed SObject constructor field",
+                        argument.span(),
+                    ));
+                };
+                let value = self.evaluate(value)?;
+                self.write_sobject_field(
+                    receiver_id,
+                    object_id,
+                    field_id.index(),
+                    value,
+                    argument.span(),
+                )?;
+            }
+            return Ok(receiver);
+        }
+
+        let [object_name] = arguments else {
+            return Err(Diagnostic::new(
+                "dynamic SObject constructor requires one API name",
+                span,
+            ));
         };
+        let Value::String(object_name) = self.evaluate(object_name)? else {
+            return Err(invalid_runtime_operands(object_name.span()));
+        };
+        let object_id = self
+            .program()
+            .schema()
+            .object_index(&object_name)
+            .ok_or_else(|| {
+                runtime_exception(
+                    "IllegalArgumentException",
+                    format!("unknown SObject `{object_name}`"),
+                    span,
+                )
+            })?;
         Ok(self.store.allocate_sobject(object_id))
     }
 
