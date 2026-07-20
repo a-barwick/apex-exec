@@ -657,6 +657,47 @@ public class PlatformEventUuidDemo {
 }
 
 #[test]
+fn flow_version_view_schema_includes_runtime_fields_and_definition_relationship() {
+    let source = r#"
+public class FlowVersionViewSchemaDemo {
+    public static void run() {
+        List<Schema.FlowVersionView> versions = [
+            SELECT
+                ApiVersionRuntime,
+                DurableId,
+                FlowDefinitionViewId,
+                FlowDefinitionView.ApiName,
+                RunInMode,
+                Status,
+                VersionNumber
+            FROM FlowVersionView
+        ];
+        System.debug(versions.size());
+    }
+}
+"#;
+    let root = test_project("FlowVersionViewSchemaDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("FlowVersionViewSchemaDemo.run").unwrap(),
+        ["0"]
+    );
+    let field = compilation
+        .program
+        .schema()
+        .field("FlowVersionView", "FlowDefinitionViewId")
+        .unwrap();
+    assert_eq!(
+        field.data_type(),
+        &FieldType::Reference {
+            target_object: "FlowDefinitionView".to_owned()
+        }
+    );
+    assert_eq!(field.relationship_name(), Some("FlowDefinitionView"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unqualified_sobject_names_expose_the_static_sobject_type_token() {
     let source = r#"
 public class UnqualifiedSObjectTypeDemo {

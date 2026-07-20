@@ -172,8 +172,16 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
             &[
                 F::Id("Id"),
                 F::String("ApiName"),
+                F::Integer("ApiVersionRuntime"),
                 F::String("Description"),
+                F::String("DurableId"),
+                F::Reference {
+                    name: "FlowDefinitionViewId",
+                    target: "FlowDefinitionView",
+                    relationship: "FlowDefinitionView",
+                },
                 F::String("Label"),
+                F::String("RunInMode"),
                 F::Integer("VersionNumber"),
                 F::String("Status"),
             ],
