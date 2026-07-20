@@ -5033,10 +5033,23 @@ impl Checker {
                 }
                 Ok(())
             }
-            TypeName::Map(..) => {
+            TypeName::Map(key_type, value_type) => {
                 require_arity(ty, "constructor", arguments.len(), &[0, 1], arguments)?;
                 if let Some(argument) = arguments.first() {
-                    self.require_argument(ty, "constructor", 0, argument, ty)?;
+                    let actual = self.expression_type(argument)?;
+                    let sobject_list_constructor = matches!(
+                        &actual,
+                        ExpressionType::Value(TypeName::List(element_type))
+                            if matches!(key_type.as_ref(), TypeName::Id | TypeName::String)
+                                && (self.is_sobject_type(value_type)
+                                    || self.is_dynamic_sobject_type(value_type))
+                                && (self.is_sobject_type(element_type)
+                                    || self.is_dynamic_sobject_type(element_type))
+                                && self.is_subtype(element_type, value_type)
+                    );
+                    if !self.is_assignable(ty, &actual) && !sobject_list_constructor {
+                        self.require_argument(ty, "constructor", 0, argument, ty)?;
+                    }
                 }
                 Ok(())
             }

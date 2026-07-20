@@ -390,6 +390,87 @@ public class NamedSObjectConstructorDemo {
 }
 
 #[test]
+fn sobject_list_map_constructor_indexes_ids_and_rejects_invalid_rows() {
+    let source = r#"
+public class SObjectListMapConstructorDemo {
+    public static void run() {
+        M28Alpha__c first = new M28Alpha__c(
+            Id = 'a00000000000001AAA',
+            Name = 'First'
+        );
+        M28Alpha__c second = new M28Alpha__c(
+            Id = 'a00000000000002AAA',
+            Name = 'Second'
+        );
+        List<M28Alpha__c> rows = new List<M28Alpha__c>{first, second};
+
+        Map<Id, M28Alpha__c> byId = new Map<Id, M28Alpha__c>(rows);
+        Map<String, M28Alpha__c> byText = new Map<String, M28Alpha__c>(rows);
+        System.debug(byId.size() + ':' + byId.get(first.Id).Name);
+        System.debug(byText.containsKey(String.valueOf(second.Id)));
+
+        try {
+            Map<Id, M28Alpha__c> duplicate = new Map<Id, M28Alpha__c>(
+                new List<M28Alpha__c>{first, first}
+            );
+        } catch (Exception error) {
+            System.debug(error.getTypeName() + ':' + error.getMessage());
+        }
+
+        try {
+            Map<Id, M28Alpha__c> missingId = new Map<Id, M28Alpha__c>(
+                new List<M28Alpha__c>{first, new M28Alpha__c(Name = 'No Id')}
+            );
+        } catch (Exception error) {
+            System.debug(error.getTypeName() + ':' + error.getMessage());
+        }
+
+        try {
+            Map<Id, M28Alpha__c> nullRow = new Map<Id, M28Alpha__c>(
+                new List<M28Alpha__c>{first, null}
+            );
+        } catch (Exception error) {
+            System.debug(error.getTypeName() + ':' + error.getMessage());
+        }
+    }
+}
+"#;
+    let root = test_project("SObjectListMapConstructorDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("SObjectListMapConstructorDemo.run")
+            .unwrap(),
+        [
+            "2:First",
+            "true",
+            "ListException:Row with duplicate Id at index: 1",
+            "ListException:Row with null Id at index: 1",
+            "ListException:Null row at index: 1",
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let root = test_project(
+        "InvalidSObjectListMapConstructor",
+        "public class InvalidSObjectListMapConstructor {
+            public static void run() {
+                Map<Id, Integer> invalid = new Map<Id, Integer>(
+                    new List<Integer>{1}
+                );
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("expects Map<Id,Integer>, found List<Integer>"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn id_in_binds_extract_ids_from_typed_sobject_collections() {
     let source = r#"
 public class SObjectIdBindDemo {

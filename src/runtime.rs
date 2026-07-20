@@ -4257,17 +4257,21 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            TypeName::Map(key_type, value_type) => {
-                let Collection::Map { entries, .. } = self.collection(source_id) else {
-                    return Err(invalid_runtime_operands(source.span));
-                };
-                let entries = entries.clone();
-                Ok(self.allocate(Collection::Map {
-                    key_type: (**key_type).clone(),
-                    value_type: (**value_type).clone(),
-                    entries,
-                }))
-            }
+            TypeName::Map(key_type, value_type) => match self.collection(source_id) {
+                Collection::Map { entries, .. } => {
+                    let entries = entries.clone();
+                    Ok(self.allocate(Collection::Map {
+                        key_type: (**key_type).clone(),
+                        value_type: (**value_type).clone(),
+                        entries,
+                    }))
+                }
+                Collection::List { elements, .. } => {
+                    let elements = elements.clone();
+                    self.construct_sobject_map(key_type, value_type, elements, source.span)
+                }
+                Collection::Set { .. } => Err(invalid_runtime_operands(source.span)),
+            },
             _ => Err(Diagnostic::new(
                 "primitive construction escaped semantic validation",
                 span,
@@ -4373,6 +4377,57 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(self.allocate(Collection::Map {
             key_type: (**key_type).clone(),
             value_type: (**value_type).clone(),
+            entries,
+        }))
+    }
+
+    fn construct_sobject_map(
+        &mut self,
+        key_type: &TypeName,
+        value_type: &TypeName,
+        elements: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(elements.len()).map_err(|_| {
+            runtime_exception("ListException", "collection size is too large", span)
+        })?;
+        let mut seen_ids = BTreeSet::new();
+        for (index, value) in elements.into_iter().enumerate() {
+            let Value::SObject(sobject_id) = value else {
+                if matches!(value, Value::Null(_)) {
+                    return Err(runtime_exception(
+                        "ListException",
+                        format!("Null row at index: {index}"),
+                        span,
+                    ));
+                }
+                return Err(invalid_runtime_operands(span));
+            };
+            let Value::Id(record_id) = self.read_dynamic_sobject_id(sobject_id, span)? else {
+                return Err(runtime_exception(
+                    "ListException",
+                    format!("Row with null Id at index: {index}"),
+                    span,
+                ));
+            };
+            let identity = record_id
+                .get(..15)
+                .expect("validated Salesforce IDs contain at least 15 bytes")
+                .to_owned();
+            if !seen_ids.insert(identity) {
+                return Err(runtime_exception(
+                    "ListException",
+                    format!("Row with duplicate Id at index: {index}"),
+                    span,
+                ));
+            }
+            let key = typed_value(Value::Id(record_id), key_type, span)?;
+            entries.push((key, Value::SObject(sobject_id)));
+        }
+        Ok(self.allocate(Collection::Map {
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
             entries,
         }))
     }

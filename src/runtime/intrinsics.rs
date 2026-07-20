@@ -1147,12 +1147,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let [key] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
-                Ok(Value::Boolean(self.map_key_index(id, &key.value).is_some()))
+                let key = self.typed_map_key(id, key)?;
+                Ok(Value::Boolean(self.map_key_index(id, &key).is_some()))
             }
             MapIntrinsic::Get => {
                 let [key] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
+                let key = self.typed_map_key(id, key)?;
                 let Collection::Map {
                     value_type,
                     entries,
@@ -1162,7 +1164,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     unreachable!()
                 };
                 Ok(self
-                    .map_key_index(id, &key.value)
+                    .map_key_index(id, &key)
                     .map(|index| entries[index].1.clone())
                     .unwrap_or_else(|| Value::Null(Some(value_type.clone()))))
             }
@@ -1240,8 +1242,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     Collection::Map { value_type, .. } => value_type.clone(),
                     _ => unreachable!(),
                 };
+                let key = self.typed_map_key(id, key)?;
                 self.ensure_collection_mutable(id, span)?;
-                if let Some(index) = self.map_key_index(id, &key.value) {
+                if let Some(index) = self.map_key_index(id, &key) {
                     let Collection::Map { entries, .. } = self.collection_mut(id) else {
                         unreachable!()
                     };
@@ -1334,6 +1337,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         entries
             .iter()
             .position(|(existing, _)| self.values_equal(existing, key))
+    }
+
+    fn typed_map_key(
+        &self,
+        id: CollectionId,
+        key: &EvaluatedArgument,
+    ) -> Result<Value, Diagnostic> {
+        let Collection::Map { key_type, .. } = self.collection(id) else {
+            return Err(invalid_runtime_operands(key.span));
+        };
+        typed_value(key.value.clone(), key_type, key.span)
     }
 
     fn list_get(&self, id: CollectionId, index: &Value, span: Span) -> Result<Value, Diagnostic> {
