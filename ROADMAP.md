@@ -771,7 +771,7 @@ explicit.
 
 ### M27 — Sharing and security profiles
 
-**Status:** Planned
+**Status:** Active
 
 #### Scope
 
@@ -791,6 +791,18 @@ call boundaries, user/system query and DML modes, object CRUD, field access,
 `Security.stripInaccessible`, and the scoped owner/OWD/explicit-share
 visibility model. Unsupported security behavior fails explicitly rather than
 running as system mode.
+
+#### Review state
+
+The local implementation and unchanged differential fixture are ready for
+review. They cover the four sharing declaration states, owner/OWD/role/group
+and explicit-grant policy, query and DML access modes, CRUD/FLS denial,
+relationship-aware `stripInaccessible`, and deterministic `System.runAs`.
+Guarded Salesforce capture is still required before this exit criterion can be
+marked complete. The 452-test local suite, formatting, warning-denied Clippy,
+documentation, CLI examples, and LLVM coverage workflow pass; the pinned
+Lizard download is separately blocked by unavailable approved network access.
+API 67.0 defaults remain outside the closed modeled profile catalog.
 
 ### M28 — Measured enterprise compatibility closure
 

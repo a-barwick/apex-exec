@@ -13,8 +13,10 @@ on prior conversation context.
 - **Completed feature milestone:** M26 — complete metadata accounting on
   `codex/milestone-26-metadata-accounting`
 - **Active feature milestone:** M27 — sharing and security profiles
-- **Feature policy:** M18 through M26 are complete. M27 is the next platform
-  milestone.
+- **Feature policy:** M18 through M26 are complete. M27 implementation is in
+  review and remains gated on guarded Salesforce differential evidence. Its
+  local verification is green except that the pinned Lizard tool download is
+  blocked by unavailable approved network access.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.
