@@ -590,6 +590,7 @@ pub enum PlaceTarget {
         object_id: ObjectTypeId,
         field_id: FieldId,
     },
+    DynamicSObjectId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -648,6 +649,7 @@ pub enum MemberTarget {
         object_id: usize,
         field_id: usize,
     },
+    DynamicSObjectId,
     SObjectRelationship {
         object_id: usize,
         reference_field_id: usize,

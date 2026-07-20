@@ -317,6 +317,9 @@ enum Place {
         object_id: usize,
         field_id: usize,
     },
+    DynamicSObjectId {
+        receiver: SObjectId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2172,6 +2175,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
                 self.read_sobject_field(receiver, object_id, field_id, span)
             }
+            MemberTarget::DynamicSObjectId => {
+                let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
+                self.read_dynamic_sobject_id(receiver, span)
+            }
             MemberTarget::SObjectRelationship {
                 object_id,
                 reference_field_id,
@@ -2511,6 +2518,54 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             )
         })
+    }
+
+    fn dynamic_sobject_id_field(
+        &self,
+        receiver: SObjectId,
+        span: Span,
+    ) -> Result<(usize, usize), Diagnostic> {
+        let object_id = self.store.sobject(receiver).object_id;
+        let field_id = self.sobject_field_id(object_id, "Id", span)?;
+        Ok((object_id, field_id))
+    }
+
+    fn read_dynamic_sobject_id(
+        &self,
+        receiver: SObjectId,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.dynamic_sobject_id_field(receiver, span)?;
+        match self.read_sobject_field(receiver, object_id, field_id, span)? {
+            Value::Id(value) | Value::String(value) => Ok(Value::Id(value)),
+            Value::Null(_) => Ok(Value::Null(Some(TypeName::Id))),
+            _ => Err(Diagnostic::new(
+                "runtime SObject Id storage has an invalid value type",
+                span,
+            )),
+        }
+    }
+
+    fn write_dynamic_sobject_id(
+        &mut self,
+        receiver: SObjectId,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.dynamic_sobject_id_field(receiver, span)?;
+        let value = match value {
+            Value::Id(value) | Value::String(value) => Value::String(value),
+            Value::Null(_) => Value::Null(Some(TypeName::String)),
+            _ => {
+                return Err(runtime_exception(
+                    "TypeException",
+                    "field `Id` expects Id",
+                    span,
+                ));
+            }
+        };
+        self.write_sobject_field(receiver, object_id, field_id, value, span)?;
+        self.read_dynamic_sobject_id(receiver, span)
     }
 
     fn evaluate_sobject_receiver(
@@ -3679,6 +3734,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => self.resolve_sobject_field_place(syntax, object_id, field_id, span),
+            PlaceTarget::DynamicSObjectId => {
+                let PlaceSyntax::Member { receiver, .. } = syntax else {
+                    return Err(Diagnostic::new("invalid SObject Id place syntax", span));
+                };
+                let receiver = self.evaluate_sobject_receiver(receiver, None)?;
+                Ok(Place::DynamicSObjectId { receiver })
+            }
         }
     }
 
@@ -3781,6 +3843,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => self.read_sobject_field(*receiver, *object_id, *field_id, span),
+            Place::DynamicSObjectId { receiver } => self.read_dynamic_sobject_id(*receiver, span),
         }
     }
 
@@ -3820,6 +3883,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => self.write_sobject_field(*receiver, *object_id, *field_id, value, span),
+            Place::DynamicSObjectId { receiver } => {
+                self.write_dynamic_sobject_id(*receiver, value, span)
+            }
         }
     }
 

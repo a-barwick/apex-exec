@@ -4268,6 +4268,10 @@ impl Checker {
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
         let Some(object_id) = self.sobject_object_id(receiver_type) else {
+            if name.canonical == "id" {
+                self.members.insert(span, MemberTarget::DynamicSObjectId);
+                return Ok(ExpressionType::Value(TypeName::Id));
+            }
             return Err(Diagnostic::new(
                 "dynamic SObject fields require get/put access",
                 name.span,
@@ -5044,6 +5048,7 @@ impl Checker {
                 object_id: ObjectTypeId::from_index(object_id),
                 field_id: FieldId::from_index(field_id),
             },
+            Some(MemberTarget::DynamicSObjectId) => PlaceTarget::DynamicSObjectId,
             Some(
                 MemberTarget::SObjectRelationship { .. }
                 | MemberTarget::SObjectChildRelationship { .. }
@@ -6264,6 +6269,7 @@ impl Checker {
                 MemberTarget::Instance(_)
                     | MemberTarget::InstancePropertyStorage(_)
                     | MemberTarget::SObjectField { .. }
+                    | MemberTarget::DynamicSObjectId
                     | MemberTarget::SObjectRelationship { .. }
             )
         );

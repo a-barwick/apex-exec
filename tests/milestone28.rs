@@ -264,6 +264,39 @@ public class NestedTypeIdentityDemo {
 }
 
 #[test]
+fn dynamic_sobject_exposes_only_the_typed_id_pseudo_field() {
+    let source = r#"
+public class DynamicSObjectIdDemo {
+    public static void run() {
+        SObject record = new M28Alpha__c();
+        record.Id = Id.valueOf('a00000000000001AAA');
+        Id identifier = record.Id;
+        System.debug(identifier);
+    }
+}
+"#;
+    let root = test_project("DynamicSObjectIdDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("DynamicSObjectIdDemo.run").unwrap(),
+        ["a00000000000001AAA"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let invalid = check(
+        "SObject record;
+        Object unsupported = record.Name;",
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .message
+            .contains("dynamic SObject fields require get/put access"),
+        "{invalid}"
+    );
+}
+
+#[test]
 fn enterprise_string_helpers_are_typed_utf16_aware_and_regex_checked() {
     let source = r#"
 public class EnterpriseStringDemo {
