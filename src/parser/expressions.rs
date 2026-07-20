@@ -461,6 +461,7 @@ impl Parser {
                 | TypeName::Http
                 | TypeName::HttpRequest
                 | TypeName::HttpResponse
+                | TypeName::DmlOptions
                 | TypeName::VisualEditorDataRow
                 | TypeName::VisualEditorDynamicPickListRows
         ) {

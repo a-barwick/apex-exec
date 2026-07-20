@@ -7,9 +7,9 @@ use crate::{
     diagnostic::Diagnostic,
     hir::{
         CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
-        CustomMetadataMethod, DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget,
-        NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget, SchemaMemberTarget,
-        SecurityDecisionMethod, TriggerContextVariable,
+        CustomMetadataMethod, DatabaseDmlTarget, DmlOptionField, ExpressionType, FieldId,
+        MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget,
+        SchemaMemberTarget, SecurityDecisionMethod, TriggerContextVariable,
     },
     platform::{DmlError as PlatformDmlError, DmlRowOutcome, FieldType},
     span::Span,
@@ -148,6 +148,7 @@ enum PlatformValue {
     Http,
     HttpRequest(HttpRequestData),
     HttpResponse(HttpResponseData),
+    DmlOptions(DmlOptionsValue),
     VisualEditorDataRow {
         label: String,
         value: String,
@@ -208,6 +209,7 @@ impl PlatformValue {
             Self::Http => TypeName::Http,
             Self::HttpRequest(_) => TypeName::HttpRequest,
             Self::HttpResponse(_) => TypeName::HttpResponse,
+            Self::DmlOptions(_) => TypeName::DmlOptions,
             Self::VisualEditorDataRow { .. } => TypeName::VisualEditorDataRow,
             Self::VisualEditorDynamicPickListRows(_) => TypeName::VisualEditorDynamicPickListRows,
             Self::SObjectType(_) => TypeName::SObjectType,
@@ -271,6 +273,13 @@ struct SObjectInstance {
     fields: BTreeMap<usize, Value>,
     relationships: BTreeMap<usize, SObjectId>,
     children: BTreeMap<String, CollectionId>,
+    dml_options: Option<DmlOptionsValue>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DmlOptionsValue {
+    allow_field_truncation: Option<bool>,
+    opt_all_or_none: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -319,6 +328,10 @@ enum Place {
     },
     DynamicSObjectId {
         receiver: SObjectId,
+    },
+    DmlOptionField {
+        receiver: PlatformValueId,
+        field: DmlOptionField,
     },
 }
 
@@ -1552,6 +1565,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::EnumMethod { .. }
                     | CallTarget::SObjectGet
                     | CallTarget::SObjectPut
+                    | CallTarget::SObjectSetOptions
                     | CallTarget::DatabaseDml(_)
                     | CallTarget::DatabaseQuery { .. }
                     | CallTarget::AggregateResultGet
@@ -1737,6 +1751,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             Some(CallTarget::SObjectPut) => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(CallTarget::SObjectSetOptions) => {
+                self.evaluate_sobject_set_options(receiver, evaluated_receiver, arguments, span)
             }
             Some(CallTarget::CustomMetadataMethod { object_id, method }) => {
                 self.evaluate_custom_metadata_method(object_id, method, arguments, span)
@@ -2055,19 +2072,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid checked Database DML call", span));
         };
         let value = self.evaluate(value)?;
-        let all_or_none = match target.all_or_none_argument {
-            Some(index) => match self.evaluate(&arguments[index])? {
-                Value::Boolean(value) => value,
-                Value::Null(_) => {
-                    return Err(runtime_exception(
-                        "NullPointerException",
-                        "Database allOrNone argument is null",
-                        arguments[index].span(),
-                    ));
-                }
-                _ => return Err(invalid_runtime_operands(arguments[index].span())),
-            },
-            None => true,
+        let all_or_none = if let Some(index) = target.dml_options_argument {
+            let value = self.evaluate(&arguments[index])?;
+            self.runtime_dml_options(value, arguments[index].span())?
+                .opt_all_or_none
+                .unwrap_or(false)
+        } else {
+            match target.all_or_none_argument {
+                Some(index) => match self.evaluate(&arguments[index])? {
+                    Value::Boolean(value) => value,
+                    Value::Null(_) => {
+                        return Err(runtime_exception(
+                            "NullPointerException",
+                            "Database allOrNone argument is null",
+                            arguments[index].span(),
+                        ));
+                    }
+                    _ => return Err(invalid_runtime_operands(arguments[index].span())),
+                },
+                None => true,
+            }
         };
         let access = match target.access_level_argument {
             Some(index) => {
@@ -2103,6 +2127,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             PlatformValue::AccessLevel(access) => Ok(*access),
             _ => Err(invalid_runtime_operands(span)),
         }
+    }
+
+    fn runtime_dml_options(&self, value: Value, span: Span) -> Result<DmlOptionsValue, Diagnostic> {
+        let receiver = self.dml_options_id(value, span)?;
+        let PlatformValue::DmlOptions(options) = self.store.platform(receiver) else {
+            unreachable!("DmlOptions receiver was checked above")
+        };
+        Ok(*options)
     }
 
     fn null_short_circuit_value(&self, span: Span) -> Value {
@@ -2178,6 +2210,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             MemberTarget::DynamicSObjectId => {
                 let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
                 self.read_dynamic_sobject_id(receiver, span)
+            }
+            MemberTarget::DmlOptionField(field) => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(receiver)?,
+                };
+                self.read_dml_option_field(receiver, field, span)
             }
             MemberTarget::SObjectRelationship {
                 object_id,
@@ -2496,6 +2535,38 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(Value::Void)
     }
 
+    fn evaluate_sobject_set_options(
+        &mut self,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [options] = arguments else {
+            return Err(Diagnostic::new(
+                "invalid checked SObject.setOptions call",
+                span,
+            ));
+        };
+        let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
+        let options = match self.evaluate(options)? {
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::DmlOptions(options) => *options,
+                _ => return Err(invalid_runtime_operands(options.span())),
+            },
+            Value::Null(_) => {
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "SObject.setOptions options are null",
+                    options.span(),
+                ));
+            }
+            _ => return Err(invalid_runtime_operands(options.span())),
+        };
+        self.store.sobject_mut(receiver).dml_options = Some(options);
+        Ok(Value::Void)
+    }
+
     fn sobject_field_id(
         &self,
         object_id: usize,
@@ -2566,6 +2637,61 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         self.write_sobject_field(receiver, object_id, field_id, value, span)?;
         self.read_dynamic_sobject_id(receiver, span)
+    }
+
+    fn dml_options_id(&self, value: Value, span: Span) -> Result<PlatformValueId, Diagnostic> {
+        match value {
+            Value::Platform(id)
+                if matches!(self.store.platform(id), PlatformValue::DmlOptions(_)) =>
+            {
+                Ok(id)
+            }
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "Database.DmlOptions receiver is null",
+                span,
+            )),
+            _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn read_dml_option_field(
+        &self,
+        receiver: Value,
+        field: DmlOptionField,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = self.dml_options_id(receiver, span)?;
+        let PlatformValue::DmlOptions(options) = self.store.platform(receiver) else {
+            unreachable!("DmlOptions receiver was checked above")
+        };
+        let value = match field {
+            DmlOptionField::AllowFieldTruncation => options.allow_field_truncation,
+            DmlOptionField::OptAllOrNone => options.opt_all_or_none,
+        };
+        Ok(value.map_or(Value::Null(Some(TypeName::Boolean)), Value::Boolean))
+    }
+
+    fn write_dml_option_field(
+        &mut self,
+        receiver: PlatformValueId,
+        field: DmlOptionField,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let value = match value {
+            Value::Boolean(value) => Some(value),
+            Value::Null(_) => None,
+            _ => return Err(invalid_runtime_operands(span)),
+        };
+        let PlatformValue::DmlOptions(options) = self.store.platform_mut(receiver) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match field {
+            DmlOptionField::AllowFieldTruncation => options.allow_field_truncation = value,
+            DmlOptionField::OptAllOrNone => options.opt_all_or_none = value,
+        }
+        Ok(value.map_or(Value::Null(Some(TypeName::Boolean)), Value::Boolean))
     }
 
     fn evaluate_sobject_receiver(
@@ -2945,6 +3071,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             crate::hir::PlatformConstructor::HttpResponse => {
                 require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+            crate::hir::PlatformConstructor::DmlOptions => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::DmlOptions(DmlOptionsValue::default())
             }
             crate::hir::PlatformConstructor::VisualEditorDataRow => {
                 let evaluated = self.evaluate_arguments(arguments)?;
@@ -3741,6 +3871,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let receiver = self.evaluate_sobject_receiver(receiver, None)?;
                 Ok(Place::DynamicSObjectId { receiver })
             }
+            PlaceTarget::DmlOptionField(field) => {
+                let PlaceSyntax::Member { receiver, .. } = syntax else {
+                    return Err(Diagnostic::new("invalid DmlOptions place syntax", span));
+                };
+                let receiver_span = receiver.span();
+                let receiver = self.evaluate(receiver)?;
+                let receiver = self.dml_options_id(receiver, receiver_span)?;
+                Ok(Place::DmlOptionField { receiver, field })
+            }
         }
     }
 
@@ -3844,6 +3983,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 field_id,
             } => self.read_sobject_field(*receiver, *object_id, *field_id, span),
             Place::DynamicSObjectId { receiver } => self.read_dynamic_sobject_id(*receiver, span),
+            Place::DmlOptionField { receiver, field } => {
+                self.read_dml_option_field(Value::Platform(*receiver), *field, span)
+            }
         }
     }
 
@@ -3885,6 +4027,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             } => self.write_sobject_field(*receiver, *object_id, *field_id, value, span),
             Place::DynamicSObjectId { receiver } => {
                 self.write_dynamic_sobject_id(*receiver, value, span)
+            }
+            Place::DmlOptionField { receiver, field } => {
+                self.write_dml_option_field(*receiver, *field, value, span)
             }
         }
     }

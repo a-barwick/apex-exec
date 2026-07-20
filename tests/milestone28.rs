@@ -297,6 +297,48 @@ public class DynamicSObjectIdDemo {
 }
 
 #[test]
+fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
+    let source = r#"
+public class DmlOptionsDemo {
+    public static void run() {
+        Database.DmlOptions options = new Database.DmlOptions();
+        System.debug(options.AllowFieldTruncation == null);
+        System.debug(options.OptAllOrNone == null);
+        options.AllowFieldTruncation = true;
+        options.OptAllOrNone = false;
+
+        M28Alpha__c valid = new M28Alpha__c();
+        valid.Name = 'valid';
+        valid.setOptions(options);
+        List<Database.SaveResult> results = Database.insert(
+            new List<SObject>{valid, null},
+            options
+        );
+        System.debug(options.AllowFieldTruncation);
+        System.debug(results[0].isSuccess() + ':' + results[1].isSuccess());
+    }
+}
+"#;
+    let root = test_project("DmlOptionsDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("DmlOptionsDemo.run").unwrap(),
+        ["true", "true", "true", "true:false"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let invalid = check(
+        "Database.DmlOptions options = new Database.DmlOptions();
+        options.Unsupported = true;",
+    )
+    .unwrap_err();
+    assert!(
+        invalid.message.contains("unknown member `Unsupported`"),
+        "{invalid}"
+    );
+}
+
+#[test]
 fn enterprise_string_helpers_are_typed_utf16_aware_and_regex_checked() {
     let source = r#"
 public class EnterpriseStringDemo {

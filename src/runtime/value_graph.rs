@@ -369,6 +369,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 traversal.write(output, &response.status)?;
                 traversal.write(output, "]")
             }
+            PlatformValue::DmlOptions(_) => traversal.write(output, "Database.DmlOptions"),
             PlatformValue::VisualEditorDataRow { label, value } => {
                 traversal.write(output, "VisualEditor.DataRow[")?;
                 traversal.write(output, label)?;

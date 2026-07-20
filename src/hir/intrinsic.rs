@@ -54,6 +54,7 @@ pub enum PlatformConstructor {
     Http,
     HttpRequest,
     HttpResponse,
+    DmlOptions,
     VisualEditorDataRow,
     VisualEditorDynamicPickListRows,
 }

@@ -23,6 +23,7 @@ pub(super) struct DmlValueShape {
 struct DatabaseDmlOptions {
     external_id: Option<(ObjectTypeId, FieldId)>,
     all_or_none_argument: Option<usize>,
+    dml_options_argument: Option<usize>,
     access_level_argument: Option<usize>,
 }
 
@@ -30,6 +31,7 @@ fn empty_database_dml_options() -> DatabaseDmlOptions {
     DatabaseDmlOptions {
         external_id: None,
         all_or_none_argument: None,
+        dml_options_argument: None,
         access_level_argument: None,
     }
 }
@@ -800,6 +802,7 @@ impl Checker {
                 operation,
                 external_id: options.external_id,
                 all_or_none_argument: options.all_or_none_argument,
+                dml_options_argument: options.dml_options_argument,
                 access_level_argument: options.access_level_argument,
                 statement_access: None,
             }),
@@ -846,6 +849,10 @@ impl Checker {
                 all_or_none_argument: Some(1),
                 ..empty_database_dml_options()
             }),
+            Ok(ExpressionType::Value(TypeName::DmlOptions)) => Ok(DatabaseDmlOptions {
+                dml_options_argument: Some(1),
+                ..empty_database_dml_options()
+            }),
             Ok(ExpressionType::Value(TypeName::AccessLevel)) => Ok(DatabaseDmlOptions {
                 access_level_argument: Some(1),
                 ..empty_database_dml_options()
@@ -857,7 +864,7 @@ impl Checker {
             Err(error) => Err(error),
             _ => Err(Diagnostic::new(
                 format!(
-                    "Database.{} second argument must be allOrNone Boolean or AccessLevel",
+                    "Database.{} second argument must be allOrNone Boolean, DmlOptions, or AccessLevel",
                     method.spelling
                 ),
                 arguments[1].span(),
@@ -907,11 +914,13 @@ impl Checker {
             ExpressionType::Value(TypeName::Boolean) => Ok(DatabaseDmlOptions {
                 external_id: Some(external_id),
                 all_or_none_argument: Some(2),
+                dml_options_argument: None,
                 access_level_argument: None,
             }),
             ExpressionType::Value(TypeName::AccessLevel) => Ok(DatabaseDmlOptions {
                 external_id: Some(external_id),
                 all_or_none_argument: None,
+                dml_options_argument: None,
                 access_level_argument: Some(2),
             }),
             _ => Err(Diagnostic::new(
@@ -943,6 +952,7 @@ impl Checker {
         Ok(DatabaseDmlOptions {
             external_id: Some(external_id),
             all_or_none_argument: Some(2),
+            dml_options_argument: None,
             access_level_argument: Some(3),
         })
     }

@@ -714,6 +714,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::CachePartition
         | TypeName::Request
         | TypeName::QueryLocator
+        | TypeName::DmlOptions
         | TypeName::SaveResult
         | TypeName::UpsertResult
         | TypeName::DeleteResult

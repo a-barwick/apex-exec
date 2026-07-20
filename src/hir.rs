@@ -461,6 +461,7 @@ pub enum CallTarget {
     },
     SObjectGet,
     SObjectPut,
+    SObjectSetOptions,
     DatabaseDml(DatabaseDmlTarget),
     DmlResultMethod(DmlResultMethod),
     DmlErrorMethod(DmlErrorMethod),
@@ -499,6 +500,7 @@ pub struct DatabaseDmlTarget {
     pub operation: ast::DmlOperation,
     pub external_id: Option<(ObjectTypeId, FieldId)>,
     pub all_or_none_argument: Option<usize>,
+    pub dml_options_argument: Option<usize>,
     pub access_level_argument: Option<usize>,
     pub statement_access: Option<crate::platform::AccessLevel>,
 }
@@ -516,6 +518,12 @@ pub enum DmlErrorMethod {
     GetStatusCode,
     GetMessage,
     GetFields,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlOptionField {
+    AllowFieldTruncation,
+    OptAllOrNone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,6 +599,7 @@ pub enum PlaceTarget {
         field_id: FieldId,
     },
     DynamicSObjectId,
+    DmlOptionField(DmlOptionField),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -650,6 +659,7 @@ pub enum MemberTarget {
         field_id: usize,
     },
     DynamicSObjectId,
+    DmlOptionField(DmlOptionField),
     SObjectRelationship {
         object_id: usize,
         reference_field_id: usize,

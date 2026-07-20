@@ -3158,6 +3158,7 @@ impl Checker {
                 operation,
                 external_id,
                 all_or_none_argument: None,
+                dml_options_argument: None,
                 access_level_argument: None,
                 statement_access,
             }),
@@ -3641,6 +3642,7 @@ impl Checker {
             TypeName::Http => Some(PlatformConstructor::Http),
             TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
             TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
+            TypeName::DmlOptions => Some(PlatformConstructor::DmlOptions),
             TypeName::VisualEditorDataRow => Some(PlatformConstructor::VisualEditorDataRow),
             TypeName::VisualEditorDynamicPickListRows => {
                 Some(PlatformConstructor::VisualEditorDynamicPickListRows)
@@ -3997,6 +3999,9 @@ impl Checker {
         if let Some(result) = self.sobject_member_access_type(receiver, name, span, for_write) {
             return result;
         }
+        if let Some(result) = self.dml_options_member_access_type(receiver, name, span) {
+            return result;
+        }
         let (class_id, static_access) = self.member_receiver_class(receiver, name)?;
         if let Some(result) =
             self.enum_constant_type(class_id, static_access, name, span, for_write)
@@ -4258,6 +4263,35 @@ impl Checker {
             return None;
         }
         Some(self.typed_sobject_member_access(&receiver_type, name, span, for_write))
+    }
+
+    fn dml_options_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let receiver_type = match self.expression_type(receiver) {
+            Ok(ExpressionType::Value(ty)) => ty,
+            Ok(ExpressionType::Null | ExpressionType::Void) => return None,
+            Err(_) => return None,
+        };
+        if receiver_type != TypeName::DmlOptions {
+            return None;
+        }
+        let field = match name.canonical.as_str() {
+            "allowfieldtruncation" => hir::DmlOptionField::AllowFieldTruncation,
+            "optallornone" => hir::DmlOptionField::OptAllOrNone,
+            _ => {
+                return Some(Err(Diagnostic::new(
+                    format!("unknown member `{}` on Database.DmlOptions", name.spelling),
+                    name.span,
+                )));
+            }
+        };
+        self.members
+            .insert(span, MemberTarget::DmlOptionField(field));
+        Some(Ok(ExpressionType::Value(TypeName::Boolean)))
     }
 
     fn typed_sobject_member_access(
@@ -5049,6 +5083,7 @@ impl Checker {
                 field_id: FieldId::from_index(field_id),
             },
             Some(MemberTarget::DynamicSObjectId) => PlaceTarget::DynamicSObjectId,
+            Some(MemberTarget::DmlOptionField(field)) => PlaceTarget::DmlOptionField(field),
             Some(
                 MemberTarget::SObjectRelationship { .. }
                 | MemberTarget::SObjectChildRelationship { .. }
@@ -5487,6 +5522,7 @@ impl Checker {
             | TypeName::Request
             | TypeName::Type
             | TypeName::QueryLocator
+            | TypeName::DmlOptions
             | TypeName::StatusCode
             | TypeName::AccessLevel
             | TypeName::AccessType
@@ -5584,6 +5620,18 @@ impl Checker {
                     ));
                 }
                 self.calls.insert(span, CallTarget::SObjectPut);
+                Ok(ExpressionType::Void)
+            }
+            "setoptions" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_operand(&arguments[0], &TypeName::DmlOptions, arguments[0].span())?;
+                self.calls.insert(span, CallTarget::SObjectSetOptions);
                 Ok(ExpressionType::Void)
             }
             "getsobjecttype" => {
@@ -6229,6 +6277,7 @@ impl Checker {
             CallTarget::InstanceMethod(_)
             | CallTarget::SObjectGet
             | CallTarget::SObjectPut
+            | CallTarget::SObjectSetOptions
             | CallTarget::AggregateResultGet
             | CallTarget::DmlResultMethod(_)
             | CallTarget::DmlErrorMethod(_) => true,
@@ -6270,6 +6319,7 @@ impl Checker {
                     | MemberTarget::InstancePropertyStorage(_)
                     | MemberTarget::SObjectField { .. }
                     | MemberTarget::DynamicSObjectId
+                    | MemberTarget::DmlOptionField(_)
                     | MemberTarget::SObjectRelationship { .. }
             )
         );
