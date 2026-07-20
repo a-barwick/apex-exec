@@ -140,6 +140,12 @@ enum PlatformValue {
     DmlStatus(crate::platform::DmlStatus),
     AccessLevel(crate::platform::AccessLevel),
     AccessType(crate::platform::AccessType),
+    PlatformEnum(crate::platform::PlatformEnum),
+    CachePartition,
+    Request {
+        request_id: String,
+        quiddity: crate::platform::Quiddity,
+    },
     SecurityDecision {
         records: CollectionId,
         removed_fields: BTreeMap<String, Vec<String>>,
@@ -164,6 +170,9 @@ impl PlatformValue {
             Self::DmlStatus(_) => TypeName::StatusCode,
             Self::AccessLevel(_) => TypeName::AccessLevel,
             Self::AccessType(_) => TypeName::AccessType,
+            Self::PlatformEnum(value) => value.ty(),
+            Self::CachePartition => TypeName::CachePartition,
+            Self::Request { .. } => TypeName::Request,
             Self::SecurityDecision { .. } => TypeName::SObjectAccessDecision,
         }
     }
@@ -289,6 +298,7 @@ enum AsyncWork {
 struct CurrentAsync {
     id: String,
     kind: AsyncJobKind,
+    allows_callouts: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +347,7 @@ pub struct Interpreter<'program, H = RecordingHost> {
     initialization_stack: Vec<usize>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
+    http_callout_mock: Option<ObjectId>,
     user_override: Option<UserContext>,
     next_async_sequence: u64,
 }
@@ -429,6 +440,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             initialization_stack: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
+            http_callout_mock: None,
             user_override: None,
             next_async_sequence: 1,
         }
@@ -880,7 +892,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Flow::Normal)
             }
-            Statement::Switch { value, arms, .. } => self.execute_sobject_type_switch(value, arms),
+            Statement::Switch { value, arms, .. } => self.execute_switch(value, arms),
             Statement::For {
                 initializer,
                 condition,
@@ -1117,7 +1129,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         result
     }
 
-    fn execute_sobject_type_switch(
+    fn execute_switch(
         &mut self,
         expression: &Expression,
         arms: &[SwitchArm],
@@ -1151,11 +1163,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     }
                 }
                 SwitchLabels::Else(_) => return self.execute_statement(&arm.body),
-                SwitchLabels::Expressions(_) => {
-                    return Err(Diagnostic::new(
-                        "unsupported scalar switch arm escaped semantic validation",
-                        arm.span,
-                    ));
+                SwitchLabels::Expressions(labels) => {
+                    for label in labels {
+                        let label_value = self.evaluate(label)?;
+                        let matched = self.values_equal(&value, &label_value);
+                        self.record_branch(label.span(), matched);
+                        if matched {
+                            return self.execute_statement(&arm.body);
+                        }
+                    }
                 }
             }
         }
@@ -1596,6 +1612,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             ReferenceTarget::StaticMember(target) => {
                 self.read_class_member(target, None, identifier.span)
+            }
+            ReferenceTarget::EnumConstant { class_id, ordinal } => {
+                Ok(enum_value(class_id, ordinal))
             }
         }
     }
@@ -2051,6 +2070,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             target @ (MemberTarget::DmlStatus(_)
             | MemberTarget::AccessLevel(_)
             | MemberTarget::AccessType(_)
+            | MemberTarget::PlatformEnum(_)
             | MemberTarget::EnumConstant { .. }
             | MemberTarget::TypeReference { .. }) => self.evaluate_constant_member(target, span),
         }
@@ -2069,6 +2089,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             MemberTarget::AccessType(access) => self
                 .store
                 .allocate_platform(PlatformValue::AccessType(access)),
+            MemberTarget::PlatformEnum(value) => self
+                .store
+                .allocate_platform(PlatformValue::PlatformEnum(value)),
             MemberTarget::EnumConstant { class_id, ordinal } => enum_value(class_id, ordinal),
             MemberTarget::TypeReference { class_id } => {
                 Value::TypeLiteral(TypeName::Custom(crate::ast::NamedType::new(
@@ -4079,13 +4102,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Platform(id) => self.store.platform(*id).ty() == *target,
             Value::Collection(id) => self.collection_type(*id) == *target,
             Value::Object(id) => {
+                let class_id = self.store.object(*id).class_id;
+                if matches!(target, TypeName::Callable) {
+                    return self.program().callable_contract(class_id).is_some();
+                }
                 let TypeName::Custom(target) = target else {
                     return false;
                 };
                 let target_id = self.runtime_class_id(target);
-                target_id.is_some_and(|target_id| {
-                    self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
-                })
+                target_id
+                    .is_some_and(|target_id| self.runtime_class_is_or_inherits(class_id, target_id))
             }
             Value::Enum { class_id, .. } => {
                 matches!(

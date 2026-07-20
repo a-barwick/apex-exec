@@ -9,6 +9,8 @@
 //! and the SQLite adapter consume the contracts without leaking database types
 //! into compiler-facing schema APIs.
 
+mod cache;
+mod context;
 mod database;
 pub mod metadata;
 pub mod schema;
@@ -17,6 +19,8 @@ pub mod sobject;
 pub mod sqlite;
 pub mod storage;
 
+pub use cache::CacheVisibility;
+pub use context::{ParentJobResult, PlatformEnum, Quiddity};
 pub use database::{
     AggregateFunction, DatabaseError, DatabaseSnapshot, DmlError, DmlExternalId, DmlOperation,
     DmlRequest, DmlRow, DmlRowOutcome, DmlStatus, LocalDatabase, NullOrder, PreparedDmlOutcome,

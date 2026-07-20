@@ -185,6 +185,14 @@ impl HierarchyGraph {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ScalarSwitchKey {
+    String(String),
+    Integer(i128),
+    Enum { class_id: usize, ordinal: usize },
+    Null,
+}
+
 struct Checker {
     scopes: Vec<HashMap<String, TypeName>>,
     loop_depth: usize,
@@ -202,6 +210,12 @@ struct Checker {
     queries: HashMap<Span, hir::CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, hir::AsyncClassContract>,
+    batchable_context_contracts: HashMap<usize, hir::BatchableContextContract>,
+    finalizer_context_contracts: HashMap<usize, hir::FinalizerContextContract>,
+    queueable_context_contracts: HashMap<usize, ClassMemberId>,
+    schedulable_context_contracts: HashMap<usize, ClassMemberId>,
+    http_callout_mock_contracts: HashMap<usize, ClassMemberId>,
+    callable_contracts: HashMap<usize, ClassMemberId>,
     comparable_contracts: HashMap<usize, ClassMemberId>,
     classes: Vec<ClassDeclaration>,
     class_ids: HashMap<String, usize>,
@@ -232,6 +246,12 @@ impl Checker {
             queries: HashMap::new(),
             null_aware_queries: HashSet::new(),
             async_contracts: HashMap::new(),
+            batchable_context_contracts: HashMap::new(),
+            finalizer_context_contracts: HashMap::new(),
+            queueable_context_contracts: HashMap::new(),
+            schedulable_context_contracts: HashMap::new(),
+            http_callout_mock_contracts: HashMap::new(),
+            callable_contracts: HashMap::new(),
             comparable_contracts: HashMap::new(),
             classes: Vec::new(),
             class_ids: HashMap::new(),
@@ -248,6 +268,7 @@ impl Checker {
         self.collect_classes(program)?;
         self.collect_method_signatures(program)?;
         self.validate_class_hierarchy()?;
+        self.validate_platform_context_contracts()?;
         self.validate_comparable_contracts()?;
         for class_id in 0..self.classes.len() {
             self.check_class(class_id)?;
@@ -274,6 +295,12 @@ impl Checker {
                 queries: self.queries,
                 null_aware_queries: self.null_aware_queries,
                 async_contracts: self.async_contracts,
+                batchable_context_contracts: self.batchable_context_contracts,
+                finalizer_context_contracts: self.finalizer_context_contracts,
+                queueable_context_contracts: self.queueable_context_contracts,
+                schedulable_context_contracts: self.schedulable_context_contracts,
+                http_callout_mock_contracts: self.http_callout_mock_contracts,
+                callable_contracts: self.callable_contracts,
                 comparable_contracts: self.comparable_contracts,
             },
             self.schema,
@@ -643,6 +670,187 @@ impl Checker {
         Ok(())
     }
 
+    fn validate_platform_context_contracts(&mut self) -> Result<(), Diagnostic> {
+        for class_id in 0..self.classes.len() {
+            if self.class_implements_platform_interface(class_id, is_batchable_context_interface) {
+                let get_job_id = self.require_platform_context_method(
+                    class_id,
+                    "Database.BatchableContext",
+                    "getjobid",
+                    "getJobId",
+                    TypeName::Id,
+                    &[],
+                )?;
+                let get_child_job_id = self.require_platform_context_method(
+                    class_id,
+                    "Database.BatchableContext",
+                    "getchildjobid",
+                    "getChildJobId",
+                    TypeName::Id,
+                    &[],
+                )?;
+                self.batchable_context_contracts.insert(
+                    class_id,
+                    hir::BatchableContextContract {
+                        get_job_id,
+                        get_child_job_id,
+                    },
+                );
+            }
+            if self.class_implements_platform_interface(class_id, is_finalizer_context_interface) {
+                let contract = hir::FinalizerContextContract {
+                    get_async_apex_job_id: self.require_platform_context_method(
+                        class_id,
+                        "System.FinalizerContext",
+                        "getasyncapexjobid",
+                        "getAsyncApexJobId",
+                        TypeName::Id,
+                        &[],
+                    )?,
+                    get_exception: self.require_platform_context_method(
+                        class_id,
+                        "System.FinalizerContext",
+                        "getexception",
+                        "getException",
+                        TypeName::Exception,
+                        &[],
+                    )?,
+                    get_result: self.require_platform_context_method(
+                        class_id,
+                        "System.FinalizerContext",
+                        "getresult",
+                        "getResult",
+                        TypeName::ParentJobResult,
+                        &[],
+                    )?,
+                    get_request_id: self.require_platform_context_method(
+                        class_id,
+                        "System.FinalizerContext",
+                        "getrequestid",
+                        "getRequestId",
+                        TypeName::String,
+                        &[],
+                    )?,
+                };
+                self.finalizer_context_contracts.insert(class_id, contract);
+            }
+            if self.class_implements_platform_interface(class_id, is_queueable_context_interface) {
+                let get_job_id = self.require_platform_context_method(
+                    class_id,
+                    "System.QueueableContext",
+                    "getjobid",
+                    "getJobId",
+                    TypeName::Id,
+                    &[],
+                )?;
+                self.queueable_context_contracts
+                    .insert(class_id, get_job_id);
+            }
+            if self.class_implements_platform_interface(class_id, is_schedulable_context_interface)
+            {
+                let get_trigger_id = self.require_platform_context_method(
+                    class_id,
+                    "System.SchedulableContext",
+                    "gettriggerid",
+                    "getTriggerId",
+                    TypeName::Id,
+                    &[],
+                )?;
+                self.schedulable_context_contracts
+                    .insert(class_id, get_trigger_id);
+            }
+            if self.class_implements_platform_interface(class_id, is_http_callout_mock_interface) {
+                let respond = self.require_platform_context_method(
+                    class_id,
+                    "System.HttpCalloutMock",
+                    "respond",
+                    "respond",
+                    TypeName::HttpResponse,
+                    &[TypeName::HttpRequest],
+                )?;
+                self.http_callout_mock_contracts.insert(class_id, respond);
+            }
+            if self.class_implements_platform_interface(class_id, is_callable_interface) {
+                let call = self.require_platform_context_method(
+                    class_id,
+                    "System.Callable",
+                    "call",
+                    "call",
+                    TypeName::Object,
+                    &[
+                        TypeName::String,
+                        TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::Object)),
+                    ],
+                )?;
+                self.callable_contracts.insert(class_id, call);
+            }
+        }
+        Ok(())
+    }
+
+    fn require_platform_context_method(
+        &self,
+        class_id: usize,
+        context: &str,
+        canonical_name: &str,
+        display_name: &str,
+        return_type: TypeName,
+        parameter_types: &[TypeName],
+    ) -> Result<ClassMemberId, Diagnostic> {
+        let candidates = self
+            .class_methods_named(class_id, canonical_name)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.parameter_types == parameter_types
+                    && candidate.return_type == ReturnType::Value(return_type.clone())
+                    && !candidate.modifiers.contains(&Modifier::Static)
+                    && (candidate.modifiers.contains(&Modifier::Public)
+                        || candidate.modifiers.contains(&Modifier::Global))
+                    && self.method_declaration(candidate.target).body.is_some()
+            })
+            .map(|candidate| candidate.target)
+            .collect::<Vec<_>>();
+        let [target] = candidates.as_slice() else {
+            let parameters = parameter_types
+                .iter()
+                .map(TypeName::apex_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Diagnostic::new(
+                format!(
+                    "{context} class `{}` requires exactly one public or global instance `{} {display_name}({parameters})` method",
+                    self.classes[class_id].name.spelling,
+                    return_type.apex_name(),
+                ),
+                self.classes[class_id].name.span,
+            ));
+        };
+        Ok(*target)
+    }
+
+    fn class_implements_platform_interface(
+        &self,
+        class_id: usize,
+        predicate: fn(&str) -> bool,
+    ) -> bool {
+        let mut cursor = Some(class_id);
+        let mut visited = vec![false; self.classes.len()];
+        while let Some(current) = cursor {
+            if std::mem::replace(&mut visited[current], true) {
+                return false;
+            }
+            if self.classes[current]
+                .interfaces
+                .iter()
+                .any(|interface| predicate(&interface.canonical))
+            {
+                return true;
+            }
+            cursor = self.parent_class_id(current);
+        }
+        false
+    }
+
     fn class_implements_comparable(&self, class_id: usize) -> bool {
         let mut cursor = Some(class_id);
         let mut visited = vec![false; self.classes.len()];
@@ -696,6 +904,12 @@ impl Checker {
                         annotation.span,
                     ));
                 }
+                AnnotationKind::AuraEnabled { .. } => {
+                    return Err(Diagnostic::new(
+                        "`@AuraEnabled` is only valid on fields, properties, and methods",
+                        annotation.span,
+                    ));
+                }
                 AnnotationKind::SuppressWarnings => {}
                 AnnotationKind::TestVisible => {}
                 AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
@@ -734,6 +948,13 @@ impl Checker {
         match member {
             ClassMember::Field(field) => {
                 reject_unsupported_annotations(&field.annotations)?;
+                validate_aura_enabled_member(
+                    &field.annotations,
+                    &field.modifiers,
+                    "field",
+                    false,
+                    false,
+                )?;
                 self.validate_type(&field.ty, field.name.span)?;
                 self.current_static = field.modifiers.contains(&Modifier::Static);
                 if let Some(initializer) = &field.initializer {
@@ -748,6 +969,14 @@ impl Checker {
             )),
             ClassMember::Constructor(constructor) => {
                 reject_unsupported_annotations(&constructor.annotations)?;
+                if let Some(annotation) = constructor.annotations.iter().find(|annotation| {
+                    matches!(annotation.kind, AnnotationKind::AuraEnabled { .. })
+                }) {
+                    return Err(Diagnostic::new(
+                        "`@AuraEnabled` is not valid on constructors",
+                        annotation.span,
+                    ));
+                }
                 self.current_static = false;
                 self.check_constructor(constructor)
             }
@@ -757,6 +986,13 @@ impl Checker {
             }
             ClassMember::Property(property) => {
                 reject_unsupported_annotations(&property.annotations)?;
+                validate_aura_enabled_member(
+                    &property.annotations,
+                    &property.modifiers,
+                    "property",
+                    false,
+                    false,
+                )?;
                 self.validate_type(&property.ty, property.name.span)?;
                 self.current_static = property.modifiers.contains(&Modifier::Static);
                 self.check_property_accessors(property)
@@ -1044,6 +1280,16 @@ impl Checker {
                     ));
                 }
                 AnnotationKind::Future => continue,
+                AnnotationKind::AuraEnabled { .. } => {
+                    validate_aura_enabled_member(
+                        &method.annotations,
+                        &method.modifiers,
+                        "method",
+                        true,
+                        true,
+                    )?;
+                    continue;
+                }
                 AnnotationKind::SuppressWarnings => continue,
                 AnnotationKind::TestVisible => continue,
                 AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
@@ -1235,6 +1481,10 @@ impl Checker {
 
     fn validate_async_contract(&mut self, class_id: usize) -> Result<(), Diagnostic> {
         let mut contract = hir::AsyncClassContract::default();
+        contract.allows_callouts = self.classes[class_id]
+            .interfaces
+            .iter()
+            .any(|interface| is_allows_callouts_interface(&interface.canonical));
 
         if self.classes[class_id]
             .interfaces
@@ -1744,6 +1994,32 @@ impl Checker {
         if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
             return true;
         }
+        if let TypeName::Custom(actual) = actual
+            && let Some(class_id) = self.class_ids.get(&actual.canonical)
+        {
+            let implements_context = match expected {
+                TypeName::BatchableContext => {
+                    self.batchable_context_contracts.contains_key(class_id)
+                }
+                TypeName::FinalizerContext => {
+                    self.finalizer_context_contracts.contains_key(class_id)
+                }
+                TypeName::QueueableContext => {
+                    self.queueable_context_contracts.contains_key(class_id)
+                }
+                TypeName::SchedulableContext => {
+                    self.schedulable_context_contracts.contains_key(class_id)
+                }
+                TypeName::HttpCalloutMock => {
+                    self.http_callout_mock_contracts.contains_key(class_id)
+                }
+                TypeName::Callable => self.callable_contracts.contains_key(class_id),
+                _ => false,
+            };
+            if implements_context {
+                return true;
+            }
+        }
         let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
             return false;
         };
@@ -2177,9 +2453,7 @@ impl Checker {
                 self.with_loop(|checker| checker.check_statement(body))?;
                 self.require_boolean(condition)
             }
-            Statement::Switch { value, arms, span } => {
-                self.check_sobject_type_switch(value, arms, *span)
-            }
+            Statement::Switch { value, arms, span } => self.check_switch(value, arms, *span),
             Statement::For {
                 initializer,
                 condition,
@@ -2286,6 +2560,22 @@ impl Checker {
         }
     }
 
+    fn check_switch(
+        &mut self,
+        value: &Expression,
+        arms: &[SwitchArm],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if arms
+            .iter()
+            .any(|arm| matches!(arm.labels, SwitchLabels::TypePattern { .. }))
+        {
+            self.check_sobject_type_switch(value, arms, span)
+        } else {
+            self.check_scalar_switch(value, arms, span)
+        }
+    }
+
     fn check_sobject_type_switch(
         &mut self,
         value: &Expression,
@@ -2374,6 +2664,156 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    fn check_scalar_switch(
+        &mut self,
+        value: &Expression,
+        arms: &[SwitchArm],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let ExpressionType::Value(value_type) = self.expression_type(value)? else {
+            return Err(Diagnostic::new(
+                "scalar switch requires a value",
+                value.span(),
+            ));
+        };
+        let enum_class = match &value_type {
+            TypeName::Custom(name) => self
+                .class_ids
+                .get(&name.canonical)
+                .copied()
+                .filter(|class_id| self.classes[*class_id].kind == ClassKind::Enum),
+            _ => None,
+        };
+        if !matches!(
+            value_type,
+            TypeName::String | TypeName::Integer | TypeName::Long
+        ) && enum_class.is_none()
+        {
+            return Err(Diagnostic::new(
+                format!(
+                    "scalar switch requires String, Integer, Long, or enum, found {}",
+                    value_type.apex_name()
+                ),
+                value.span(),
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        let mut label_count = 0usize;
+        for arm in arms {
+            match &arm.labels {
+                SwitchLabels::Expressions(labels) => {
+                    for label in labels {
+                        let key = self.check_scalar_switch_label(&value_type, enum_class, label)?;
+                        if !seen.insert(key) {
+                            return Err(Diagnostic::new(
+                                "duplicate scalar switch label",
+                                label.span(),
+                            ));
+                        }
+                        label_count += 1;
+                    }
+                    self.check_statement(&arm.body)?;
+                }
+                SwitchLabels::Else(_) => self.check_statement(&arm.body)?,
+                SwitchLabels::TypePattern { .. } => {
+                    return Err(Diagnostic::new(
+                        "scalar and SObject type-pattern labels cannot be mixed",
+                        arm.span,
+                    ));
+                }
+            }
+        }
+        if label_count == 0 {
+            return Err(Diagnostic::new(
+                "scalar switch requires at least one `when` label",
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_scalar_switch_label(
+        &mut self,
+        value_type: &TypeName,
+        enum_class: Option<usize>,
+        label: &Expression,
+    ) -> Result<ScalarSwitchKey, Diagnostic> {
+        if let Some(class_id) = enum_class
+            && let Expression::Variable(identifier) = label
+        {
+            let ordinal = self.classes[class_id]
+                .enum_constants
+                .iter()
+                .position(|constant| constant.canonical == identifier.canonical)
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!(
+                            "unknown {} constant `{}`",
+                            value_type.apex_name(),
+                            identifier.spelling
+                        ),
+                        identifier.span,
+                    )
+                })?;
+            self.references.insert(
+                identifier.span,
+                ReferenceTarget::EnumConstant {
+                    class_id: ClassId::from_index(class_id),
+                    ordinal,
+                },
+            );
+            self.expression_types
+                .insert(label.span(), ExpressionType::Value(value_type.clone()));
+            return Ok(ScalarSwitchKey::Enum { class_id, ordinal });
+        }
+
+        let actual = self.expression_type(label)?;
+        if actual != ExpressionType::Null && !self.is_assignable(value_type, &actual) {
+            return Err(Diagnostic::new(
+                format!(
+                    "switch label {} does not match {}",
+                    actual.name(),
+                    value_type.apex_name()
+                ),
+                label.span(),
+            ));
+        }
+        match label {
+            Expression::StringLiteral(value, _) if *value_type == TypeName::String => {
+                Ok(ScalarSwitchKey::String(value.clone()))
+            }
+            Expression::IntegerLiteral(value, _)
+                if matches!(value_type, TypeName::Integer | TypeName::Long) =>
+            {
+                Ok(ScalarSwitchKey::Integer((*value).into()))
+            }
+            Expression::LongLiteral(value, _)
+                if matches!(value_type, TypeName::Integer | TypeName::Long) =>
+            {
+                Ok(ScalarSwitchKey::Integer((*value).into()))
+            }
+            Expression::NullLiteral(_) => Ok(ScalarSwitchKey::Null),
+            Expression::MemberAccess { span, .. } if enum_class.is_some() => {
+                let Some(MemberTarget::EnumConstant { class_id, ordinal }) = self.members.get(span)
+                else {
+                    return Err(Diagnostic::new(
+                        "enum switch label must name an enum constant",
+                        label.span(),
+                    ));
+                };
+                Ok(ScalarSwitchKey::Enum {
+                    class_id: class_id.index(),
+                    ordinal: *ordinal,
+                })
+            }
+            _ => Err(Diagnostic::new(
+                "switch labels must be literals or enum constants",
+                label.span(),
+            )),
+        }
     }
 
     fn check_declaration_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
@@ -3185,6 +3625,75 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         if matches!(
             qualified_expression_name(receiver).as_deref(),
+            Some("cache.visibility")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "Cache.Visibility constants are read-only",
+                    name.span,
+                ));
+            }
+            let value = crate::platform::CacheVisibility::from_apex_name(&name.spelling)
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown Cache.Visibility constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(
+                span,
+                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::CacheVisibility(value)),
+            );
+            return Ok(ExpressionType::Value(TypeName::CacheVisibility));
+        }
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("parentjobresult" | "system.parentjobresult")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "ParentJobResult constants are read-only",
+                    name.span,
+                ));
+            }
+            let value = crate::platform::ParentJobResult::from_apex_name(&name.spelling)
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown ParentJobResult constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(
+                span,
+                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::ParentJobResult(value)),
+            );
+            return Ok(ExpressionType::Value(TypeName::ParentJobResult));
+        }
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("quiddity" | "system.quiddity")
+        ) {
+            if for_write {
+                return Err(Diagnostic::new(
+                    "Quiddity constants are read-only",
+                    name.span,
+                ));
+            }
+            let value =
+                crate::platform::Quiddity::from_apex_name(&name.spelling).ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("unknown Quiddity constant `{}`", name.spelling),
+                        name.span,
+                    )
+                })?;
+            self.members.insert(
+                span,
+                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::Quiddity(value)),
+            );
+            return Ok(ExpressionType::Value(TypeName::Quiddity));
+        }
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
             Some("statuscode" | "system.statuscode")
         ) {
             if for_write {
@@ -3704,7 +4213,10 @@ impl Checker {
             }
             return Err(Diagnostic::new("member is not accessible", span));
         };
+        let same_outer = outermost_type(&self.classes[accessing].qualified_name.canonical)
+            == outermost_type(&self.classes[target.class_id].qualified_name.canonical);
         if accessing == target.class_id
+            || same_outer
             || access_rank(modifiers) >= access_rank(&[Modifier::Public])
             || (self.member_has_annotation(target, AnnotationKind::TestVisible)
                 && self.class_is_test_context(accessing))
@@ -4141,6 +4653,7 @@ impl Checker {
                 | MemberTarget::DmlStatus(_)
                 | MemberTarget::AccessLevel(_)
                 | MemberTarget::AccessType(_)
+                | MemberTarget::PlatformEnum(_)
                 | MemberTarget::EnumConstant { .. }
                 | MemberTarget::TypeReference { .. },
             )
@@ -4337,6 +4850,20 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if matches!(
+            qualified_expression_name(receiver).as_deref(),
+            Some("system.request" | "system.test" | "system.type" | "cache.org" | "cache.session")
+        ) {
+            let owner =
+                qualified_expression_name(receiver).expect("matched qualified platform owner");
+            return Some(
+                self.static_platform_method_type(&owner, method, arguments)
+                    .map(|(intrinsic, result)| {
+                        self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+                        result
+                    }),
+            );
+        }
         if matches!(receiver, Expression::Variable(_)) {
             return None;
         }
@@ -4445,6 +4972,22 @@ impl Checker {
                     self.calls.insert(span, CallTarget::SObjectPut);
                     Ok(ExpressionType::Void)
                 }
+                "getsobjecttype" => {
+                    require_arity(
+                        receiver_type,
+                        &method.spelling,
+                        arguments.len(),
+                        &[0],
+                        arguments,
+                    )?;
+                    self.calls.insert(
+                        span,
+                        CallTarget::Intrinsic(hir::IntrinsicId::Platform(
+                            hir::PlatformIntrinsic::SObjectGetSObjectType,
+                        )),
+                    );
+                    Ok(ExpressionType::Value(TypeName::SObjectType))
+                }
                 _ => Err(unknown_method(receiver_type, method)),
             };
         }
@@ -4484,8 +5027,17 @@ impl Checker {
             | TypeName::Http
             | TypeName::HttpRequest
             | TypeName::HttpResponse
+            | TypeName::HttpCalloutMock
+            | TypeName::Callable
             | TypeName::QueueableContext
             | TypeName::BatchableContext
+            | TypeName::FinalizerContext
+            | TypeName::ParentJobResult
+            | TypeName::Quiddity
+            | TypeName::CacheVisibility
+            | TypeName::CachePartition
+            | TypeName::Request
+            | TypeName::Type
             | TypeName::QueryLocator
             | TypeName::StatusCode
             | TypeName::AccessLevel
@@ -5447,7 +5999,7 @@ fn validate_modifier_set(
     span: Span,
     subject: &str,
 ) -> Result<(), Diagnostic> {
-    if modifiers.contains(&Modifier::Transient) {
+    if modifiers.contains(&Modifier::Transient) && subject != "field" {
         return Err(Diagnostic::new(
             format!(
                 "modifier `transient` on {subject} is parsed but unsupported by the active compatibility profile"
@@ -5511,6 +6063,13 @@ fn is_platform_interface(name: &str) -> bool {
     is_platform_async_interface(name)
         || is_comparable_interface(name)
         || is_stateful_interface(name)
+        || is_allows_callouts_interface(name)
+        || is_batchable_context_interface(name)
+        || is_finalizer_context_interface(name)
+        || is_queueable_context_interface(name)
+        || is_schedulable_context_interface(name)
+        || is_http_callout_mock_interface(name)
+        || is_callable_interface(name)
 }
 
 fn is_comparable_interface(name: &str) -> bool {
@@ -5519,6 +6078,34 @@ fn is_comparable_interface(name: &str) -> bool {
 
 fn is_stateful_interface(name: &str) -> bool {
     matches!(name, "stateful" | "database.stateful")
+}
+
+fn is_allows_callouts_interface(name: &str) -> bool {
+    matches!(name, "allowscallouts" | "database.allowscallouts")
+}
+
+fn is_batchable_context_interface(name: &str) -> bool {
+    matches!(name, "batchablecontext" | "database.batchablecontext")
+}
+
+fn is_finalizer_context_interface(name: &str) -> bool {
+    matches!(name, "finalizercontext" | "system.finalizercontext")
+}
+
+fn is_queueable_context_interface(name: &str) -> bool {
+    matches!(name, "queueablecontext" | "system.queueablecontext")
+}
+
+fn is_schedulable_context_interface(name: &str) -> bool {
+    matches!(name, "schedulablecontext" | "system.schedulablecontext")
+}
+
+fn is_http_callout_mock_interface(name: &str) -> bool {
+    matches!(name, "httpcalloutmock" | "system.httpcalloutmock")
+}
+
+fn is_callable_interface(name: &str) -> bool {
+    matches!(name, "callable" | "system.callable")
 }
 
 fn is_queueable_interface(name: &str) -> bool {
@@ -5781,6 +6368,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "encodingutil"
             | "security"
             | "eventbus"
+            | "type"
     )
 }
 
@@ -5901,6 +6489,54 @@ fn reject_unsupported_annotations(annotations: &[Annotation]) -> Result<(), Diag
     } else {
         Ok(())
     }
+}
+
+fn validate_aura_enabled_member(
+    annotations: &[Annotation],
+    modifiers: &[Modifier],
+    subject: &str,
+    options_allowed: bool,
+    static_required: bool,
+) -> Result<(), Diagnostic> {
+    let aura = annotations
+        .iter()
+        .filter(|annotation| matches!(annotation.kind, AnnotationKind::AuraEnabled { .. }))
+        .collect::<Vec<_>>();
+    let ([] | [_]) = aura.as_slice() else {
+        return Err(Diagnostic::new(
+            format!("duplicate `@AuraEnabled` annotation on {subject}"),
+            aura[1].span,
+        ));
+    };
+    let Some(annotation) = aura.first() else {
+        return Ok(());
+    };
+    let AnnotationKind::AuraEnabled {
+        cacheable,
+        continuation,
+    } = annotation.kind
+    else {
+        unreachable!("filtered AuraEnabled annotations")
+    };
+    if !options_allowed && (cacheable.is_some() || continuation.is_some()) {
+        return Err(Diagnostic::new(
+            format!("`@AuraEnabled` options are only valid on methods, not {subject}s"),
+            annotation.span,
+        ));
+    }
+    if !modifiers.contains(&Modifier::Public) && !modifiers.contains(&Modifier::Global) {
+        return Err(Diagnostic::new(
+            format!("`@AuraEnabled` {subject}s must be public or global"),
+            annotation.span,
+        ));
+    }
+    if static_required && !modifiers.contains(&Modifier::Static) {
+        return Err(Diagnostic::new(
+            "`@AuraEnabled` methods must be static",
+            annotation.span,
+        ));
+    }
+    Ok(())
 }
 
 fn unsupported_annotation(annotation: &Annotation) -> Diagnostic {

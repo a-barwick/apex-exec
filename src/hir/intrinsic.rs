@@ -120,12 +120,14 @@ pub enum PlatformIntrinsic {
     MatcherEnd,
     SchemaGetGlobalDescribe,
     SObjectTypeGetDescribe,
+    SObjectGetSObjectType,
     DescribeGetName,
     DescribeGetKeyPrefix,
     DescribeIsCustom,
     TestStartTest,
     TestStopTest,
     TestIsRunningTest,
+    TestSetMock,
     SystemEnqueueJob,
     SystemSchedule,
     SystemIsFuture,
@@ -135,7 +137,26 @@ pub enum PlatformIntrinsic {
     DatabaseExecuteBatch,
     EventBusPublish,
     AsyncContextGetJobId,
+    BatchableContextGetChildJobId,
+    FinalizerContextGetAsyncApexJobId,
+    FinalizerContextGetException,
+    FinalizerContextGetResult,
+    FinalizerContextGetRequestId,
     SchedulableContextGetTriggerId,
+    RequestGetCurrent,
+    RequestGetRequestId,
+    RequestGetQuiddity,
+    PlatformEnumName,
+    CacheGetPartition,
+    CachePartitionContains,
+    CachePartitionGet,
+    CachePartitionIsAvailable,
+    CachePartitionPut,
+    CachePartitionRemove,
+    CallableCall,
+    TypeForName,
+    TypeGetName,
+    TypeNewInstance,
     LimitsGetQueries,
     LimitsGetLimitQueries,
     LimitsGetDmlStatements,
@@ -167,6 +188,7 @@ pub enum PlatformIntrinsic {
     HttpResponseSetStatus,
     HttpResponseGetStatus,
     HttpSend,
+    HttpCalloutMockRespond,
 }
 
 impl PlatformIntrinsic {
@@ -194,6 +216,7 @@ impl PlatformIntrinsic {
                 | Self::TestStartTest
                 | Self::TestStopTest
                 | Self::TestIsRunningTest
+                | Self::TestSetMock
                 | Self::SystemEnqueueJob
                 | Self::SystemSchedule
                 | Self::SystemIsFuture
@@ -202,6 +225,9 @@ impl PlatformIntrinsic {
                 | Self::SystemIsScheduled
                 | Self::DatabaseExecuteBatch
                 | Self::EventBusPublish
+                | Self::RequestGetCurrent
+                | Self::CacheGetPartition
+                | Self::TypeForName
                 | Self::LimitsGetQueries
                 | Self::LimitsGetLimitQueries
                 | Self::LimitsGetDmlStatements
@@ -224,6 +250,8 @@ impl PlatformIntrinsic {
 pub enum StaticStringIntrinsic {
     ValueOf,
     Join,
+    Format,
+    EscapeSingleQuotes,
     IsBlank,
     IsNotBlank,
     IsEmpty,
@@ -260,16 +288,24 @@ pub enum SystemIntrinsic {
 pub enum StringIntrinsic {
     Length,
     Contains,
+    ContainsIgnoreCase,
     StartsWith,
     EndsWith,
     Equals,
     EqualsIgnoreCase,
     IndexOf,
     Substring,
+    SubstringBefore,
+    SubstringAfter,
+    SubstringAfterLast,
+    SubstringBetween,
+    Left,
+    Split,
     Trim,
     ToLowerCase,
     ToUpperCase,
     Replace,
+    ReplaceAll,
 }
 
 /// Supported methods on a core Apex exception value.

@@ -46,6 +46,12 @@ pub struct Program {
     queries: HashMap<Span, CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
+    batchable_context_contracts: HashMap<usize, BatchableContextContract>,
+    finalizer_context_contracts: HashMap<usize, FinalizerContextContract>,
+    queueable_context_contracts: HashMap<usize, ClassMemberId>,
+    schedulable_context_contracts: HashMap<usize, ClassMemberId>,
+    http_callout_mock_contracts: HashMap<usize, ClassMemberId>,
+    callable_contracts: HashMap<usize, ClassMemberId>,
     comparable_contracts: HashMap<usize, ClassMemberId>,
     class_metadata: Vec<ClassRuntimeMetadata>,
     schema: SchemaCatalog,
@@ -72,6 +78,12 @@ impl Program {
             queries,
             null_aware_queries,
             async_contracts,
+            batchable_context_contracts,
+            finalizer_context_contracts,
+            queueable_context_contracts,
+            schedulable_context_contracts,
+            http_callout_mock_contracts,
+            callable_contracts,
             comparable_contracts,
         } = facts;
         let class_metadata = build_class_metadata(&ast);
@@ -89,6 +101,12 @@ impl Program {
             queries,
             null_aware_queries,
             async_contracts,
+            batchable_context_contracts,
+            finalizer_context_contracts,
+            queueable_context_contracts,
+            schedulable_context_contracts,
+            http_callout_mock_contracts,
+            callable_contracts,
             comparable_contracts,
             class_metadata,
             schema,
@@ -146,6 +164,36 @@ impl Program {
 
     pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
         self.async_contracts.get(&class_id)
+    }
+
+    pub(crate) fn batchable_context_contract(
+        &self,
+        class_id: usize,
+    ) -> Option<&BatchableContextContract> {
+        self.batchable_context_contracts.get(&class_id)
+    }
+
+    pub(crate) fn finalizer_context_contract(
+        &self,
+        class_id: usize,
+    ) -> Option<&FinalizerContextContract> {
+        self.finalizer_context_contracts.get(&class_id)
+    }
+
+    pub(crate) fn queueable_context_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.queueable_context_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn schedulable_context_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.schedulable_context_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn http_callout_mock_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.http_callout_mock_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn callable_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.callable_contracts.get(&class_id).copied()
     }
 
     pub(crate) fn comparable_contract(&self, class_id: usize) -> Option<ClassMemberId> {
@@ -325,6 +373,12 @@ pub(crate) struct ProgramFacts {
     pub queries: HashMap<Span, CheckedQuery>,
     pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
+    pub batchable_context_contracts: HashMap<usize, BatchableContextContract>,
+    pub finalizer_context_contracts: HashMap<usize, FinalizerContextContract>,
+    pub queueable_context_contracts: HashMap<usize, ClassMemberId>,
+    pub schedulable_context_contracts: HashMap<usize, ClassMemberId>,
+    pub http_callout_mock_contracts: HashMap<usize, ClassMemberId>,
+    pub callable_contracts: HashMap<usize, ClassMemberId>,
     pub comparable_contracts: HashMap<usize, ClassMemberId>,
 }
 
@@ -333,6 +387,21 @@ pub struct AsyncClassContract {
     pub queueable: Option<ClassMemberId>,
     pub batch: Option<BatchContract>,
     pub schedulable: Option<ClassMemberId>,
+    pub allows_callouts: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchableContextContract {
+    pub get_job_id: ClassMemberId,
+    pub get_child_job_id: ClassMemberId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizerContextContract {
+    pub get_async_apex_job_id: ClassMemberId,
+    pub get_exception: ClassMemberId,
+    pub get_result: ClassMemberId,
+    pub get_request_id: ClassMemberId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,6 +619,7 @@ pub enum ReferenceTarget {
     Super(usize),
     InstanceMember(ClassMemberId),
     StaticMember(ClassMemberId),
+    EnumConstant { class_id: ClassId, ordinal: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -574,6 +644,7 @@ pub enum MemberTarget {
     DmlStatus(crate::platform::DmlStatus),
     AccessLevel(crate::platform::AccessLevel),
     AccessType(crate::platform::AccessType),
+    PlatformEnum(crate::platform::PlatformEnum),
     EnumConstant {
         class_id: ClassId,
         ordinal: usize,

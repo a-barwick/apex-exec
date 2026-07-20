@@ -433,6 +433,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     entries,
                 }))
             }
+            P::SObjectGetSObjectType => {
+                expect_no_arguments(arguments, span)?;
+                let Some(Value::SObject(id)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let object_id = self.store.sobject(id).object_id;
+                Ok(self
+                    .store
+                    .allocate_platform(PlatformValue::SObjectType(object_id)))
+            }
             P::SObjectTypeGetDescribe => {
                 expect_no_arguments(arguments, span)?;
                 let object_id = self.expect_schema_object(receiver, false, span)?;
@@ -458,6 +468,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::TestStartTest | P::TestStopTest | P::TestIsRunningTest => {
                 self.call_test_context(intrinsic, arguments, span)
             }
+            P::TestSetMock => self.set_test_mock(arguments, span),
             P::SystemEnqueueJob => {
                 let [job] = arguments else {
                     return Err(invalid_call_arguments(span));
@@ -517,15 +528,120 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.enqueue_platform_events(events.value.clone(), span)?;
                 Ok(Value::Void)
             }
-            P::AsyncContextGetJobId | P::SchedulableContextGetTriggerId => {
+            P::RequestGetCurrent => {
+                expect_no_arguments(arguments, span)?;
+                let request_id = self.current_request_id();
+                let quiddity = self.current_request_quiddity();
+                Ok(self.store.allocate_platform(PlatformValue::Request {
+                    request_id,
+                    quiddity,
+                }))
+            }
+            P::CacheGetPartition => {
+                let [name] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                expect_string(&name.value, name.span)?;
+                Ok(self.store.allocate_platform(PlatformValue::CachePartition))
+            }
+            P::TypeForName => {
+                let [name] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let name = expect_string(&name.value, name.span)?;
+                Ok(self
+                    .resolve_type_for_name(name, span)
+                    .map_or_else(|| Value::Null(Some(TypeName::Type)), Value::TypeLiteral))
+            }
+            P::AsyncContextGetJobId
+            | P::BatchableContextGetChildJobId
+            | P::FinalizerContextGetAsyncApexJobId
+            | P::FinalizerContextGetException
+            | P::FinalizerContextGetResult
+            | P::FinalizerContextGetRequestId
+            | P::SchedulableContextGetTriggerId => {
+                expect_no_arguments(arguments, span)?;
+                self.call_async_context_method(receiver, intrinsic, span)
+            }
+            P::RequestGetRequestId | P::RequestGetQuiddity => {
                 expect_no_arguments(arguments, span)?;
                 let Some(Value::Platform(id)) = receiver else {
                     return Err(invalid_runtime_operands(span));
                 };
-                let PlatformValue::AsyncContext { job_id, .. } = self.store.platform(id) else {
+                let PlatformValue::Request {
+                    request_id,
+                    quiddity,
+                } = self.store.platform(id)
+                else {
                     return Err(invalid_runtime_operands(span));
                 };
-                Ok(Value::Id(job_id.clone()))
+                Ok(match intrinsic {
+                    P::RequestGetRequestId => Value::String(request_id.clone()),
+                    P::RequestGetQuiddity => {
+                        self.store.allocate_platform(PlatformValue::PlatformEnum(
+                            crate::platform::PlatformEnum::Quiddity(*quiddity),
+                        ))
+                    }
+                    _ => unreachable!("only Request accessors use this branch"),
+                })
+            }
+            P::PlatformEnumName => {
+                expect_no_arguments(arguments, span)?;
+                let Some(Value::Platform(id)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let PlatformValue::PlatformEnum(value) = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::String(value.apex_name().to_owned()))
+            }
+            P::CachePartitionContains => {
+                self.require_cache_partition_receiver(receiver, span)?;
+                let [key] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                expect_string(&key.value, key.span)?;
+                Ok(Value::Boolean(false))
+            }
+            P::CachePartitionGet => {
+                self.require_cache_partition_receiver(receiver, span)?;
+                let [key] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                expect_string(&key.value, key.span)?;
+                Ok(Value::Null(Some(TypeName::Object)))
+            }
+            P::CachePartitionIsAvailable => {
+                self.require_cache_partition_receiver(receiver, span)?;
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Boolean(false))
+            }
+            P::CachePartitionPut => {
+                self.require_cache_partition_receiver(receiver, span)?;
+                if !(2..=5).contains(&arguments.len()) {
+                    return Err(invalid_call_arguments(span));
+                }
+                Ok(Value::Void)
+            }
+            P::CachePartitionRemove => {
+                self.require_cache_partition_receiver(receiver, span)?;
+                let [key] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                expect_string(&key.value, key.span)?;
+                Ok(Value::Void)
+            }
+            P::CallableCall => self.call_callable(receiver, arguments, span),
+            P::TypeGetName => {
+                expect_no_arguments(arguments, span)?;
+                let Some(Value::TypeLiteral(ty)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::String(ty.apex_name()))
+            }
+            P::TypeNewInstance => {
+                expect_no_arguments(arguments, span)?;
+                self.instantiate_type(receiver, span)
             }
             P::LimitsGetQueries
             | P::LimitsGetLimitQueries
@@ -599,6 +715,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             | P::HttpResponseGetStatus => {
                 self.read_http_response(receiver, intrinsic, arguments, span)
             }
+            P::HttpCalloutMockRespond => {
+                let Some(Value::Object(receiver)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let [request] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                self.call_http_callout_mock(receiver, request.clone(), span)
+            }
             P::HttpSend => {
                 let Some(Value::Platform(client_id)) = receiver else {
                     return Err(invalid_runtime_operands(span));
@@ -606,9 +731,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 if !matches!(self.store.platform(client_id), PlatformValue::Http) {
                     return Err(invalid_runtime_operands(span));
                 }
+                if !self.current_async_allows_callouts() {
+                    return Err(runtime_exception(
+                        "CalloutException",
+                        "asynchronous callouts require Database.AllowsCallouts",
+                        request_span(arguments, span),
+                    ));
+                }
                 let [request] = arguments else {
                     return Err(invalid_call_arguments(span));
                 };
+                if let Some(mock) = self.http_callout_mock {
+                    return self.call_http_callout_mock(mock, request.clone(), span);
+                }
                 let Value::Platform(request_id) = request.value else {
                     return Err(invalid_runtime_operands(request.span));
                 };
@@ -624,6 +759,321 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
         }
+    }
+
+    fn set_test_mock(
+        &mut self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if !self.execution_context.is_test() {
+            return Err(runtime_exception(
+                "TypeException",
+                "Test.setMock is only valid while running an Apex test",
+                span,
+            ));
+        }
+        let [mock_type, mock] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        if !matches!(
+            mock_type.value,
+            Value::TypeLiteral(TypeName::HttpCalloutMock)
+        ) {
+            return Err(runtime_exception(
+                "TypeException",
+                "Test.setMock currently requires System.HttpCalloutMock.class",
+                mock_type.span,
+            ));
+        }
+        let Value::Object(receiver) = mock.value else {
+            return Err(invalid_runtime_operands(mock.span));
+        };
+        let class_id = self.store.object(receiver).class_id;
+        if self
+            .program()
+            .http_callout_mock_contract(class_id)
+            .is_none()
+        {
+            return Err(runtime_exception(
+                "TypeException",
+                "mock object does not implement System.HttpCalloutMock",
+                mock.span,
+            ));
+        }
+        self.http_callout_mock = Some(receiver);
+        Ok(Value::Void)
+    }
+
+    fn call_http_callout_mock(
+        &mut self,
+        receiver: super::ObjectId,
+        request: EvaluatedArgument,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let class_id = self.store.object(receiver).class_id;
+        let target = self
+            .program()
+            .http_callout_mock_contract(class_id)
+            .ok_or_else(|| {
+                runtime_exception(
+                    "TypeException",
+                    "runtime object does not implement System.HttpCalloutMock",
+                    span,
+                )
+            })?;
+        let response = self.evaluate_class_method_arguments(
+            target,
+            Some(receiver),
+            vec![request],
+            span,
+            true,
+            false,
+        )?;
+        let Value::Platform(response_id) = response else {
+            return Err(invalid_runtime_operands(span));
+        };
+        if !matches!(
+            self.store.platform(response_id),
+            PlatformValue::HttpResponse(_)
+        ) {
+            return Err(invalid_runtime_operands(span));
+        }
+        Ok(Value::Platform(response_id))
+    }
+
+    fn call_async_context_method(
+        &mut self,
+        receiver: Option<Value>,
+        intrinsic: PlatformIntrinsic,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match receiver {
+            Some(Value::Platform(id)) => {
+                let PlatformValue::AsyncContext { job_id, .. } = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let job_id = job_id.clone();
+                Ok(match intrinsic {
+                    PlatformIntrinsic::AsyncContextGetJobId
+                    | PlatformIntrinsic::FinalizerContextGetAsyncApexJobId
+                    | PlatformIntrinsic::SchedulableContextGetTriggerId => Value::Id(job_id),
+                    PlatformIntrinsic::BatchableContextGetChildJobId => {
+                        Value::Null(Some(TypeName::Id))
+                    }
+                    PlatformIntrinsic::FinalizerContextGetException => {
+                        Value::Null(Some(TypeName::Exception))
+                    }
+                    PlatformIntrinsic::FinalizerContextGetResult => {
+                        self.store.allocate_platform(PlatformValue::PlatformEnum(
+                            crate::platform::PlatformEnum::ParentJobResult(
+                                crate::platform::ParentJobResult::Success,
+                            ),
+                        ))
+                    }
+                    PlatformIntrinsic::FinalizerContextGetRequestId => {
+                        Value::String(self.current_request_id())
+                    }
+                    _ => unreachable!("non-context intrinsic reached context dispatch"),
+                })
+            }
+            Some(Value::Object(receiver)) => {
+                let class_id = self.store.object(receiver).class_id;
+                let target = match intrinsic {
+                    PlatformIntrinsic::AsyncContextGetJobId => self
+                        .program()
+                        .batchable_context_contract(class_id)
+                        .map(|contract| contract.get_job_id)
+                        .or_else(|| self.program().queueable_context_contract(class_id)),
+                    PlatformIntrinsic::BatchableContextGetChildJobId => self
+                        .program()
+                        .batchable_context_contract(class_id)
+                        .map(|contract| contract.get_child_job_id),
+                    PlatformIntrinsic::FinalizerContextGetAsyncApexJobId => self
+                        .program()
+                        .finalizer_context_contract(class_id)
+                        .map(|contract| contract.get_async_apex_job_id),
+                    PlatformIntrinsic::FinalizerContextGetException => self
+                        .program()
+                        .finalizer_context_contract(class_id)
+                        .map(|contract| contract.get_exception),
+                    PlatformIntrinsic::FinalizerContextGetResult => self
+                        .program()
+                        .finalizer_context_contract(class_id)
+                        .map(|contract| contract.get_result),
+                    PlatformIntrinsic::FinalizerContextGetRequestId => self
+                        .program()
+                        .finalizer_context_contract(class_id)
+                        .map(|contract| contract.get_request_id),
+                    PlatformIntrinsic::SchedulableContextGetTriggerId => {
+                        self.program().schedulable_context_contract(class_id)
+                    }
+                    _ => unreachable!("non-context intrinsic reached context dispatch"),
+                }
+                .ok_or_else(|| {
+                    runtime_exception(
+                        "TypeException",
+                        "runtime object does not implement the checked platform context contract",
+                        span,
+                    )
+                })?;
+                self.evaluate_class_method_arguments(
+                    target,
+                    Some(receiver),
+                    Vec::new(),
+                    span,
+                    true,
+                    false,
+                )
+            }
+            _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn current_request_id(&self) -> String {
+        self.current_async.as_ref().map_or_else(
+            || "REQ000000000001".to_owned(),
+            |context| context.id.clone(),
+        )
+    }
+
+    fn current_request_quiddity(&self) -> crate::platform::Quiddity {
+        if self.execution_context.is_test() {
+            if self.current_async.is_some() {
+                crate::platform::Quiddity::RunTestAsync
+            } else {
+                crate::platform::Quiddity::RunTestSync
+            }
+        } else {
+            crate::platform::Quiddity::Undefined
+        }
+    }
+
+    fn require_cache_partition_receiver(
+        &self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        if matches!(self.store.platform(id), PlatformValue::CachePartition) {
+            Ok(())
+        } else {
+            Err(invalid_runtime_operands(span))
+        }
+    }
+
+    fn resolve_type_for_name(&self, name: &str, span: Span) -> Option<TypeName> {
+        if let Some(ty) = TypeName::from_apex_name(name) {
+            return Some(ty);
+        }
+        let named = crate::ast::NamedType::new(name.to_owned(), span);
+        let schema_name = crate::hir::schema_api_name(&named);
+        if name.to_ascii_lowercase().starts_with("schema.")
+            && self.program().schema().object_index(schema_name).is_some()
+        {
+            return Some(TypeName::Custom(named));
+        }
+        if let Some(class_id) = self.runtime_class_id(&named) {
+            return Some(TypeName::Custom(crate::ast::NamedType::new(
+                self.classes()[class_id].qualified_name.spelling.clone(),
+                span,
+            )));
+        }
+        self.program()
+            .schema()
+            .object_index(schema_name)
+            .map(|_| TypeName::Custom(named))
+    }
+
+    fn instantiate_type(
+        &mut self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let Some(Value::TypeLiteral(TypeName::Custom(name))) = receiver else {
+            return Err(runtime_exception(
+                "TypeException",
+                "Type.newInstance requires a constructible Apex or SObject type",
+                span,
+            ));
+        };
+        if let Some(object_id) = self
+            .program()
+            .schema()
+            .object_index(crate::hir::schema_api_name(&name))
+        {
+            return Ok(self.store.allocate_sobject(object_id));
+        }
+        let class_id = self.runtime_class_id(&name).ok_or_else(|| {
+            runtime_exception(
+                "TypeException",
+                format!("unknown Apex type `{}`", name.spelling),
+                span,
+            )
+        })?;
+        let class = &self.classes()[class_id];
+        if class.kind != crate::ast::ClassKind::Class
+            || class.modifiers.contains(&crate::ast::Modifier::Abstract)
+        {
+            return Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "type `{}` is not constructible",
+                    class.qualified_name.spelling
+                ),
+                span,
+            ));
+        }
+        let constructor = self.zero_argument_constructor(class_id);
+        if constructor.is_none()
+            && class
+                .members
+                .iter()
+                .any(|member| matches!(member, crate::ast::ClassMember::Constructor(_)))
+        {
+            return Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "type `{}` has no zero-argument constructor",
+                    class.qualified_name.spelling
+                ),
+                span,
+            ));
+        }
+        self.ensure_class_initialized(class_id, span)?;
+        self.construct_user_object(class_id, constructor, Vec::new(), span)
+    }
+
+    fn call_callable(
+        &mut self,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let Some(Value::Object(receiver)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        if arguments.len() != 2 {
+            return Err(invalid_call_arguments(span));
+        }
+        let class_id = self.store.object(receiver).class_id;
+        let target = self.program().callable_contract(class_id).ok_or_else(|| {
+            runtime_exception(
+                "TypeException",
+                "runtime object does not implement System.Callable",
+                span,
+            )
+        })?;
+        self.evaluate_class_method_arguments(
+            target,
+            Some(receiver),
+            arguments.to_vec(),
+            span,
+            true,
+            false,
+        )
     }
 
     fn strip_inaccessible(
@@ -1243,10 +1693,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         depth: usize,
         traversal: &mut ValueGraphTraversal,
     ) -> Result<JsonValue, Diagnostic> {
-        if matches!(
-            value,
-            Value::SObject(_) | Value::AggregateResult(_) | Value::Object(_)
-        ) {
+        if let Value::Object(id) = value {
+            return self.object_to_json(*id, span, depth, traversal);
+        }
+        if matches!(value, Value::SObject(_) | Value::AggregateResult(_)) {
             let mut rendered = String::new();
             self.render_value_with_traversal(
                 value,
@@ -1304,6 +1754,71 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 unreachable!("handled before entering the structural JSON match")
             }
         })
+    }
+
+    fn object_to_json(
+        &self,
+        id: super::ObjectId,
+        span: Span,
+        depth: usize,
+        traversal: &mut ValueGraphTraversal,
+    ) -> Result<JsonValue, Diagnostic> {
+        traversal
+            .visit_node(depth)
+            .map_err(|error| json_traversal_error(error, span))?;
+        let identity = GraphIdentity::Object(id);
+        traversal
+            .enter_identity(identity)
+            .map_err(|error| json_traversal_error(error, span))?;
+
+        let fields = {
+            let instance = self.store.object(id);
+            let metadata = self
+                .program()
+                .class_metadata(crate::hir::ClassId::from_index(instance.class_id));
+            let mut fields = Vec::new();
+            for class_id in &metadata.lineage_base_first {
+                for target in &self.program().class_metadata(*class_id).instance_slots {
+                    let member = &self.classes()[target.class_id].members[target.member_id];
+                    let (name, transient) = match member {
+                        crate::ast::ClassMember::Field(field) => (
+                            field.name.spelling.clone(),
+                            field.modifiers.contains(&crate::ast::Modifier::Transient),
+                        ),
+                        crate::ast::ClassMember::Property(property) => {
+                            (property.name.spelling.clone(), false)
+                        }
+                        _ => unreachable!("instance slot metadata refers to a value member"),
+                    };
+                    if !transient {
+                        let value = instance
+                            .fields
+                            .get(target)
+                            .expect("allocated instance field has a runtime slot")
+                            .value
+                            .clone();
+                        fields.push((name, value));
+                    }
+                }
+            }
+            fields
+        };
+
+        let result = (|| {
+            let mut object = JsonMap::new();
+            for (name, value) in fields {
+                traversal
+                    .visit_element()
+                    .map_err(|error| json_traversal_error(error, span))?;
+                object.insert(
+                    name,
+                    self.value_to_json_inner(&value, span, depth + 1, traversal)?,
+                );
+            }
+            Ok(JsonValue::Object(object))
+        })();
+        traversal.leave_identity(identity);
+        result
     }
 
     fn collection_to_json(

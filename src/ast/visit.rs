@@ -700,8 +700,16 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::Http
         | TypeName::HttpRequest
         | TypeName::HttpResponse
+        | TypeName::HttpCalloutMock
+        | TypeName::Callable
         | TypeName::QueueableContext
         | TypeName::BatchableContext
+        | TypeName::FinalizerContext
+        | TypeName::ParentJobResult
+        | TypeName::Quiddity
+        | TypeName::CacheVisibility
+        | TypeName::CachePartition
+        | TypeName::Request
         | TypeName::QueryLocator
         | TypeName::SaveResult
         | TypeName::UpsertResult
@@ -728,6 +736,8 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::DmlException
         | TypeName::NoAccessException
         | TypeName::AsyncException
+        | TypeName::OrgCacheException
+        | TypeName::SessionCacheException
         | TypeName::AggregateResult
         | TypeName::Type => {}
     }

@@ -389,6 +389,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
             PlatformValue::AccessLevel(access) => traversal.write(output, access.apex_name()),
             PlatformValue::AccessType(access) => traversal.write(output, access.apex_name()),
+            PlatformValue::PlatformEnum(value) => traversal.write(output, value.apex_name()),
+            PlatformValue::CachePartition => {
+                traversal.write(output, "Cache.Partition[unavailable]")
+            }
+            PlatformValue::Request { request_id, .. } => {
+                traversal.write(output, "System.Request[")?;
+                traversal.write(output, request_id)?;
+                traversal.write(output, "]")
+            }
             PlatformValue::SecurityDecision { .. } => {
                 traversal.write(output, "SObjectAccessDecision")
             }
@@ -868,6 +877,10 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
                         PlatformValue::AccessType(left_access),
                         PlatformValue::AccessType(right_access),
                     ) => left_access == right_access,
+                    (
+                        PlatformValue::PlatformEnum(left_value),
+                        PlatformValue::PlatformEnum(right_value),
+                    ) => left_value == right_value,
                     _ => left == right,
                 }
             }

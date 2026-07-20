@@ -503,6 +503,8 @@ impl Checker {
         let intrinsic = match method.canonical.as_str() {
             "valueof" => StaticStringIntrinsic::ValueOf,
             "join" => StaticStringIntrinsic::Join,
+            "format" => StaticStringIntrinsic::Format,
+            "escapesinglequotes" => StaticStringIntrinsic::EscapeSingleQuotes,
             "isblank" => StaticStringIntrinsic::IsBlank,
             "isnotblank" => StaticStringIntrinsic::IsNotBlank,
             "isempty" => StaticStringIntrinsic::IsEmpty,
@@ -529,6 +531,37 @@ impl Checker {
                     &method.spelling,
                     1,
                     &arguments[1],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            StaticStringIntrinsic::Format => {
+                require_static_arity("String", method, arguments.len(), &[2], arguments)?;
+                self.require_argument(
+                    &TypeName::String,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                if !matches!(
+                    self.expression_type(&arguments[1])?,
+                    ExpressionType::Value(TypeName::List(_))
+                ) {
+                    return Err(Diagnostic::new(
+                        "String.format argument 2 must be a List",
+                        arguments[1].span(),
+                    ));
+                }
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            StaticStringIntrinsic::EscapeSingleQuotes => {
+                require_static_arity("String", method, arguments.len(), &[1], arguments)?;
+                self.require_argument(
+                    &TypeName::String,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
                     &TypeName::String,
                 )?;
                 Ok(ExpressionType::Value(TypeName::String))
@@ -560,16 +593,24 @@ impl Checker {
         let intrinsic = match method.canonical.as_str() {
             "length" => StringIntrinsic::Length,
             "contains" => StringIntrinsic::Contains,
+            "containsignorecase" => StringIntrinsic::ContainsIgnoreCase,
             "startswith" => StringIntrinsic::StartsWith,
             "endswith" => StringIntrinsic::EndsWith,
             "equals" => StringIntrinsic::Equals,
             "equalsignorecase" => StringIntrinsic::EqualsIgnoreCase,
             "indexof" => StringIntrinsic::IndexOf,
             "substring" => StringIntrinsic::Substring,
+            "substringbefore" => StringIntrinsic::SubstringBefore,
+            "substringafter" => StringIntrinsic::SubstringAfter,
+            "substringafterlast" => StringIntrinsic::SubstringAfterLast,
+            "substringbetween" => StringIntrinsic::SubstringBetween,
+            "left" => StringIntrinsic::Left,
+            "split" => StringIntrinsic::Split,
             "trim" => StringIntrinsic::Trim,
             "tolowercase" => StringIntrinsic::ToLowerCase,
             "touppercase" => StringIntrinsic::ToUpperCase,
             "replace" => StringIntrinsic::Replace,
+            "replaceall" => StringIntrinsic::ReplaceAll,
             _ => return Err(unknown_method(&receiver_type, method)),
         };
         let result = match intrinsic {
@@ -584,6 +625,7 @@ impl Checker {
                 Ok(ExpressionType::Value(TypeName::Integer))
             }
             StringIntrinsic::Contains
+            | StringIntrinsic::ContainsIgnoreCase
             | StringIntrinsic::StartsWith
             | StringIntrinsic::EndsWith
             | StringIntrinsic::Equals
@@ -640,6 +682,89 @@ impl Checker {
                 }
                 Ok(ExpressionType::Value(TypeName::String))
             }
+            StringIntrinsic::SubstringBefore
+            | StringIntrinsic::SubstringAfter
+            | StringIntrinsic::SubstringAfterLast => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    &receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            StringIntrinsic::SubstringBetween => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.require_argument(
+                        &receiver_type,
+                        &method.spelling,
+                        index,
+                        argument,
+                        &TypeName::String,
+                    )?;
+                }
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            StringIntrinsic::Left => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                self.require_argument(
+                    &receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Integer,
+                )?;
+                Ok(ExpressionType::Value(TypeName::String))
+            }
+            StringIntrinsic::Split => {
+                require_arity(
+                    &receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1, 2],
+                    arguments,
+                )?;
+                self.require_argument(
+                    &receiver_type,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                if let Some(limit) = arguments.get(1) {
+                    self.require_argument(
+                        &receiver_type,
+                        &method.spelling,
+                        1,
+                        limit,
+                        &TypeName::Integer,
+                    )?;
+                }
+                Ok(ExpressionType::Value(TypeName::List(Box::new(
+                    TypeName::String,
+                ))))
+            }
             StringIntrinsic::Trim | StringIntrinsic::ToLowerCase | StringIntrinsic::ToUpperCase => {
                 require_arity(
                     &receiver_type,
@@ -650,7 +775,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Value(TypeName::String))
             }
-            StringIntrinsic::Replace => {
+            StringIntrinsic::Replace | StringIntrinsic::ReplaceAll => {
                 require_arity(
                     &receiver_type,
                     &method.spelling,
@@ -851,6 +976,7 @@ impl Checker {
             ("test", "starttest") => P::TestStartTest,
             ("test", "stoptest") => P::TestStopTest,
             ("test", "isrunningtest") => P::TestIsRunningTest,
+            ("test" | "system.test", "setmock") => P::TestSetMock,
             ("limits", "getqueries") => P::LimitsGetQueries,
             ("limits", "getlimitqueries") => P::LimitsGetLimitQueries,
             ("limits", "getdmlstatements") => P::LimitsGetDmlStatements,
@@ -861,6 +987,9 @@ impl Checker {
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
             ("eventbus", "publish") => P::EventBusPublish,
+            ("request" | "system.request", "getcurrent") => P::RequestGetCurrent,
+            ("cache.org" | "cache.session", "getpartition") => P::CacheGetPartition,
+            ("type" | "system.type", "forname") => P::TypeForName,
             _ => return Err(self.unsupported_platform_api(owner, method)),
         };
         let result = match intrinsic {
@@ -992,6 +1121,24 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
             }
+            P::TestSetMock => {
+                require_static_arity(owner, method, arguments.len(), &[2], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Type,
+                )?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    1,
+                    &arguments[1],
+                    &TypeName::HttpCalloutMock,
+                )?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
             P::TestIsRunningTest => {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Boolean
@@ -1051,6 +1198,32 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_platform_event_argument(&arguments[0])?;
                 return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::RequestGetCurrent => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                TypeName::Request
+            }
+            P::CacheGetPartition => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::CachePartition
+            }
+            P::TypeForName => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Type
             }
             _ => unreachable!("instance intrinsic selected as static"),
         };
@@ -1194,6 +1367,7 @@ impl Checker {
             (TypeName::Matcher, "start") => P::MatcherStart,
             (TypeName::Matcher, "end") => P::MatcherEnd,
             (TypeName::SObjectType, "getdescribe") => P::SObjectTypeGetDescribe,
+            (TypeName::SObjectType, "tostring") => P::ObjectToString,
             (TypeName::DescribeSObjectResult, "getname") => P::DescribeGetName,
             (TypeName::DescribeSObjectResult, "getkeyprefix") => P::DescribeGetKeyPrefix,
             (TypeName::DescribeSObjectResult, "iscustom") => P::DescribeIsCustom,
@@ -1216,10 +1390,32 @@ impl Checker {
             (TypeName::HttpResponse, "setstatus") => P::HttpResponseSetStatus,
             (TypeName::HttpResponse, "getstatus") => P::HttpResponseGetStatus,
             (TypeName::Http, "send") => P::HttpSend,
+            (TypeName::HttpCalloutMock, "respond") => P::HttpCalloutMockRespond,
             (TypeName::QueueableContext | TypeName::BatchableContext, "getjobid") => {
                 P::AsyncContextGetJobId
             }
+            (TypeName::BatchableContext, "getchildjobid") => P::BatchableContextGetChildJobId,
+            (TypeName::FinalizerContext, "getasyncapexjobid") => {
+                P::FinalizerContextGetAsyncApexJobId
+            }
+            (TypeName::FinalizerContext, "getexception") => P::FinalizerContextGetException,
+            (TypeName::FinalizerContext, "getresult") => P::FinalizerContextGetResult,
+            (TypeName::FinalizerContext, "getrequestid") => P::FinalizerContextGetRequestId,
             (TypeName::SchedulableContext, "gettriggerid") => P::SchedulableContextGetTriggerId,
+            (TypeName::Request, "getrequestid") => P::RequestGetRequestId,
+            (TypeName::Request, "getquiddity") => P::RequestGetQuiddity,
+            (
+                TypeName::ParentJobResult | TypeName::Quiddity | TypeName::CacheVisibility,
+                "name",
+            ) => P::PlatformEnumName,
+            (TypeName::CachePartition, "contains") => P::CachePartitionContains,
+            (TypeName::CachePartition, "get") => P::CachePartitionGet,
+            (TypeName::CachePartition, "isavailable") => P::CachePartitionIsAvailable,
+            (TypeName::CachePartition, "put") => P::CachePartitionPut,
+            (TypeName::CachePartition, "remove") => P::CachePartitionRemove,
+            (TypeName::Callable, "call") => P::CallableCall,
+            (TypeName::Type, "getname") => P::TypeGetName,
+            (TypeName::Type, "newinstance") => P::TypeNewInstance,
             _ => return Err(self.unsupported_instance_platform_api(receiver_type, method)),
         };
         let owner = receiver_type.apex_name();
@@ -1504,7 +1700,14 @@ impl Checker {
                 self.one_argument(&owner, method, arguments, &TypeName::HttpRequest)?;
                 TypeName::HttpResponse
             }
-            P::AsyncContextGetJobId | P::SchedulableContextGetTriggerId => {
+            P::HttpCalloutMockRespond => {
+                self.one_argument(&owner, method, arguments, &TypeName::HttpRequest)?;
+                TypeName::HttpResponse
+            }
+            P::AsyncContextGetJobId
+            | P::BatchableContextGetChildJobId
+            | P::FinalizerContextGetAsyncApexJobId
+            | P::SchedulableContextGetTriggerId => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -1513,6 +1716,157 @@ impl Checker {
                     arguments,
                 )?;
                 TypeName::Id
+            }
+            P::FinalizerContextGetException => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Exception
+            }
+            P::FinalizerContextGetResult => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::ParentJobResult
+            }
+            P::FinalizerContextGetRequestId | P::RequestGetRequestId | P::TypeGetName => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::RequestGetQuiddity => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Quiddity
+            }
+            P::PlatformEnumName => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::CachePartitionContains => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                TypeName::Boolean
+            }
+            P::CachePartitionGet => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                TypeName::Object
+            }
+            P::CachePartitionIsAvailable => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Boolean
+            }
+            P::CachePartitionPut => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2, 3, 4, 5],
+                    arguments,
+                )?;
+                self.require_named_argument(
+                    &owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                self.require_non_void_argument(&owner, &method.spelling, 1, &arguments[1])?;
+                if let Some(ttl) = arguments.get(2) {
+                    self.require_named_argument(
+                        &owner,
+                        &method.spelling,
+                        2,
+                        ttl,
+                        &TypeName::Integer,
+                    )?;
+                }
+                if let Some(visibility) = arguments.get(3) {
+                    self.require_named_argument(
+                        &owner,
+                        &method.spelling,
+                        3,
+                        visibility,
+                        &TypeName::CacheVisibility,
+                    )?;
+                }
+                if let Some(immutable) = arguments.get(4) {
+                    self.require_named_argument(
+                        &owner,
+                        &method.spelling,
+                        4,
+                        immutable,
+                        &TypeName::Boolean,
+                    )?;
+                }
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::CachePartitionRemove => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::CallableCall => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                self.require_named_argument(
+                    &owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                self.require_named_argument(
+                    &owner,
+                    &method.spelling,
+                    1,
+                    &arguments[1],
+                    &TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::Object)),
+                )?;
+                TypeName::Object
+            }
+            P::TypeNewInstance => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::Object
             }
             _ => unreachable!("static intrinsic selected as instance"),
         };

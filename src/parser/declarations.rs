@@ -566,6 +566,47 @@ impl Parser {
                     }
                     AnnotationKind::Future
                 }
+                "auraenabled" => {
+                    let mut cacheable = None;
+                    let mut continuation = None;
+                    for argument in &arguments {
+                        let Some(argument_name) = &argument.name else {
+                            return Err(Diagnostic::new(
+                                "`@AuraEnabled` options must be named",
+                                argument.span,
+                            ));
+                        };
+                        let Expression::BooleanLiteral(value, _) = argument.value else {
+                            return Err(Diagnostic::new(
+                                format!("`{}` requires a Boolean literal", argument_name.spelling),
+                                argument.value.span(),
+                            ));
+                        };
+                        let slot = match argument_name.canonical.as_str() {
+                            "cacheable" => &mut cacheable,
+                            "continuation" => &mut continuation,
+                            _ => {
+                                return Err(Diagnostic::new(
+                                    "supported `@AuraEnabled` options are `cacheable` and `continuation`",
+                                    argument_name.span,
+                                ));
+                            }
+                        };
+                        if slot.replace(value).is_some() {
+                            return Err(Diagnostic::new(
+                                format!(
+                                    "duplicate `@AuraEnabled` option `{}`",
+                                    argument_name.spelling
+                                ),
+                                argument_name.span,
+                            ));
+                        }
+                    }
+                    AnnotationKind::AuraEnabled {
+                        cacheable,
+                        continuation,
+                    }
+                }
                 "suppresswarnings" => {
                     if !parenthesized
                         || !matches!(

@@ -1,5 +1,5 @@
 use apex_exec::{
-    ast::AnnotationKind,
+    ast::{AnnotationKind, ClassMember},
     check, execute, parse,
     platform::{
         DataValue, FieldSchema, FieldType, LocalDatabase, ObjectSchema, QueryAccessMode,
@@ -7,9 +7,11 @@ use apex_exec::{
         SoqlRequest, SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
     },
     project,
+    runtime::{HttpResponseData, Interpreter, RecordingHost},
     test_runner::{self, TestOptions},
 };
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -192,6 +194,87 @@ private class TestVisibleDemoTest {
 }
 
 #[test]
+fn lexical_family_types_share_private_members_without_crossing_top_level_boundaries() {
+    let source = r#"
+public class LexicalPrivateDemo {
+    private class Left {
+        private static Integer forty() {
+            return 40;
+        }
+
+        private static Integer two() {
+            return 2;
+        }
+    }
+
+    private class Right {
+        private static Integer total() {
+            return Left.forty() + Left.two();
+        }
+    }
+
+    public static void run() {
+        System.debug(Right.total());
+    }
+}
+"#;
+    let root = test_project("LexicalPrivateDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("LexicalPrivateDemo.run").unwrap(),
+        ["42"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn enterprise_string_helpers_are_typed_utf16_aware_and_regex_checked() {
+    let source = r#"
+public class EnterpriseStringDemo {
+    public static void run() {
+        System.debug('namespace.Type'.substringBefore('.'));
+        System.debug('namespace.Type'.substringAfter('.'));
+        System.debug('one.two.three'.substringAfterLast('.'));
+        System.debug('/apex/Page?x=1'.substringBetween('apex/', '?'));
+        System.debug('Mixed Case'.containsIgnoreCase('case'));
+        System.debug('A😀B'.left(3));
+        System.debug('a , b, c'.replaceAll('( ,)|(,)|(, )', ','));
+
+        List<String> pieces = 'a.b.'.split('\\.');
+        System.debug(pieces.size() + ':' + pieces[0] + ':' + pieces[1]);
+        System.debug(String.format('{0}:{1}', new List<Object>{'value', 42}));
+        System.debug(String.escapeSingleQuotes('O\'Brien'));
+
+        try {
+            'value'.split('[');
+            System.assert(false);
+        } catch (StringException expected) {
+            System.assert(expected.getMessage().contains('regular expression'));
+        }
+    }
+}
+"#;
+    let root = test_project("EnterpriseStringDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("EnterpriseStringDemo.run").unwrap(),
+        [
+            "namespace",
+            "Type",
+            "three",
+            "Page",
+            "true",
+            "A😀",
+            "a, b, c",
+            "2:a:b",
+            "value:42",
+            "O\\'Brien",
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn comparable_contract_drives_stable_bounded_list_sorting() {
     let source = r#"
 public class ComparableDemo {
@@ -369,6 +452,502 @@ Test.stopTest();
 }
 
 #[test]
+fn database_allows_callouts_gates_async_http_at_the_checked_contract() {
+    let allowed = check(
+        r#"
+public class AllowedCalloutJob implements System.Queueable, Database.AllowsCallouts {
+    public void execute(System.QueueableContext context) {
+        HttpRequest request = new HttpRequest();
+        request.setEndpoint('https://example.test/status');
+        HttpResponse response = new Http().send(request);
+        System.debug('allowed:' + response.getStatusCode());
+    }
+}
+
+Test.startTest();
+System.enqueueJob(new AllowedCalloutJob());
+Test.stopTest();
+"#,
+    )
+    .unwrap();
+    let mut allowed_host = RecordingHost::default();
+    allowed_host.enqueue_http_response(HttpResponseData {
+        status_code: 200,
+        status: "OK".to_owned(),
+        body: String::new(),
+        headers: BTreeMap::new(),
+    });
+    let output = Interpreter::with_host(&mut allowed_host)
+        .execute(&allowed)
+        .unwrap();
+    assert_eq!(output, ["allowed:200"]);
+    assert_eq!(allowed_host.callout_requests().len(), 1);
+
+    let denied = check(
+        r#"
+public class DeniedCalloutJob implements System.Queueable {
+    public void execute(System.QueueableContext context) {
+        HttpRequest request = new HttpRequest();
+        request.setEndpoint('https://example.test/status');
+        HttpResponse response = new Http().send(request);
+    }
+}
+
+Test.startTest();
+System.enqueueJob(new DeniedCalloutJob());
+Test.stopTest();
+"#,
+    )
+    .unwrap();
+    let mut denied_host = RecordingHost::default();
+    denied_host.enqueue_http_response(HttpResponseData {
+        status_code: 200,
+        status: "OK".to_owned(),
+        body: String::new(),
+        headers: BTreeMap::new(),
+    });
+    let error = Interpreter::with_host(&mut denied_host)
+        .execute(&denied)
+        .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("CalloutException"));
+    assert!(error.message.contains("Database.AllowsCallouts"), "{error}");
+    assert!(
+        denied_host.callout_requests().is_empty(),
+        "denied async callout must fail before crossing the host boundary"
+    );
+
+    let generic_marker =
+        check("public class InvalidCalloutMarker implements Database.AllowsCallouts<String> {}")
+            .unwrap_err();
+    assert!(
+        generic_marker
+            .message
+            .contains("does not accept generic arguments"),
+        "{generic_marker}"
+    );
+}
+
+#[test]
+fn user_batchable_context_implements_and_dispatches_the_platform_contract() {
+    let output = execute(
+        r#"
+public class MockBatchableContext implements Database.BatchableContext {
+    private Id jobId;
+    private Id childJobId;
+
+    public MockBatchableContext(Id jobId, Id childJobId) {
+        this.jobId = jobId;
+        this.childJobId = childJobId;
+    }
+
+    public Id getJobId() {
+        return this.jobId;
+    }
+
+    public Id getChildJobId() {
+        return this.childJobId;
+    }
+}
+
+Database.BatchableContext context = new MockBatchableContext(
+    Id.valueOf('707000000000001'),
+    Id.valueOf('707000000000002')
+);
+System.debug(context.getJobId());
+System.debug(context.getChildJobId());
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["707000000000001", "707000000000002"]);
+
+    let missing_method = check(
+        "public class InvalidBatchableContext implements Database.BatchableContext {
+            public Id getJobId() { return null; }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        missing_method.message.contains("Id getChildJobId()"),
+        "{missing_method}"
+    );
+}
+
+#[test]
+fn user_async_context_mocks_and_request_values_preserve_platform_types() {
+    let output = execute(
+        r#"
+public class MockFinalizerContext implements System.FinalizerContext {
+    private Id jobId;
+
+    public MockFinalizerContext(Id jobId) {
+        this.jobId = jobId;
+    }
+
+    public Id getAsyncApexJobId() {
+        return this.jobId;
+    }
+
+    public Exception getException() {
+        return null;
+    }
+
+    public System.ParentJobResult getResult() {
+        return System.ParentJobResult.SUCCESS;
+    }
+
+    public String getRequestId() {
+        return System.Request.getCurrent().getRequestId();
+    }
+}
+
+public class MockQueueableContext implements System.QueueableContext {
+    public Id getJobId() {
+        return Id.valueOf('707000000000002');
+    }
+}
+
+public class MockSchedulableContext implements System.SchedulableContext {
+    public Id getTriggerId() {
+        return Id.valueOf('08e000000000003');
+    }
+}
+
+System.FinalizerContext finalizer =
+    new MockFinalizerContext(Id.valueOf('707000000000001'));
+System.QueueableContext queueable = new MockQueueableContext();
+System.SchedulableContext schedulable = new MockSchedulableContext();
+System.debug(finalizer.getAsyncApexJobId());
+System.debug(finalizer.getResult().name());
+System.debug(
+    finalizer.getRequestId() == System.Request.getCurrent().getRequestId()
+);
+System.debug(System.Request.getCurrent().getQuiddity().name());
+System.debug(queueable.getJobId());
+System.debug(schedulable.getTriggerId());
+System.debug(System.FinalizerContext.class.getName());
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        output,
+        [
+            "707000000000001",
+            "SUCCESS",
+            "true",
+            "UNDEFINED",
+            "707000000000002",
+            "08e000000000003",
+            "System.FinalizerContext",
+        ]
+    );
+
+    let missing_method = check(
+        "public class InvalidFinalizerContext implements System.FinalizerContext {
+            public Id getAsyncApexJobId() { return null; }
+            public Exception getException() { return null; }
+            public System.ParentJobResult getResult() {
+                return System.ParentJobResult.SUCCESS;
+            }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        missing_method.message.contains("String getRequestId()"),
+        "{missing_method}"
+    );
+}
+
+#[test]
+fn transient_instance_fields_execute_normally_and_are_omitted_from_json() {
+    let output = execute(
+        r#"
+public class SerializableState {
+    public Integer retained = 7;
+    public transient final String ephemeral = 'secret';
+}
+
+SerializableState state = new SerializableState();
+System.debug(state.ephemeral);
+System.debug(JSON.serialize(state));
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["secret", "{\"retained\":7}"]);
+
+    let invalid_local = check("transient Integer localValue = 1;").unwrap_err();
+    assert!(
+        invalid_local.message.contains("local modifier `transient`"),
+        "{invalid_local}"
+    );
+}
+
+#[test]
+fn aura_enabled_options_are_validated_and_runtime_neutral() {
+    let source = r#"
+public class AuraSurface {
+    @AuraEnabled
+    public String label = 'ready';
+
+    @AuraEnabled
+    public String description { get; set; }
+
+    @AuraEnabled(cacheable=true continuation=false)
+    public static String fetch() {
+        return 'ok';
+    }
+}
+"#;
+    let parsed = parse(source).unwrap();
+    let aura_kinds = parsed.classes[0]
+        .members
+        .iter()
+        .filter_map(|member| match member {
+            ClassMember::Field(field) => field.annotations.first(),
+            ClassMember::Property(property) => property.annotations.first(),
+            ClassMember::Method(method) => method.annotations.first(),
+            _ => None,
+        })
+        .map(|annotation| annotation.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        aura_kinds,
+        [
+            AnnotationKind::AuraEnabled {
+                cacheable: None,
+                continuation: None,
+            },
+            AnnotationKind::AuraEnabled {
+                cacheable: None,
+                continuation: None,
+            },
+            AnnotationKind::AuraEnabled {
+                cacheable: Some(true),
+                continuation: Some(false),
+            },
+        ]
+    );
+    let root = test_project("AuraSurface", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(compilation.invoke("AuraSurface.fetch").unwrap(), ["ok"]);
+    fs::remove_dir_all(root).unwrap();
+
+    for invalid in [
+        "@AuraEnabled public class Invalid {}",
+        "public class Invalid {
+            @AuraEnabled private String hidden;
+        }",
+        "public class Invalid {
+            @AuraEnabled(cacheable=true) public String field;
+        }",
+        "public class Invalid {
+            @AuraEnabled public String instanceMethod() { return 'no'; }
+        }",
+    ] {
+        assert!(check(invalid).is_err(), "{invalid}");
+    }
+    for invalid in [
+        "public class Invalid {
+            @AuraEnabled(true) public static void run() {}
+        }",
+        "public class Invalid {
+            @AuraEnabled(cacheable='yes') public static void run() {}
+        }",
+        "public class Invalid {
+            @AuraEnabled(unknown=true) public static void run() {}
+        }",
+    ] {
+        assert!(parse(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn http_callout_mock_contract_intercepts_test_callouts_before_the_host() {
+    let source = r#"
+public class LocalHttpMock implements System.HttpCalloutMock {
+    public System.HttpResponse respond(System.HttpRequest request) {
+        System.HttpResponse response = new System.HttpResponse();
+        response.setStatusCode(201);
+        response.setBody(request.getEndpoint());
+        return response;
+    }
+}
+"#;
+    let test_source = r#"
+@IsTest
+private class LocalHttpMockTest {
+    @IsTest
+    static void interceptsTheCallout() {
+        System.Test.setMock(
+            System.HttpCalloutMock.class,
+            new LocalHttpMock()
+        );
+        HttpRequest request = new HttpRequest();
+        request.setEndpoint('https://example.test/mock');
+        HttpResponse response = new Http().send(request);
+        System.assertEquals(201, response.getStatusCode());
+        System.assertEquals(
+            'https://example.test/mock',
+            response.getBody()
+        );
+        System.assertEquals(
+            'M28Alpha__c',
+            Schema.getGlobalDescribe().get('M28Alpha__c').toString()
+        );
+    }
+}
+"#;
+    let root = test_project(
+        "LocalHttpMock",
+        source,
+        &[("LocalHttpMockTest", test_source)],
+    );
+    let compilation = project::compile(&root).unwrap();
+    let report = test_runner::run(
+        &compilation,
+        &TestOptions {
+            filter: Some("LocalHttpMockTest.interceptsTheCallout".to_owned()),
+            jobs: 1,
+        },
+    )
+    .unwrap();
+    assert!(report.is_success());
+    fs::remove_dir_all(root).unwrap();
+
+    let invalid = check(
+        "public class InvalidHttpMock implements System.HttpCalloutMock {
+            public HttpResponse wrong(HttpRequest request) {
+                return new HttpResponse();
+            }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .message
+            .contains("HttpResponse respond(HttpRequest)"),
+        "{invalid}"
+    );
+}
+
+#[test]
+fn callable_contract_and_type_reflection_dispatch_checked_runtime_identities() {
+    let source = r#"
+public class ReflectiveCallable implements System.Callable {
+    public Object call(String action, Map<String, Object> arguments) {
+        return action + ':' + arguments.get('value');
+    }
+}
+"#;
+    let test_source = r#"
+@IsTest
+private class ReflectiveCallableTest {
+    @IsTest
+    static void constructsAndDispatches() {
+        System.Type callableType = System.Type.forName('ReflectiveCallable');
+        System.assertEquals('ReflectiveCallable', callableType.getName());
+        System.Callable callable = (System.Callable) callableType.newInstance();
+        System.assertEquals(
+            'run:42',
+            (String) callable.call(
+                'run',
+                new Map<String, Object>{'value' => 42}
+            )
+        );
+
+        SObject reflectedRecord = (SObject) System.Type
+            .forName('Schema.M28Alpha__c')
+            .newInstance();
+        System.assertEquals(
+            'M28Alpha__c',
+            reflectedRecord.getSObjectType().toString()
+        );
+        System.assertEquals(null, System.Type.forName('MissingType'));
+    }
+}
+"#;
+    let root = test_project(
+        "ReflectiveCallable",
+        source,
+        &[("ReflectiveCallableTest", test_source)],
+    );
+    let compilation = project::compile(&root).unwrap();
+    let report = test_runner::run(
+        &compilation,
+        &TestOptions {
+            filter: Some("ReflectiveCallableTest.constructsAndDispatches".to_owned()),
+            jobs: 1,
+        },
+    )
+    .unwrap();
+    assert!(report.is_success(), "{report:?}");
+    fs::remove_dir_all(root).unwrap();
+
+    let invalid = check(
+        "public class InvalidCallable implements System.Callable {
+            public Object invoke(String action, Map<String, Object> arguments) {
+                return null;
+            }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .message
+            .contains("Object call(String, Map<String,Object>)"),
+        "{invalid}"
+    );
+}
+
+#[test]
+fn platform_cache_partition_is_typed_and_deterministically_unavailable() {
+    let source = r#"
+@IsTest
+private class PlatformCacheBoundaryTest {
+    @IsTest
+    static void exposesTypedVisibilityAndPartitionContracts() {
+        Cache.Partition organization = Cache.Org.getPartition('M28');
+        Cache.Partition session = Cache.Session.getPartition('M28');
+
+        System.assertEquals('NAMESPACE', Cache.Visibility.NAMESPACE.name());
+        System.assertEquals('ALL', Cache.Visibility.ALL.name());
+        System.assertEquals(false, organization.isAvailable());
+        System.assertEquals(false, session.contains('missing'));
+        System.assertEquals(null, organization.get('missing'));
+
+        organization.put('key', 'value');
+        organization.put('key', 'value', 60, Cache.Visibility.NAMESPACE, false);
+        session.remove('key');
+
+        try {
+            throw new Cache.Org.OrgCacheException('org unavailable');
+        } catch (Cache.Org.OrgCacheException expected) {
+            System.assertEquals('org unavailable', expected.getMessage());
+        }
+        try {
+            throw new Cache.Session.SessionCacheException('session unavailable');
+        } catch (Cache.Session.SessionCacheException expected) {
+            System.assertEquals('session unavailable', expected.getMessage());
+        }
+    }
+}
+"#;
+    let root = test_project("PlatformCacheBoundaryTest", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    let report = test_runner::run(
+        &compilation,
+        &TestOptions {
+            filter: Some(
+                "PlatformCacheBoundaryTest.exposesTypedVisibilityAndPartitionContracts".to_owned(),
+            ),
+            jobs: 1,
+        },
+    )
+    .unwrap();
+    assert!(report.is_success(), "{report:?}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sobject_type_switch_checks_and_executes_with_single_evaluation() {
     let root = test_project(
         "M28SwitchDemo",
@@ -455,6 +1034,77 @@ private class M28SwitchDemoTest {
 }
 
 #[test]
+fn scalar_switch_dispatches_string_and_enum_labels_with_single_evaluation() {
+    let source = r#"
+public class ScalarSwitchDemo {
+    private enum Mode {
+        FIRST,
+        SECOND
+    }
+
+    private static Integer evaluations = 0;
+
+    private static String selected() {
+        evaluations++;
+        return 'second';
+    }
+
+    public static void run() {
+        switch on selected() {
+            when 'first' {
+                System.debug('wrong');
+            }
+            when 'second' {
+                System.debug('string:' + evaluations);
+            }
+            when else {
+                System.debug('else');
+            }
+        }
+
+        Mode mode = Mode.SECOND;
+        switch on mode {
+            when FIRST {
+                System.debug('wrong');
+            }
+            when SECOND {
+                System.debug('enum:' + mode.name());
+            }
+        }
+    }
+}
+"#;
+    let root = test_project("ScalarSwitchDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("ScalarSwitchDemo.run").unwrap(),
+        ["string:1", "enum:SECOND"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    for invalid in [
+        "public class InvalidSwitch {
+            public static void run() {
+                switch on 'x' {
+                    when 'x' {}
+                    when 'x' {}
+                }
+            }
+        }",
+        "public class InvalidSwitch {
+            private enum Mode { ONE }
+            public static void run() {
+                switch on Mode.ONE {
+                    when TWO {}
+                }
+            }
+        }",
+    ] {
+        assert!(check(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
 fn sobject_type_switch_rejects_invalid_patterns_and_scope_leaks() {
     let cases = [
         (
@@ -497,7 +1147,7 @@ public class WrongSwitchValue {
         ),
         (
             "ScalarLabels",
-            "scalar `switch when` labels",
+            "scalar switch requires String, Integer, Long, or enum",
             r#"
 public class ScalarLabels {
     public static void run() {

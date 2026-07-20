@@ -219,9 +219,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 kind: job.kind,
                 stage: AsyncStage::Started,
             });
+            let allows_callouts = self.async_job_allows_callouts(&job);
             let previous = self.current_async.replace(CurrentAsync {
                 id: job.id.clone(),
                 kind: job.kind,
+                allows_callouts,
             });
             let previous_execution_context =
                 std::mem::replace(&mut self.execution_context, job.execution_context);
@@ -243,6 +245,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             result?;
         }
         Ok(())
+    }
+
+    fn async_job_allows_callouts(&self, job: &PendingAsyncJob) -> bool {
+        let receiver = match &job.work {
+            AsyncWork::Queueable { receiver } | AsyncWork::Batch { receiver, .. } => *receiver,
+            AsyncWork::Future { .. }
+            | AsyncWork::Scheduled { .. }
+            | AsyncWork::PlatformEvent { .. } => return false,
+        };
+        let class_id = self.store.object(receiver).class_id;
+        self.program()
+            .async_contract(class_id)
+            .is_some_and(|contract| contract.allows_callouts)
     }
 
     fn execute_async_transaction(&mut self, job: &PendingAsyncJob) -> Result<(), Diagnostic> {
@@ -478,6 +493,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
     pub(super) fn current_async_kind(&self) -> Option<AsyncJobKind> {
         self.current_async.as_ref().map(|context| context.kind)
+    }
+
+    pub(super) fn current_async_allows_callouts(&self) -> bool {
+        self.current_async
+            .as_ref()
+            .is_none_or(|context| context.allows_callouts)
     }
 
     fn clone_async_value(
