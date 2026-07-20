@@ -439,6 +439,27 @@ public class SObjectIdBindDemo {
 }
 
 #[test]
+fn id_values_widen_to_strings_without_losing_their_text() {
+    let source = r#"
+public class IdStringWideningDemo {
+    public static void run() {
+        Id identifier = Id.valueOf('a00000000000001AAA');
+        String text = identifier;
+        M28Alpha__c record = new M28Alpha__c(Name = identifier);
+        System.debug(text + ':' + record.Name);
+    }
+}
+"#;
+    let root = test_project("IdStringWideningDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("IdStringWideningDemo.run").unwrap(),
+        ["a00000000000001AAA:a00000000000001AAA"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {

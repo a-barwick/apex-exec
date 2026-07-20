@@ -4703,7 +4703,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Date(_) => matches!(target, TypeName::Date),
             Value::Datetime(_) => matches!(target, TypeName::Datetime),
             Value::Time(_) => matches!(target, TypeName::Time),
-            Value::Id(_) => matches!(target, TypeName::Id),
+            Value::Id(_) => matches!(target, TypeName::Id | TypeName::String),
             Value::Platform(id) => self.store.platform(*id).ty() == *target,
             Value::Collection(id) => self.collection_type(*id) == *target,
             Value::Object(id) => {
@@ -4902,6 +4902,7 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
             .ok()
             .and_then(ApexDouble::new)
             .map_or(Value::Decimal(value), Value::Double),
+        Value::Id(value) if *ty == TypeName::String => Value::String(value),
         value => value,
     }
 }
