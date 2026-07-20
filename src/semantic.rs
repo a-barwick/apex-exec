@@ -100,6 +100,14 @@ enum ClassCallKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlatformContextContractKind {
+    Queueable,
+    Schedulable,
+    HttpCalloutMock,
+    Callable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HierarchyVisit {
     Unvisited,
     Visiting,
@@ -221,6 +229,8 @@ struct Checker {
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
     current_static: bool,
+    current_property: Option<ClassMemberId>,
+    current_final_assignment_scope: bool,
     current_trigger_object: Option<usize>,
     schema: SchemaCatalog,
     dynamic_query: bool,
@@ -257,6 +267,8 @@ impl Checker {
             class_ids: HashMap::new(),
             current_class: None,
             current_static: false,
+            current_property: None,
+            current_final_assignment_scope: false,
             current_trigger_object: None,
             schema,
             dynamic_query: false,
@@ -521,6 +533,15 @@ impl Checker {
             }
             return Ok(None);
         }
+        if is_visual_editor_dynamic_picklist(&superclass.canonical) {
+            if class.kind != ClassKind::Class {
+                return Err(Diagnostic::new(
+                    "only classes can extend VisualEditor.DynamicPickList",
+                    superclass.span,
+                ));
+            }
+            return Ok(None);
+        }
         let parent_id = self
             .class_ids
             .get(&superclass.canonical)
@@ -672,117 +693,162 @@ impl Checker {
 
     fn validate_platform_context_contracts(&mut self) -> Result<(), Diagnostic> {
         for class_id in 0..self.classes.len() {
-            if self.class_implements_platform_interface(class_id, is_batchable_context_interface) {
-                let get_job_id = self.require_platform_context_method(
-                    class_id,
-                    "Database.BatchableContext",
-                    "getjobid",
-                    "getJobId",
-                    TypeName::Id,
-                    &[],
-                )?;
-                let get_child_job_id = self.require_platform_context_method(
-                    class_id,
-                    "Database.BatchableContext",
-                    "getchildjobid",
-                    "getChildJobId",
-                    TypeName::Id,
-                    &[],
-                )?;
-                self.batchable_context_contracts.insert(
-                    class_id,
-                    hir::BatchableContextContract {
-                        get_job_id,
-                        get_child_job_id,
-                    },
-                );
+            self.register_batchable_context(class_id)?;
+            self.register_finalizer_context(class_id)?;
+            self.register_single_method_context(
+                class_id,
+                is_queueable_context_interface,
+                "System.QueueableContext",
+                "getjobid",
+                "getJobId",
+                TypeName::Id,
+                &[],
+                PlatformContextContractKind::Queueable,
+            )?;
+            self.register_single_method_context(
+                class_id,
+                is_schedulable_context_interface,
+                "System.SchedulableContext",
+                "gettriggerid",
+                "getTriggerId",
+                TypeName::Id,
+                &[],
+                PlatformContextContractKind::Schedulable,
+            )?;
+            self.register_single_method_context(
+                class_id,
+                is_http_callout_mock_interface,
+                "System.HttpCalloutMock",
+                "respond",
+                "respond",
+                TypeName::HttpResponse,
+                &[TypeName::HttpRequest],
+                PlatformContextContractKind::HttpCalloutMock,
+            )?;
+            self.register_single_method_context(
+                class_id,
+                is_callable_interface,
+                "System.Callable",
+                "call",
+                "call",
+                TypeName::Object,
+                &[
+                    TypeName::String,
+                    TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::Object)),
+                ],
+                PlatformContextContractKind::Callable,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn register_batchable_context(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        if !self.class_implements_platform_interface(class_id, is_batchable_context_interface) {
+            return Ok(());
+        }
+        let get_job_id = self.require_platform_context_method(
+            class_id,
+            "Database.BatchableContext",
+            "getjobid",
+            "getJobId",
+            TypeName::Id,
+            &[],
+        )?;
+        let get_child_job_id = self.require_platform_context_method(
+            class_id,
+            "Database.BatchableContext",
+            "getchildjobid",
+            "getChildJobId",
+            TypeName::Id,
+            &[],
+        )?;
+        self.batchable_context_contracts.insert(
+            class_id,
+            hir::BatchableContextContract {
+                get_job_id,
+                get_child_job_id,
+            },
+        );
+        Ok(())
+    }
+
+    fn register_finalizer_context(&mut self, class_id: usize) -> Result<(), Diagnostic> {
+        if !self.class_implements_platform_interface(class_id, is_finalizer_context_interface) {
+            return Ok(());
+        }
+        let contract = hir::FinalizerContextContract {
+            get_async_apex_job_id: self.require_platform_context_method(
+                class_id,
+                "System.FinalizerContext",
+                "getasyncapexjobid",
+                "getAsyncApexJobId",
+                TypeName::Id,
+                &[],
+            )?,
+            get_exception: self.require_platform_context_method(
+                class_id,
+                "System.FinalizerContext",
+                "getexception",
+                "getException",
+                TypeName::Exception,
+                &[],
+            )?,
+            get_result: self.require_platform_context_method(
+                class_id,
+                "System.FinalizerContext",
+                "getresult",
+                "getResult",
+                TypeName::ParentJobResult,
+                &[],
+            )?,
+            get_request_id: self.require_platform_context_method(
+                class_id,
+                "System.FinalizerContext",
+                "getrequestid",
+                "getRequestId",
+                TypeName::String,
+                &[],
+            )?,
+        };
+        self.finalizer_context_contracts.insert(class_id, contract);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_single_method_context(
+        &mut self,
+        class_id: usize,
+        interface: fn(&str) -> bool,
+        context: &str,
+        canonical_name: &str,
+        display_name: &str,
+        return_type: TypeName,
+        parameter_types: &[TypeName],
+        kind: PlatformContextContractKind,
+    ) -> Result<(), Diagnostic> {
+        if !self.class_implements_platform_interface(class_id, interface) {
+            return Ok(());
+        }
+        let target = self.require_platform_context_method(
+            class_id,
+            context,
+            canonical_name,
+            display_name,
+            return_type,
+            parameter_types,
+        )?;
+        match kind {
+            PlatformContextContractKind::Queueable => {
+                self.queueable_context_contracts.insert(class_id, target);
             }
-            if self.class_implements_platform_interface(class_id, is_finalizer_context_interface) {
-                let contract = hir::FinalizerContextContract {
-                    get_async_apex_job_id: self.require_platform_context_method(
-                        class_id,
-                        "System.FinalizerContext",
-                        "getasyncapexjobid",
-                        "getAsyncApexJobId",
-                        TypeName::Id,
-                        &[],
-                    )?,
-                    get_exception: self.require_platform_context_method(
-                        class_id,
-                        "System.FinalizerContext",
-                        "getexception",
-                        "getException",
-                        TypeName::Exception,
-                        &[],
-                    )?,
-                    get_result: self.require_platform_context_method(
-                        class_id,
-                        "System.FinalizerContext",
-                        "getresult",
-                        "getResult",
-                        TypeName::ParentJobResult,
-                        &[],
-                    )?,
-                    get_request_id: self.require_platform_context_method(
-                        class_id,
-                        "System.FinalizerContext",
-                        "getrequestid",
-                        "getRequestId",
-                        TypeName::String,
-                        &[],
-                    )?,
-                };
-                self.finalizer_context_contracts.insert(class_id, contract);
+            PlatformContextContractKind::Schedulable => {
+                self.schedulable_context_contracts.insert(class_id, target);
             }
-            if self.class_implements_platform_interface(class_id, is_queueable_context_interface) {
-                let get_job_id = self.require_platform_context_method(
-                    class_id,
-                    "System.QueueableContext",
-                    "getjobid",
-                    "getJobId",
-                    TypeName::Id,
-                    &[],
-                )?;
-                self.queueable_context_contracts
-                    .insert(class_id, get_job_id);
+            PlatformContextContractKind::HttpCalloutMock => {
+                self.http_callout_mock_contracts.insert(class_id, target);
             }
-            if self.class_implements_platform_interface(class_id, is_schedulable_context_interface)
-            {
-                let get_trigger_id = self.require_platform_context_method(
-                    class_id,
-                    "System.SchedulableContext",
-                    "gettriggerid",
-                    "getTriggerId",
-                    TypeName::Id,
-                    &[],
-                )?;
-                self.schedulable_context_contracts
-                    .insert(class_id, get_trigger_id);
-            }
-            if self.class_implements_platform_interface(class_id, is_http_callout_mock_interface) {
-                let respond = self.require_platform_context_method(
-                    class_id,
-                    "System.HttpCalloutMock",
-                    "respond",
-                    "respond",
-                    TypeName::HttpResponse,
-                    &[TypeName::HttpRequest],
-                )?;
-                self.http_callout_mock_contracts.insert(class_id, respond);
-            }
-            if self.class_implements_platform_interface(class_id, is_callable_interface) {
-                let call = self.require_platform_context_method(
-                    class_id,
-                    "System.Callable",
-                    "call",
-                    "call",
-                    TypeName::Object,
-                    &[
-                        TypeName::String,
-                        TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::Object)),
-                    ],
-                )?;
-                self.callable_contracts.insert(class_id, call);
+            PlatformContextContractKind::Callable => {
+                self.callable_contracts.insert(class_id, target);
             }
         }
         Ok(())
@@ -933,8 +999,8 @@ impl Checker {
         let saved_static = self.current_static;
         let members = self.classes[class_id].members.clone();
         let result = (|| {
-            for member in &members {
-                self.check_class_member(member)?;
+            for (member_id, member) in members.iter().enumerate() {
+                self.check_class_member(member_id, member)?;
             }
             self.validate_constructor_delegation_cycles(class_id)?;
             Ok(())
@@ -944,7 +1010,11 @@ impl Checker {
         result
     }
 
-    fn check_class_member(&mut self, member: &ClassMember) -> Result<(), Diagnostic> {
+    fn check_class_member(
+        &mut self,
+        member_id: usize,
+        member: &ClassMember,
+    ) -> Result<(), Diagnostic> {
         match member {
             ClassMember::Field(field) => {
                 reject_unsupported_annotations(&field.annotations)?;
@@ -995,11 +1065,22 @@ impl Checker {
                 )?;
                 self.validate_type(&property.ty, property.name.span)?;
                 self.current_static = property.modifiers.contains(&Modifier::Static);
-                self.check_property_accessors(property)
+                let target = ClassMemberId {
+                    class_id: self.current_class.expect("class member has an owner"),
+                    member_id,
+                };
+                let saved_property = self.current_property.replace(target);
+                let result = self.check_property_accessors(property);
+                self.current_property = saved_property;
+                result
             }
             ClassMember::Initializer(initializer) => {
                 self.current_static = initializer.is_static;
-                self.check_method_body(&initializer.body)
+                let saved_final_assignment_scope =
+                    std::mem::replace(&mut self.current_final_assignment_scope, true);
+                let result = self.check_method_body(&initializer.body);
+                self.current_final_assignment_scope = saved_final_assignment_scope;
+                result
             }
         }
     }
@@ -1040,12 +1121,7 @@ impl Checker {
                     validate_modifier_set(&property.modifiers, property.name.span, "property")?;
                     reject_modifiers(
                         &property.modifiers,
-                        &[
-                            Modifier::Virtual,
-                            Modifier::Abstract,
-                            Modifier::Override,
-                            Modifier::Final,
-                        ],
+                        &[Modifier::Virtual, Modifier::Abstract, Modifier::Override],
                         property.name.span,
                         "property",
                     )?;
@@ -1303,38 +1379,7 @@ impl Checker {
             test_kind = Some(kind_name);
         }
         if let Some(span) = future {
-            if test_kind.is_some() {
-                return Err(Diagnostic::new(
-                    "`@future` cannot be combined with a test annotation",
-                    span,
-                ));
-            }
-            if !method.modifiers.contains(&Modifier::Static)
-                || !(method.modifiers.contains(&Modifier::Public)
-                    || method.modifiers.contains(&Modifier::Global))
-                || method.return_type != ReturnType::Void
-                || method.body.is_none()
-            {
-                return Err(Diagnostic::new(
-                    "`@future` method must be public or global static void with a body",
-                    method.name.span,
-                ));
-            }
-            if let Some(parameter) = method
-                .parameters
-                .iter()
-                .find(|parameter| !is_future_parameter_type(&parameter.ty))
-            {
-                return Err(Diagnostic::new(
-                    format!(
-                        "`@future` parameter `{}` has unsupported type {}; only primitive values and Lists or Sets of primitive values are supported",
-                        parameter.name.spelling,
-                        parameter.ty.apex_name()
-                    ),
-                    parameter.span,
-                ));
-            }
-            return Ok(());
+            return self.validate_future_method(method, test_kind, span);
         }
         let Some(kind_name) = test_kind else {
             return Ok(());
@@ -1358,6 +1403,46 @@ impl Checker {
         Ok(())
     }
 
+    fn validate_future_method(
+        &self,
+        method: &MethodDeclaration,
+        test_kind: Option<&str>,
+        future_span: Span,
+    ) -> Result<(), Diagnostic> {
+        if test_kind.is_some() {
+            return Err(Diagnostic::new(
+                "`@future` cannot be combined with a test annotation",
+                future_span,
+            ));
+        }
+        if !method.modifiers.contains(&Modifier::Static)
+            || !(method.modifiers.contains(&Modifier::Public)
+                || method.modifiers.contains(&Modifier::Global))
+            || method.return_type != ReturnType::Void
+            || method.body.is_none()
+        {
+            return Err(Diagnostic::new(
+                "`@future` method must be public or global static void with a body",
+                method.name.span,
+            ));
+        }
+        if let Some(parameter) = method
+            .parameters
+            .iter()
+            .find(|parameter| !is_future_parameter_type(&parameter.ty))
+        {
+            return Err(Diagnostic::new(
+                format!(
+                    "`@future` parameter `{}` has unsupported type {}; only primitive values and Lists or Sets of primitive values are supported",
+                    parameter.name.spelling,
+                    parameter.ty.apex_name()
+                ),
+                parameter.span,
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_class_contracts(&self, class_id: usize) -> Result<(), Diagnostic> {
         let class = &self.classes[class_id];
         self.validate_required_method_returns(class_id)?;
@@ -1368,6 +1453,9 @@ impl Checker {
                 .and_then(|parent| self.find_matching_method(parent, method, true));
             if method.modifiers.contains(&Modifier::Override) {
                 let Some(base) = inherited else {
+                    if self.matches_visual_editor_override(class_id, method) {
+                        continue;
+                    }
                     return Err(Diagnostic::new(
                         format!(
                             "method `{}` does not override an inherited method",
@@ -1437,6 +1525,28 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    fn matches_visual_editor_override(&self, class_id: usize, method: &MethodDeclaration) -> bool {
+        if !self.classes[class_id]
+            .superclass
+            .as_ref()
+            .is_some_and(|parent| is_visual_editor_dynamic_picklist(&parent.canonical))
+            || method.modifiers.contains(&Modifier::Static)
+            || !method.parameters.is_empty()
+        {
+            return false;
+        }
+        matches!(
+            (method.name.canonical.as_str(), &method.return_type),
+            (
+                "getdefaultvalue",
+                ReturnType::Value(TypeName::VisualEditorDataRow)
+            ) | (
+                "getvalues",
+                ReturnType::Value(TypeName::VisualEditorDynamicPickListRows)
+            )
+        )
     }
 
     fn validate_required_method_returns(&self, class_id: usize) -> Result<(), Diagnostic> {
@@ -1902,6 +2012,56 @@ impl Checker {
         None
     }
 
+    fn lexical_class_value_member(
+        &self,
+        class_id: usize,
+        canonical: &str,
+    ) -> Option<ClassValueMember> {
+        if let Some(member) = self.class_value_member(class_id, canonical) {
+            return Some(member);
+        }
+        let mut cursor = class_id;
+        let mut remaining = self.classes.len();
+        while remaining > 0 {
+            let enclosing = self.classes[cursor].enclosing_type.as_ref()?;
+            cursor = self.class_ids.get(&enclosing.canonical).copied()?;
+            if let Some(member) = self.class_value_member(cursor, canonical)
+                && member.modifiers.contains(&Modifier::Static)
+            {
+                return Some(member);
+            }
+            remaining -= 1;
+        }
+        None
+    }
+
+    fn lexical_class_methods_named(
+        &self,
+        class_id: usize,
+        canonical: &str,
+    ) -> Option<(usize, Vec<ClassMethodSignature>)> {
+        let own = self.class_methods_named(class_id, canonical);
+        if !own.is_empty() {
+            return Some((class_id, own));
+        }
+        let mut cursor = class_id;
+        let mut remaining = self.classes.len();
+        while remaining > 0 {
+            let enclosing = self.classes[cursor].enclosing_type.as_ref()?;
+            cursor = self.class_ids.get(&enclosing.canonical).copied()?;
+            let methods = self
+                .class_methods_named(cursor, canonical)
+                .into_iter()
+                .filter(|method| method.modifiers.contains(&Modifier::Static))
+                .collect::<Vec<_>>();
+            if !methods.is_empty() {
+                return Some((cursor, methods));
+            }
+            remaining -= 1;
+        }
+        None
+    }
+
     fn validate_type(&self, ty: &TypeName, span: Span) -> Result<(), Diagnostic> {
         match ty {
             TypeName::Custom(name)
@@ -1978,8 +2138,14 @@ impl Checker {
         if actual == expected || *expected == TypeName::Object {
             return true;
         }
-        if (*actual == TypeName::Integer && matches!(expected, TypeName::Long | TypeName::Decimal))
-            || (*actual == TypeName::Long && *expected == TypeName::Decimal)
+        if (*actual == TypeName::Integer
+            && matches!(
+                expected,
+                TypeName::Long | TypeName::Decimal | TypeName::Double
+            ))
+            || (*actual == TypeName::Long
+                && matches!(expected, TypeName::Decimal | TypeName::Double))
+            || (*actual == TypeName::Decimal && *expected == TypeName::Double)
         {
             return true;
         }
@@ -1996,29 +2162,9 @@ impl Checker {
         }
         if let TypeName::Custom(actual) = actual
             && let Some(class_id) = self.class_ids.get(&actual.canonical)
+            && self.class_implements_platform_contract(*class_id, expected)
         {
-            let implements_context = match expected {
-                TypeName::BatchableContext => {
-                    self.batchable_context_contracts.contains_key(class_id)
-                }
-                TypeName::FinalizerContext => {
-                    self.finalizer_context_contracts.contains_key(class_id)
-                }
-                TypeName::QueueableContext => {
-                    self.queueable_context_contracts.contains_key(class_id)
-                }
-                TypeName::SchedulableContext => {
-                    self.schedulable_context_contracts.contains_key(class_id)
-                }
-                TypeName::HttpCalloutMock => {
-                    self.http_callout_mock_contracts.contains_key(class_id)
-                }
-                TypeName::Callable => self.callable_contracts.contains_key(class_id),
-                _ => false,
-            };
-            if implements_context {
-                return true;
-            }
+            return true;
         }
         let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
             return false;
@@ -2030,6 +2176,20 @@ impl Checker {
             return false;
         };
         self.class_is_or_inherits(actual_id, expected_id)
+    }
+
+    fn class_implements_platform_contract(&self, class_id: usize, expected: &TypeName) -> bool {
+        match expected {
+            TypeName::BatchableContext => self.batchable_context_contracts.contains_key(&class_id),
+            TypeName::FinalizerContext => self.finalizer_context_contracts.contains_key(&class_id),
+            TypeName::QueueableContext => self.queueable_context_contracts.contains_key(&class_id),
+            TypeName::SchedulableContext => {
+                self.schedulable_context_contracts.contains_key(&class_id)
+            }
+            TypeName::HttpCalloutMock => self.http_callout_mock_contracts.contains_key(&class_id),
+            TypeName::Callable => self.callable_contracts.contains_key(&class_id),
+            _ => false,
+        }
     }
 
     fn class_is_or_inherits(&self, actual_id: usize, expected_id: usize) -> bool {
@@ -2101,6 +2261,8 @@ impl Checker {
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_return_type = self.return_type.replace(ReturnType::Void);
+        let saved_final_assignment_scope =
+            std::mem::replace(&mut self.current_final_assignment_scope, true);
         let result = (|| {
             self.bind_parameters(&constructor.parameters)?;
             if let Some(delegation) = &constructor.delegation {
@@ -2111,6 +2273,7 @@ impl Checker {
         self.scopes = saved_scopes;
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
+        self.current_final_assignment_scope = saved_final_assignment_scope;
         result
     }
 
@@ -3339,7 +3502,7 @@ impl Checker {
                 .insert(identifier.span, ReferenceTarget::Super(parent));
             return Ok(ExpressionType::Value(self.class_type(parent)));
         }
-        let Some(member) = self.class_value_member(class_id, &identifier.canonical) else {
+        let Some(member) = self.lexical_class_value_member(class_id, &identifier.canonical) else {
             return Err(unknown_variable(identifier));
         };
         self.ensure_member_access(member.target, &member.read_access, identifier.span)?;
@@ -3359,12 +3522,14 @@ impl Checker {
                 identifier.span,
             ));
         }
+        let property_storage = self.current_property == Some(member.target);
         self.references.insert(
             identifier.span,
-            if is_static {
-                ReferenceTarget::StaticMember(member.target)
-            } else {
-                ReferenceTarget::InstanceMember(member.target)
+            match (is_static, property_storage) {
+                (true, true) => ReferenceTarget::StaticPropertyStorage(member.target),
+                (false, true) => ReferenceTarget::InstancePropertyStorage(member.target),
+                (true, false) => ReferenceTarget::StaticMember(member.target),
+                (false, false) => ReferenceTarget::InstanceMember(member.target),
             },
         );
         Ok(ExpressionType::Value(member.ty))
@@ -3378,14 +3543,26 @@ impl Checker {
         constructor: PlatformConstructor,
     ) -> Result<ExpressionType, Diagnostic> {
         self.require_curated_platform("platform object construction", span)?;
-        for argument in arguments {
-            self.expression_type(argument)?;
-        }
-        if !arguments.is_empty() {
-            return Err(Diagnostic::new(
-                format!("{} constructor expects no arguments", ty.apex_name()),
-                arguments[0].span(),
-            ));
+        if constructor == PlatformConstructor::VisualEditorDataRow {
+            if arguments.len() != 2 {
+                return Err(Diagnostic::new(
+                    "VisualEditor.DataRow constructor expects label and value Strings",
+                    span,
+                ));
+            }
+            for argument in arguments {
+                self.require_operand(argument, &TypeName::String, argument.span())?;
+            }
+        } else {
+            for argument in arguments {
+                self.expression_type(argument)?;
+            }
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    format!("{} constructor expects no arguments", ty.apex_name()),
+                    arguments[0].span(),
+                ));
+            }
         }
         self.calls
             .insert(span, CallTarget::PlatformConstructor(constructor));
@@ -3403,6 +3580,10 @@ impl Checker {
             TypeName::Http => Some(PlatformConstructor::Http),
             TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
             TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
+            TypeName::VisualEditorDataRow => Some(PlatformConstructor::VisualEditorDataRow),
+            TypeName::VisualEditorDynamicPickListRows => {
+                Some(PlatformConstructor::VisualEditorDynamicPickListRows)
+            }
             _ => None,
         };
         if let Some(constructor) = platform_constructor {
@@ -3623,74 +3804,12 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Result<ExpressionType, Diagnostic> {
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("cache.visibility")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "Cache.Visibility constants are read-only",
-                    name.span,
-                ));
-            }
-            let value = crate::platform::CacheVisibility::from_apex_name(&name.spelling)
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown Cache.Visibility constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(
-                span,
-                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::CacheVisibility(value)),
-            );
-            return Ok(ExpressionType::Value(TypeName::CacheVisibility));
+        if let Some(result) = self.platform_enum_member_access_type(receiver, name, span, for_write)
+        {
+            return result;
         }
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("parentjobresult" | "system.parentjobresult")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "ParentJobResult constants are read-only",
-                    name.span,
-                ));
-            }
-            let value = crate::platform::ParentJobResult::from_apex_name(&name.spelling)
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown ParentJobResult constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(
-                span,
-                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::ParentJobResult(value)),
-            );
-            return Ok(ExpressionType::Value(TypeName::ParentJobResult));
-        }
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("quiddity" | "system.quiddity")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "Quiddity constants are read-only",
-                    name.span,
-                ));
-            }
-            let value =
-                crate::platform::Quiddity::from_apex_name(&name.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown Quiddity constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(
-                span,
-                MemberTarget::PlatformEnum(crate::platform::PlatformEnum::Quiddity(value)),
-            );
-            return Ok(ExpressionType::Value(TypeName::Quiddity));
+        if let Some(result) = self.schema_member_access_type(receiver, name, span, for_write) {
+            return result;
         }
         if matches!(
             qualified_expression_name(receiver).as_deref(),
@@ -3857,7 +3976,15 @@ impl Checker {
                 name.span,
             ));
         }
-        if for_write && !member.writable {
+        let current_owner = if is_static {
+            static_access && self.current_class == Some(class_id)
+        } else {
+            matches!(receiver, Expression::Variable(identifier) if identifier.canonical == "this")
+        };
+        if for_write
+            && !member.writable
+            && !self.final_member_is_assignable_here(&member, current_owner)
+        {
             return Err(Diagnostic::new(
                 format!("member `{}` is read-only", name.spelling),
                 name.span,
@@ -3869,15 +3996,178 @@ impl Checker {
                 name.span,
             ));
         }
+        let property_storage = self.current_property == Some(member.target) && current_owner;
         self.members.insert(
             span,
-            if is_static {
-                MemberTarget::Static(member.target)
-            } else {
-                MemberTarget::Instance(member.target)
+            match (is_static, property_storage) {
+                (true, true) => MemberTarget::StaticPropertyStorage(member.target),
+                (false, true) => MemberTarget::InstancePropertyStorage(member.target),
+                (true, false) => MemberTarget::Static(member.target),
+                (false, false) => MemberTarget::Instance(member.target),
             },
         );
         Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn platform_enum_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let owner = qualified_expression_name(receiver)?;
+        let descriptor = crate::platform::PlatformEnumDescriptor::from_owner(&owner)?;
+        Some((|| {
+            if for_write {
+                return Err(Diagnostic::new(
+                    format!("{} constants are read-only", descriptor.apex_name()),
+                    name.span,
+                ));
+            }
+            let value = descriptor.parse(&name.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown {} constant `{}`",
+                        descriptor.apex_name(),
+                        name.spelling
+                    ),
+                    name.span,
+                )
+            })?;
+            let ty = value.ty();
+            debug_assert_eq!(ty, descriptor.ty());
+            self.members.insert(span, MemberTarget::PlatformEnum(value));
+            Ok(ExpressionType::Value(ty))
+        })())
+    }
+
+    fn schema_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let owner = qualified_expression_name(receiver);
+        if matches!(owner.as_deref(), Some("schema" | "schema.sobjecttype")) {
+            let object_id = self.schema.object_index(&name.spelling)?;
+            return Some(self.checked_schema_member(
+                span,
+                name,
+                for_write,
+                hir::SchemaMemberTarget::SObjectType { object_id },
+                TypeName::SObjectType,
+            ));
+        }
+        if let Expression::Variable(identifier) = receiver
+            && self.lookup(&identifier.canonical).is_none()
+        {
+            return None;
+        }
+        let receiver_type = match self.expression_type(receiver) {
+            Ok(ExpressionType::Value(ty)) => ty,
+            Ok(ExpressionType::Null | ExpressionType::Void) => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Some(MemberTarget::Schema(hir::SchemaMemberTarget::SObjectType { object_id })) =
+            self.members.get(&receiver.span()).cloned()
+        {
+            let result = match name.canonical.as_str() {
+                "sobjecttype" => self.checked_schema_member(
+                    span,
+                    name,
+                    for_write,
+                    hir::SchemaMemberTarget::SObjectType { object_id },
+                    TypeName::SObjectType,
+                ),
+                "fields" => self.checked_schema_member(
+                    span,
+                    name,
+                    for_write,
+                    hir::SchemaMemberTarget::DescribeFields,
+                    TypeName::SObjectFieldMap,
+                ),
+                "fieldsets" => self.checked_schema_member(
+                    span,
+                    name,
+                    for_write,
+                    hir::SchemaMemberTarget::DescribeFieldSets,
+                    TypeName::FieldSetMap,
+                ),
+                _ => {
+                    let object = self
+                        .schema
+                        .object_at(object_id)
+                        .expect("schema token object index is valid");
+                    let Some(field_id) = object.field_index(&name.spelling) else {
+                        return Some(Err(Diagnostic::new(
+                            format!(
+                                "unknown field token `{}.{}`",
+                                object.api_name(),
+                                name.spelling
+                            ),
+                            name.span,
+                        )));
+                    };
+                    self.checked_schema_member(
+                        span,
+                        name,
+                        for_write,
+                        hir::SchemaMemberTarget::SObjectField {
+                            object_id,
+                            field_id,
+                        },
+                        TypeName::SObjectField,
+                    )
+                }
+            };
+            return Some(result);
+        }
+        if matches!(
+            self.members.get(&receiver.span()),
+            Some(MemberTarget::Schema(
+                hir::SchemaMemberTarget::SObjectField { .. }
+            ))
+        ) {
+            return Some(self.checked_schema_member(
+                span,
+                name,
+                for_write,
+                hir::SchemaMemberTarget::PicklistValue(name.spelling.clone()),
+                TypeName::String,
+            ));
+        }
+        let (target, ty) = match (receiver_type, name.canonical.as_str()) {
+            (TypeName::DescribeSObjectResult, "fields") => (
+                hir::SchemaMemberTarget::DescribeFields,
+                TypeName::SObjectFieldMap,
+            ),
+            (TypeName::DescribeSObjectResult, "fieldsets") => (
+                hir::SchemaMemberTarget::DescribeFieldSets,
+                TypeName::FieldSetMap,
+            ),
+            _ => return None,
+        };
+        Some(self.checked_schema_member(span, name, for_write, target, ty))
+    }
+
+    fn checked_schema_member(
+        &mut self,
+        span: Span,
+        name: &Identifier,
+        for_write: bool,
+        target: hir::SchemaMemberTarget,
+        ty: TypeName,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "Schema describe members are read-only",
+                name.span,
+            ));
+        }
+        self.members.insert(span, MemberTarget::Schema(target));
+        Ok(ExpressionType::Value(ty))
     }
 
     fn sobject_member_access_type(
@@ -3891,7 +4181,7 @@ impl Checker {
             Expression::Variable(identifier)
                 if self.lookup(&identifier.canonical).is_none()
                     && self.current_class.is_none_or(|class_id| {
-                        self.class_value_member(class_id, &identifier.canonical)
+                        self.lexical_class_value_member(class_id, &identifier.canonical)
                             .is_none()
                     }) =>
             {
@@ -4094,7 +4384,7 @@ impl Checker {
                 || (self.lookup(&identifier.canonical).is_none()
                     && self
                         .current_class
-                        .and_then(|id| self.class_value_member(id, &identifier.canonical))
+                        .and_then(|id| self.lexical_class_value_member(id, &identifier.canonical))
                         .is_none()))
         {
             return Ok((class_id, true));
@@ -4309,27 +4599,8 @@ impl Checker {
             .iter()
             .map(|argument| self.expression_type(argument))
             .collect::<Result<Vec<_>, _>>()?;
-        if let Some(class_id) = self.current_class {
-            let candidates = self.class_methods_named(class_id, &name.canonical);
-            if !candidates.is_empty() {
-                let kind = if self.current_static
-                    || candidates
-                        .iter()
-                        .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
-                {
-                    ClassCallKind::Static
-                } else {
-                    ClassCallKind::Instance
-                };
-                return self.select_class_method_call(
-                    class_id,
-                    name,
-                    &argument_types,
-                    candidates,
-                    kind,
-                    span,
-                );
-            }
+        if let Some(result) = self.lexical_function_call_type(name, &argument_types, span) {
+            return result;
         }
         let Some(overloads) = self.methods.get(&name.canonical) else {
             return Err(Diagnostic::new(
@@ -4386,6 +4657,35 @@ impl Checker {
         })
     }
 
+    fn lexical_function_call_type(
+        &mut self,
+        name: &Identifier,
+        argument_types: &[ExpressionType],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let class_id = self.current_class?;
+        let (owner_class_id, candidates) =
+            self.lexical_class_methods_named(class_id, &name.canonical)?;
+        let kind = if owner_class_id != class_id
+            || self.current_static
+            || candidates
+                .iter()
+                .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
+        {
+            ClassCallKind::Static
+        } else {
+            ClassCallKind::Instance
+        };
+        Some(self.select_class_method_call(
+            owner_class_id,
+            name,
+            argument_types,
+            candidates,
+            kind,
+            span,
+        ))
+    }
+
     fn cast_type(
         &mut self,
         target: &TypeName,
@@ -4398,6 +4698,10 @@ impl Checker {
                 source == target
                     || (matches!(source, TypeName::Integer | TypeName::Long)
                         && matches!(target, TypeName::Integer | TypeName::Long))
+                    || (matches!(
+                        source,
+                        TypeName::Integer | TypeName::Long | TypeName::Decimal
+                    ) && *target == TypeName::Double)
                     || *source == TypeName::Object
                     || *target == TypeName::Object
                     || (*source == TypeName::Exception && self.is_exception_type(target))
@@ -4569,7 +4873,7 @@ impl Checker {
             .current_class
             .ok_or_else(|| unknown_variable(identifier))?;
         let member = self
-            .class_value_member(class_id, &identifier.canonical)
+            .lexical_class_value_member(class_id, &identifier.canonical)
             .ok_or_else(|| unknown_variable(identifier))?;
         self.ensure_member_access(member.target, &member.write_access, identifier.span)?;
         self.ensure_member_is_mutable(identifier, &member, require_read)?;
@@ -4583,15 +4887,24 @@ impl Checker {
                 identifier.span,
             ));
         }
-        let reference = if is_static {
-            ReferenceTarget::StaticMember(member.target)
-        } else {
-            ReferenceTarget::InstanceMember(member.target)
-        };
-        let place = if is_static {
-            PlaceTarget::StaticMember(member.target)
-        } else {
-            PlaceTarget::InstanceMember(member.target)
+        let property_storage = self.current_property == Some(member.target);
+        let (reference, place) = match (is_static, property_storage) {
+            (true, true) => (
+                ReferenceTarget::StaticPropertyStorage(member.target),
+                PlaceTarget::StaticPropertyStorage(member.target),
+            ),
+            (false, true) => (
+                ReferenceTarget::InstancePropertyStorage(member.target),
+                PlaceTarget::InstancePropertyStorage(member.target),
+            ),
+            (true, false) => (
+                ReferenceTarget::StaticMember(member.target),
+                PlaceTarget::StaticMember(member.target),
+            ),
+            (false, false) => (
+                ReferenceTarget::InstanceMember(member.target),
+                PlaceTarget::InstanceMember(member.target),
+            ),
         };
         self.references.insert(identifier.span, reference);
         self.places.insert(identifier.span, place);
@@ -4604,7 +4917,7 @@ impl Checker {
         member: &ClassValueMember,
         require_read: bool,
     ) -> Result<(), Diagnostic> {
-        if !member.writable {
+        if !member.writable && !self.final_member_is_assignable_here(member, true) {
             return Err(Diagnostic::new(
                 format!("member `{}` is read-only", identifier.spelling),
                 identifier.span,
@@ -4620,6 +4933,24 @@ impl Checker {
             self.ensure_member_access(member.target, &member.read_access, identifier.span)?;
         }
         Ok(())
+    }
+
+    fn final_member_is_assignable_here(
+        &self,
+        member: &ClassValueMember,
+        current_owner: bool,
+    ) -> bool {
+        if !self.current_final_assignment_scope
+            || !current_owner
+            || !member.modifiers.contains(&Modifier::Final)
+        {
+            return false;
+        }
+        let Some(current_class) = self.current_class else {
+            return false;
+        };
+        member.target.class_id == current_class
+            && member.modifiers.contains(&Modifier::Static) == self.current_static
     }
 
     fn member_assignment_target_type(
@@ -4639,6 +4970,12 @@ impl Checker {
         let place = match self.members.get(&span).cloned() {
             Some(MemberTarget::Static(target)) => PlaceTarget::StaticMember(target),
             Some(MemberTarget::Instance(target)) => PlaceTarget::InstanceMember(target),
+            Some(MemberTarget::StaticPropertyStorage(target)) => {
+                PlaceTarget::StaticPropertyStorage(target)
+            }
+            Some(MemberTarget::InstancePropertyStorage(target)) => {
+                PlaceTarget::InstancePropertyStorage(target)
+            }
             Some(MemberTarget::SObjectField {
                 object_id,
                 field_id,
@@ -4655,7 +4992,8 @@ impl Checker {
                 | MemberTarget::AccessType(_)
                 | MemberTarget::PlatformEnum(_)
                 | MemberTarget::EnumConstant { .. }
-                | MemberTarget::TypeReference { .. },
+                | MemberTarget::TypeReference { .. }
+                | MemberTarget::Schema(_),
             )
             | None => return Err(Diagnostic::new("member is not assignable", span)),
         };
@@ -4687,6 +5025,9 @@ impl Checker {
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         if let Some(result) = self.dynamic_database_method_call(receiver, method, arguments, span) {
+            return result;
+        }
+        if let Some(result) = self.custom_metadata_method_call(receiver, method, arguments, span) {
             return result;
         }
         if let Some(result) = self.qualified_type_method_call(receiver, method, arguments, span) {
@@ -4843,6 +5184,84 @@ impl Checker {
         Some(self.database_method_type(method, arguments, span, None))
     }
 
+    fn custom_metadata_method_call(
+        &mut self,
+        receiver: &Expression,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let Expression::Variable(identifier) = receiver else {
+            return None;
+        };
+        if self.lookup(&identifier.canonical).is_some()
+            || self.current_class.is_some_and(|class_id| {
+                self.lexical_class_value_member(class_id, &identifier.canonical)
+                    .is_some()
+            })
+        {
+            return None;
+        }
+        let object_id = self.schema.object_index(&identifier.spelling)?;
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("schema object index is valid");
+        if !object.api_name().to_ascii_lowercase().ends_with("__mdt") {
+            return None;
+        }
+        let object_type = TypeName::Custom(crate::ast::NamedType::new(
+            object.api_name().to_owned(),
+            identifier.span,
+        ));
+        Some((|| {
+            let (target, result) = match method.canonical.as_str() {
+                "getall" => {
+                    require_arity(
+                        &object_type,
+                        &method.spelling,
+                        arguments.len(),
+                        &[0],
+                        arguments,
+                    )?;
+                    (
+                        hir::CustomMetadataMethod::GetAll,
+                        TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+                    )
+                }
+                "getinstance" => {
+                    require_arity(
+                        &object_type,
+                        &method.spelling,
+                        arguments.len(),
+                        &[1],
+                        arguments,
+                    )?;
+                    let argument_type = self.expression_type(&arguments[0])?;
+                    if !matches!(
+                        argument_type,
+                        ExpressionType::Value(TypeName::String | TypeName::Id)
+                    ) {
+                        return Err(Diagnostic::new(
+                            "custom metadata getInstance expects a String or Id",
+                            arguments[0].span(),
+                        ));
+                    }
+                    (hir::CustomMetadataMethod::GetInstance, object_type)
+                }
+                _ => return Err(self.unsupported_platform_api(&identifier.spelling, method)),
+            };
+            self.calls.insert(
+                span,
+                CallTarget::CustomMetadataMethod {
+                    object_id: ObjectTypeId::from_index(object_id),
+                    method: target,
+                },
+            );
+            Ok(ExpressionType::Value(result))
+        })())
+    }
+
     fn qualified_type_method_call(
         &mut self,
         receiver: &Expression,
@@ -4850,19 +5269,26 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("system.request" | "system.test" | "system.type" | "cache.org" | "cache.session")
-        ) {
-            let owner =
-                qualified_expression_name(receiver).expect("matched qualified platform owner");
-            return Some(
-                self.static_platform_method_type(&owner, method, arguments)
-                    .map(|(intrinsic, result)| {
-                        self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
-                        result
-                    }),
-            );
+        if let Some(owner) = qualified_expression_name(receiver) {
+            let normalized = owner.strip_prefix("system.").unwrap_or(&owner);
+            let checked = match normalized {
+                "string" => Some(self.static_string_method_type(method, arguments)),
+                "math" => Some(self.static_math_method_type(method, arguments)),
+                platform
+                    if is_platform_static_owner(platform)
+                        || owner == "system.request"
+                        || matches!(platform, "database" | "cache.org" | "cache.session") =>
+                {
+                    Some(self.static_platform_method_type(&owner, method, arguments))
+                }
+                _ => None,
+            };
+            if let Some(checked) = checked {
+                return Some(checked.map(|(intrinsic, result)| {
+                    self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
+                    result
+                }));
+            }
         }
         if matches!(receiver, Expression::Variable(_)) {
             return None;
@@ -4906,7 +5332,7 @@ impl Checker {
         let class_id = self.class_ids.get(&identifier.canonical).copied()?;
         if self
             .current_class
-            .and_then(|id| self.class_value_member(id, &identifier.canonical))
+            .and_then(|id| self.lexical_class_value_member(id, &identifier.canonical))
             .is_some()
         {
             return None;
@@ -4939,57 +5365,10 @@ impl Checker {
         span: Span,
         super_call: bool,
     ) -> Result<ExpressionType, Diagnostic> {
-        if self.is_sobject_type(receiver_type) || self.is_dynamic_sobject_type(receiver_type) {
-            return match method.canonical.as_str() {
-                "get" => {
-                    require_arity(
-                        receiver_type,
-                        &method.spelling,
-                        arguments.len(),
-                        &[1],
-                        arguments,
-                    )?;
-                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
-                    self.calls.insert(span, CallTarget::SObjectGet);
-                    Ok(ExpressionType::Value(TypeName::Object))
-                }
-                "put" => {
-                    require_arity(
-                        receiver_type,
-                        &method.spelling,
-                        arguments.len(),
-                        &[2],
-                        arguments,
-                    )?;
-                    self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
-                    let value_type = self.expression_type(&arguments[1])?;
-                    if value_type == ExpressionType::Void {
-                        return Err(Diagnostic::new(
-                            "SObject.put value cannot be void",
-                            arguments[1].span(),
-                        ));
-                    }
-                    self.calls.insert(span, CallTarget::SObjectPut);
-                    Ok(ExpressionType::Void)
-                }
-                "getsobjecttype" => {
-                    require_arity(
-                        receiver_type,
-                        &method.spelling,
-                        arguments.len(),
-                        &[0],
-                        arguments,
-                    )?;
-                    self.calls.insert(
-                        span,
-                        CallTarget::Intrinsic(hir::IntrinsicId::Platform(
-                            hir::PlatformIntrinsic::SObjectGetSObjectType,
-                        )),
-                    );
-                    Ok(ExpressionType::Value(TypeName::SObjectType))
-                }
-                _ => Err(unknown_method(receiver_type, method)),
-            };
+        if let Some(result) =
+            self.sobject_instance_method_type(receiver_type, method, arguments, span)
+        {
+            return result;
         }
         if let Some(result) =
             self.special_result_instance_method_type(receiver_type, method, arguments, span)
@@ -5019,6 +5398,7 @@ impl Checker {
             | TypeName::Datetime
             | TypeName::Time
             | TypeName::Decimal
+            | TypeName::Double
             | TypeName::Id
             | TypeName::Blob
             | TypeName::Object
@@ -5034,6 +5414,7 @@ impl Checker {
             | TypeName::FinalizerContext
             | TypeName::ParentJobResult
             | TypeName::Quiddity
+            | TypeName::LoggingLevel
             | TypeName::CacheVisibility
             | TypeName::CachePartition
             | TypeName::Request
@@ -5044,7 +5425,18 @@ impl Checker {
             | TypeName::AccessType
             | TypeName::SchedulableContext
             | TypeName::SObjectType
-            | TypeName::DescribeSObjectResult => {
+            | TypeName::DescribeSObjectResult
+            | TypeName::SObjectField
+            | TypeName::DescribeFieldResult
+            | TypeName::SObjectFieldMap
+            | TypeName::FieldSetMap
+            | TypeName::FieldSet
+            | TypeName::FieldSetMember
+            | TypeName::PicklistEntry
+            | TypeName::VisualEditorDataRow
+            | TypeName::VisualEditorDynamicPickListRows
+            | TypeName::SoapType
+            | TypeName::DisplayType => {
                 self.platform_instance_method_type(receiver_type, method, arguments)?
             }
             TypeName::SaveResult
@@ -5065,6 +5457,86 @@ impl Checker {
         };
         self.calls.insert(span, CallTarget::Intrinsic(intrinsic));
         Ok(result)
+    }
+
+    fn sobject_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if !self.is_sobject_type(receiver_type) && !self.is_dynamic_sobject_type(receiver_type) {
+            return None;
+        }
+        Some((|| match method.canonical.as_str() {
+            "get" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[1],
+                    arguments,
+                )?;
+                let field_type = self.expression_type(&arguments[0])?;
+                if !matches!(
+                    field_type,
+                    ExpressionType::Value(TypeName::String | TypeName::SObjectField)
+                ) {
+                    return Err(Diagnostic::new(
+                        "SObject.get expects a String or Schema.SObjectField",
+                        arguments[0].span(),
+                    ));
+                }
+                self.calls.insert(span, CallTarget::SObjectGet);
+                Ok(ExpressionType::Value(TypeName::Object))
+            }
+            "put" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[2],
+                    arguments,
+                )?;
+                let field_type = self.expression_type(&arguments[0])?;
+                if !matches!(
+                    field_type,
+                    ExpressionType::Value(TypeName::String | TypeName::SObjectField)
+                ) {
+                    return Err(Diagnostic::new(
+                        "SObject.put expects a String or Schema.SObjectField",
+                        arguments[0].span(),
+                    ));
+                }
+                let value_type = self.expression_type(&arguments[1])?;
+                if value_type == ExpressionType::Void {
+                    return Err(Diagnostic::new(
+                        "SObject.put value cannot be void",
+                        arguments[1].span(),
+                    ));
+                }
+                self.calls.insert(span, CallTarget::SObjectPut);
+                Ok(ExpressionType::Void)
+            }
+            "getsobjecttype" => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                self.calls.insert(
+                    span,
+                    CallTarget::Intrinsic(hir::IntrinsicId::Platform(
+                        hir::PlatformIntrinsic::SObjectGetSObjectType,
+                    )),
+                );
+                Ok(ExpressionType::Value(TypeName::SObjectType))
+            }
+            _ => Err(unknown_method(receiver_type, method)),
+        })())
     }
 
     fn security_decision_method_type(
@@ -5697,7 +6169,8 @@ impl Checker {
             | CallTarget::SObjectConstructor { .. }
             | CallTarget::PlatformConstructor(_)
             | CallTarget::DatabaseDml(_)
-            | CallTarget::DatabaseQuery { .. } => false,
+            | CallTarget::DatabaseQuery { .. }
+            | CallTarget::CustomMetadataMethod { .. } => false,
             CallTarget::EnumMethod { method, .. } => {
                 matches!(method, hir::EnumMethod::Name | hir::EnumMethod::Ordinal)
             }
@@ -5721,6 +6194,7 @@ impl Checker {
             self.members.get(&member_span),
             Some(
                 MemberTarget::Instance(_)
+                    | MemberTarget::InstancePropertyStorage(_)
                     | MemberTarget::SObjectField { .. }
                     | MemberTarget::SObjectRelationship { .. }
             )
@@ -6108,6 +6582,10 @@ fn is_callable_interface(name: &str) -> bool {
     matches!(name, "callable" | "system.callable")
 }
 
+fn is_visual_editor_dynamic_picklist(name: &str) -> bool {
+    name == "visualeditor.dynamicpicklist"
+}
+
 fn is_queueable_interface(name: &str) -> bool {
     matches!(name, "queueable" | "system.queueable")
 }
@@ -6128,6 +6606,7 @@ fn is_future_parameter_type(ty: &TypeName) -> bool {
             | TypeName::Integer
             | TypeName::Long
             | TypeName::Decimal
+            | TypeName::Double
             | TypeName::Date
             | TypeName::Datetime
             | TypeName::Time
@@ -6279,7 +6758,10 @@ fn checked_equality_type(
 ) -> Result<ExpressionType, Diagnostic> {
     let comparable = match (&left, &right) {
         (ExpressionType::Value(left_value), ExpressionType::Value(right_value)) => {
-            left_value == right_value || (is_numeric_type(&left) && is_numeric_type(&right))
+            left_value == right_value
+                || left_value == &TypeName::Object
+                || right_value == &TypeName::Object
+                || (is_numeric_type(&left) && is_numeric_type(&right))
         }
         (ExpressionType::Null, ExpressionType::Value(_))
         | (ExpressionType::Value(_), ExpressionType::Null)
@@ -6357,6 +6839,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "datetime"
             | "time"
             | "decimal"
+            | "double"
             | "id"
             | "blob"
             | "json"
@@ -6369,13 +6852,17 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "security"
             | "eventbus"
             | "type"
+            | "logginglevel"
+            | "database"
     )
 }
 
 fn is_numeric_type(ty: &ExpressionType) -> bool {
     matches!(
         ty,
-        ExpressionType::Value(TypeName::Integer | TypeName::Long | TypeName::Decimal)
+        ExpressionType::Value(
+            TypeName::Integer | TypeName::Long | TypeName::Decimal | TypeName::Double,
+        )
     )
 }
 
@@ -6384,6 +6871,7 @@ fn numeric_kind(ty: &ExpressionType) -> Option<NumericKind> {
         ExpressionType::Value(TypeName::Integer) => Some(NumericKind::Integer),
         ExpressionType::Value(TypeName::Long) => Some(NumericKind::Long),
         ExpressionType::Value(TypeName::Decimal) => Some(NumericKind::Decimal),
+        ExpressionType::Value(TypeName::Double) => Some(NumericKind::Double),
         _ => None,
     }
 }
@@ -6400,7 +6888,9 @@ fn promoted_numeric_kind(left: &ExpressionType, right: &ExpressionType) -> Optio
     let left = numeric_kind(left)?;
     let right = numeric_kind(right)?;
     Some(
-        if left == NumericKind::Decimal || right == NumericKind::Decimal {
+        if left == NumericKind::Double || right == NumericKind::Double {
+            NumericKind::Double
+        } else if left == NumericKind::Decimal || right == NumericKind::Decimal {
             NumericKind::Decimal
         } else if left == NumericKind::Long || right == NumericKind::Long {
             NumericKind::Long
@@ -6425,6 +6915,7 @@ fn numeric_type(kind: NumericKind) -> TypeName {
         NumericKind::Integer => TypeName::Integer,
         NumericKind::Long => TypeName::Long,
         NumericKind::Decimal => TypeName::Decimal,
+        NumericKind::Double => TypeName::Double,
     }
 }
 

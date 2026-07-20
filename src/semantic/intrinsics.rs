@@ -48,6 +48,7 @@ impl Checker {
             "addall" => ListIntrinsic::AddAll,
             "clear" => ListIntrinsic::Clear,
             "clone" => ListIntrinsic::Clone,
+            "deepclone" => ListIntrinsic::DeepClone,
             "contains" => ListIntrinsic::Contains,
             "get" => ListIntrinsic::Get,
             "indexof" => ListIntrinsic::IndexOf,
@@ -120,7 +121,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            ListIntrinsic::Clone => {
+            ListIntrinsic::Clone | ListIntrinsic::DeepClone => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -355,6 +356,7 @@ impl Checker {
         let intrinsic = match method.canonical.as_str() {
             "clear" => MapIntrinsic::Clear,
             "clone" => MapIntrinsic::Clone,
+            "deepclone" => MapIntrinsic::DeepClone,
             "containskey" => MapIntrinsic::ContainsKey,
             "get" => MapIntrinsic::Get,
             "isempty" => MapIntrinsic::IsEmpty,
@@ -377,7 +379,7 @@ impl Checker {
                 )?;
                 Ok(ExpressionType::Void)
             }
-            MapIntrinsic::Clone => {
+            MapIntrinsic::Clone | MapIntrinsic::DeepClone => {
                 require_arity(
                     receiver_type,
                     &method.spelling,
@@ -900,8 +902,23 @@ impl Checker {
         };
         let result = match intrinsic {
             SystemIntrinsic::Debug => {
-                require_static_arity("System", method, arguments.len(), &[1], arguments)?;
-                self.require_non_void_argument("System", &method.spelling, 0, &arguments[0])?;
+                require_static_arity("System", method, arguments.len(), &[1, 2], arguments)?;
+                if arguments.len() == 2 {
+                    self.require_named_argument(
+                        "System",
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        &TypeName::LoggingLevel,
+                    )?;
+                }
+                let value_index = arguments.len() - 1;
+                self.require_non_void_argument(
+                    "System",
+                    &method.spelling,
+                    value_index,
+                    &arguments[value_index],
+                )?;
                 Ok(ExpressionType::Void)
             }
             SystemIntrinsic::Assert => {
@@ -950,10 +967,21 @@ impl Checker {
         arguments: &[Expression],
     ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
         use PlatformIntrinsic as P;
-        if let Some(result) = self.user_and_security_static_method_type(owner, method, arguments) {
+        let normalized_owner = owner
+            .strip_prefix("System.")
+            .or_else(|| owner.strip_prefix("system."))
+            .unwrap_or(owner);
+        if let Some(result) =
+            self.user_and_security_static_method_type(normalized_owner, method, arguments)
+        {
             return result;
         }
-        let canonical_owner = owner.to_ascii_lowercase();
+        if let Some(result) =
+            self.logging_level_static_method_type(normalized_owner, method, arguments)
+        {
+            return result;
+        }
+        let canonical_owner = normalized_owner.to_ascii_lowercase();
         let intrinsic = match (canonical_owner.as_str(), method.canonical.as_str()) {
             ("date", "newinstance") => P::DateNewInstance,
             ("date", "valueof") => P::DateValueOf,
@@ -965,10 +993,12 @@ impl Checker {
             ("time", "newinstance") => P::TimeNewInstance,
             ("time", "valueof") => P::TimeValueOf,
             ("decimal", "valueof") => P::DecimalValueOf,
+            ("double", "valueof") => P::DoubleValueOf,
             ("id", "valueof") => P::IdValueOf,
             ("blob", "valueof") => P::BlobValueOf,
             ("json", "serialize") => P::JsonSerialize,
             ("json", "serializepretty") => P::JsonSerializePretty,
+            ("json", "deserialize") => P::JsonDeserialize,
             ("json", "deserializeuntyped") => P::JsonDeserializeUntyped,
             ("pattern", "compile") => P::PatternCompile,
             ("pattern", "quote") => P::PatternQuote,
@@ -1060,6 +1090,17 @@ impl Checker {
                 )?;
                 TypeName::Decimal
             }
+            P::DoubleValueOf => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                TypeName::Double
+            }
             P::IdValueOf => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_named_argument(
@@ -1086,6 +1127,24 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_non_void_argument(owner, &method.spelling, 0, &arguments[0])?;
                 TypeName::String
+            }
+            P::JsonDeserialize => {
+                require_static_arity(owner, method, arguments.len(), &[2], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::String,
+                )?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    1,
+                    &arguments[1],
+                    &TypeName::Type,
+                )?;
+                TypeName::Object
             }
             P::JsonDeserializeUntyped => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
@@ -1272,6 +1331,46 @@ impl Checker {
         })())
     }
 
+    fn logging_level_static_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Option<Result<(IntrinsicId, ExpressionType), Diagnostic>> {
+        use PlatformIntrinsic as P;
+        let descriptor =
+            crate::platform::PlatformEnumDescriptor::from_owner(&owner.to_ascii_lowercase())?;
+        if descriptor != crate::platform::PlatformEnumDescriptor::LoggingLevel {
+            return None;
+        }
+        let intrinsic = match method.canonical.as_str() {
+            "values" => P::LoggingLevelValues,
+            "valueof" => P::LoggingLevelValueOf,
+            _ => return None,
+        };
+        Some((|| {
+            let ty = match intrinsic {
+                P::LoggingLevelValues => {
+                    require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                    TypeName::List(Box::new(TypeName::LoggingLevel))
+                }
+                P::LoggingLevelValueOf => {
+                    require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                    self.require_named_argument(
+                        owner,
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        &TypeName::String,
+                    )?;
+                    TypeName::LoggingLevel
+                }
+                _ => unreachable!("only LoggingLevel static intrinsics use this helper"),
+            };
+            Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Value(ty)))
+        })())
+    }
+
     fn security_strip_inaccessible_type(
         &mut self,
         owner: &str,
@@ -1323,6 +1422,14 @@ impl Checker {
         arguments: &[Expression],
     ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
         use PlatformIntrinsic as P;
+        if let Some(result) =
+            self.platform_enum_instance_method_type(receiver_type, method, arguments)
+        {
+            return result;
+        }
+        if let Some(result) = self.schema_instance_method_type(receiver_type, method, arguments) {
+            return result;
+        }
         let intrinsic = match (receiver_type, method.canonical.as_str()) {
             (TypeName::Date, "adddays") => P::DateAddDays,
             (TypeName::Date, "addmonths") => P::DateAddMonths,
@@ -1355,6 +1462,7 @@ impl Checker {
             (TypeName::Decimal, "abs") => P::DecimalAbs,
             (TypeName::Decimal, "scale") => P::DecimalScale,
             (TypeName::Decimal, "tostring") => P::ObjectToString,
+            (TypeName::Double, "tostring") => P::ObjectToString,
             (TypeName::Id, "to15") => P::IdTo15,
             (TypeName::Id, "to18") => P::IdTo18,
             (TypeName::Blob, "tostring") => P::BlobToString,
@@ -1391,6 +1499,12 @@ impl Checker {
             (TypeName::HttpResponse, "getstatus") => P::HttpResponseGetStatus,
             (TypeName::Http, "send") => P::HttpSend,
             (TypeName::HttpCalloutMock, "respond") => P::HttpCalloutMockRespond,
+            (TypeName::VisualEditorDataRow, "getlabel") => P::VisualEditorDataRowGetLabel,
+            (TypeName::VisualEditorDataRow, "getvalue") => P::VisualEditorDataRowGetValue,
+            (TypeName::VisualEditorDynamicPickListRows, "addrow") => P::VisualEditorRowsAddRow,
+            (TypeName::VisualEditorDynamicPickListRows, "getdatarows") => {
+                P::VisualEditorRowsGetDataRows
+            }
             (TypeName::QueueableContext | TypeName::BatchableContext, "getjobid") => {
                 P::AsyncContextGetJobId
             }
@@ -1404,10 +1518,6 @@ impl Checker {
             (TypeName::SchedulableContext, "gettriggerid") => P::SchedulableContextGetTriggerId,
             (TypeName::Request, "getrequestid") => P::RequestGetRequestId,
             (TypeName::Request, "getquiddity") => P::RequestGetQuiddity,
-            (
-                TypeName::ParentJobResult | TypeName::Quiddity | TypeName::CacheVisibility,
-                "name",
-            ) => P::PlatformEnumName,
             (TypeName::CachePartition, "contains") => P::CachePartitionContains,
             (TypeName::CachePartition, "get") => P::CachePartitionGet,
             (TypeName::CachePartition, "isavailable") => P::CachePartitionIsAvailable,
@@ -1552,6 +1662,30 @@ impl Checker {
                     arguments,
                 )?;
                 TypeName::String
+            }
+            P::VisualEditorDataRowGetLabel | P::VisualEditorDataRowGetValue => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::String
+            }
+            P::VisualEditorRowsAddRow => {
+                self.one_argument(&owner, method, arguments, &TypeName::VisualEditorDataRow)?;
+                return Ok((IntrinsicId::Platform(intrinsic), ExpressionType::Void));
+            }
+            P::VisualEditorRowsGetDataRows => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::List(Box::new(TypeName::VisualEditorDataRow))
             }
             P::BlobSize => {
                 require_arity(
@@ -1757,16 +1891,6 @@ impl Checker {
                 )?;
                 TypeName::Quiddity
             }
-            P::PlatformEnumName => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[0],
-                    arguments,
-                )?;
-                TypeName::String
-            }
             P::CachePartitionContains => {
                 self.one_argument(&owner, method, arguments, &TypeName::String)?;
                 TypeName::Boolean
@@ -1874,6 +1998,203 @@ impl Checker {
             IntrinsicId::Platform(intrinsic),
             ExpressionType::Value(result),
         ))
+    }
+
+    fn platform_enum_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Option<Result<(IntrinsicId, ExpressionType), Diagnostic>> {
+        use PlatformIntrinsic as P;
+        if !matches!(
+            receiver_type,
+            TypeName::ParentJobResult
+                | TypeName::Quiddity
+                | TypeName::LoggingLevel
+                | TypeName::CacheVisibility
+                | TypeName::SoapType
+                | TypeName::DisplayType
+        ) {
+            return None;
+        }
+        Some((|| {
+            let (intrinsic, result) = match (receiver_type, method.canonical.as_str()) {
+                (_, "name") => (P::PlatformEnumName, TypeName::String),
+                (TypeName::LoggingLevel, "ordinal") => (P::PlatformEnumOrdinal, TypeName::Integer),
+                _ => return Err(self.unsupported_instance_platform_api(receiver_type, method)),
+            };
+            require_arity(
+                receiver_type,
+                &method.spelling,
+                arguments.len(),
+                &[0],
+                arguments,
+            )?;
+            Ok((
+                IntrinsicId::Platform(intrinsic),
+                ExpressionType::Value(result),
+            ))
+        })())
+    }
+
+    fn schema_instance_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Option<Result<(IntrinsicId, ExpressionType), Diagnostic>> {
+        use PlatformIntrinsic as P;
+        let (intrinsic, result) = match (receiver_type, method.canonical.as_str()) {
+            (TypeName::SObjectType, "getdescribe") => {
+                (P::SObjectTypeGetDescribe, TypeName::DescribeSObjectResult)
+            }
+            (TypeName::SObjectType, "getname") => (P::SObjectTypeGetName, TypeName::String),
+            (TypeName::SObjectType, "newsobject") => (
+                P::SObjectTypeNewSObject,
+                TypeName::Custom(crate::ast::NamedType::new(
+                    "SObject".to_owned(),
+                    method.span,
+                )),
+            ),
+            (TypeName::SObjectType | TypeName::SObjectField, "tostring") => {
+                (P::ObjectToString, TypeName::String)
+            }
+            (TypeName::SObjectField, "getdescribe") => {
+                (P::SObjectFieldGetDescribe, TypeName::DescribeFieldResult)
+            }
+            (TypeName::SObjectFieldMap, "getmap") => (
+                P::SObjectFieldMapGetMap,
+                TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::SObjectField)),
+            ),
+            (TypeName::FieldSetMap, "getmap") => (
+                P::FieldSetMapGetMap,
+                TypeName::Map(Box::new(TypeName::String), Box::new(TypeName::FieldSet)),
+            ),
+            (TypeName::DescribeSObjectResult, "getname") => (P::DescribeGetName, TypeName::String),
+            (TypeName::DescribeSObjectResult, "getlocalname") => {
+                (P::DescribeGetLocalName, TypeName::String)
+            }
+            (TypeName::DescribeSObjectResult, "getlabel") => {
+                (P::DescribeGetLabel, TypeName::String)
+            }
+            (TypeName::DescribeSObjectResult, "getlabelplural") => {
+                (P::DescribeGetLabelPlural, TypeName::String)
+            }
+            (TypeName::DescribeSObjectResult, "getkeyprefix") => {
+                (P::DescribeGetKeyPrefix, TypeName::String)
+            }
+            (TypeName::DescribeSObjectResult, "iscustom") => {
+                (P::DescribeIsCustom, TypeName::Boolean)
+            }
+            (TypeName::DescribeSObjectResult, "iscustomsetting") => {
+                (P::DescribeIsCustomSetting, TypeName::Boolean)
+            }
+            (TypeName::DescribeSObjectResult, "isaccessible") => {
+                (P::DescribeIsAccessible, TypeName::Boolean)
+            }
+            (TypeName::DescribeSObjectResult, "isdeletable") => {
+                (P::DescribeIsDeletable, TypeName::Boolean)
+            }
+            (TypeName::DescribeSObjectResult, "isupdateable") => {
+                (P::DescribeIsUpdateable, TypeName::Boolean)
+            }
+            (TypeName::DescribeFieldResult, "getname") => {
+                (P::DescribeFieldGetName, TypeName::String)
+            }
+            (TypeName::DescribeFieldResult, "getlocalname") => {
+                (P::DescribeFieldGetLocalName, TypeName::String)
+            }
+            (TypeName::DescribeFieldResult, "getlabel") => {
+                (P::DescribeFieldGetLabel, TypeName::String)
+            }
+            (TypeName::DescribeFieldResult, "getlength") => {
+                (P::DescribeFieldGetLength, TypeName::Integer)
+            }
+            (TypeName::DescribeFieldResult, "getinlinehelptext") => {
+                (P::DescribeFieldGetInlineHelpText, TypeName::String)
+            }
+            (TypeName::DescribeFieldResult, "getrelationshipname") => {
+                (P::DescribeFieldGetRelationshipName, TypeName::String)
+            }
+            (TypeName::DescribeFieldResult, "getsoaptype") => {
+                (P::DescribeFieldGetSoapType, TypeName::SoapType)
+            }
+            (TypeName::DescribeFieldResult, "gettype") => {
+                (P::DescribeFieldGetType, TypeName::DisplayType)
+            }
+            (TypeName::DescribeFieldResult, "getreferenceto") => (
+                P::DescribeFieldGetReferenceTo,
+                TypeName::List(Box::new(TypeName::SObjectType)),
+            ),
+            (TypeName::DescribeFieldResult, "getpicklistvalues") => (
+                P::DescribeFieldGetPicklistValues,
+                TypeName::List(Box::new(TypeName::PicklistEntry)),
+            ),
+            (TypeName::DescribeFieldResult, "isnamefield") => {
+                (P::DescribeFieldIsNameField, TypeName::Boolean)
+            }
+            (TypeName::DescribeFieldResult, "issortable") => {
+                (P::DescribeFieldIsSortable, TypeName::Boolean)
+            }
+            (TypeName::DescribeFieldResult, "isaccessible") => {
+                (P::DescribeFieldIsAccessible, TypeName::Boolean)
+            }
+            (TypeName::FieldSet, "getname") => (P::FieldSetGetName, TypeName::String),
+            (TypeName::FieldSet, "getlabel") => (P::FieldSetGetLabel, TypeName::String),
+            (TypeName::FieldSet, "getnamespace") => (P::FieldSetGetNamespace, TypeName::String),
+            (TypeName::FieldSet, "getfields") => (
+                P::FieldSetGetFields,
+                TypeName::List(Box::new(TypeName::FieldSetMember)),
+            ),
+            (TypeName::FieldSetMember, "getfieldpath") => {
+                (P::FieldSetMemberGetFieldPath, TypeName::String)
+            }
+            (TypeName::FieldSetMember, "getlabel") => (P::FieldSetMemberGetLabel, TypeName::String),
+            (TypeName::FieldSetMember, "getsobjectfield") => {
+                (P::FieldSetMemberGetSObjectField, TypeName::SObjectField)
+            }
+            (TypeName::PicklistEntry, "getvalue") => (P::PicklistEntryGetValue, TypeName::String),
+            _ => return None,
+        };
+        Some((|| {
+            let arities = if intrinsic == P::SObjectTypeNewSObject {
+                &[0, 1, 2][..]
+            } else {
+                &[0][..]
+            };
+            require_arity(
+                receiver_type,
+                &method.spelling,
+                arguments.len(),
+                arities,
+                arguments,
+            )?;
+            if intrinsic == P::SObjectTypeNewSObject {
+                if let Some(id) = arguments.first() {
+                    self.require_named_argument(
+                        &receiver_type.apex_name(),
+                        &method.spelling,
+                        0,
+                        id,
+                        &TypeName::Id,
+                    )?;
+                }
+                if let Some(load_defaults) = arguments.get(1) {
+                    self.require_named_argument(
+                        &receiver_type.apex_name(),
+                        &method.spelling,
+                        1,
+                        load_defaults,
+                        &TypeName::Boolean,
+                    )?;
+                }
+            }
+            Ok((
+                IntrinsicId::Platform(intrinsic),
+                ExpressionType::Value(result),
+            ))
+        })())
     }
 
     fn require_async_implementation(

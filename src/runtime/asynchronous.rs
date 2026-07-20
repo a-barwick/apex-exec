@@ -511,7 +511,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             value @ (Value::String(_) | Value::Boolean(_) | Value::Integer(_) | Value::Long(_)) => {
                 Ok(value)
             }
-            value @ (Value::Decimal(_) | Value::Date(_) | Value::Datetime(_)) => Ok(value),
+            value
+            @ (Value::Decimal(_) | Value::Double(_) | Value::Date(_) | Value::Datetime(_)) => {
+                Ok(value)
+            }
             value @ (Value::Time(_) | Value::Id(_) | Value::Null(_)) => Ok(value),
             value @ (Value::Enum { .. } | Value::TypeLiteral(_)) => Ok(value),
             Value::Collection(source) => {

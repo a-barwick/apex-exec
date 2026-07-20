@@ -54,6 +54,8 @@ pub enum PlatformConstructor {
     Http,
     HttpRequest,
     HttpResponse,
+    VisualEditorDataRow,
+    VisualEditorDynamicPickListRows,
 }
 
 /// Curated M10 platform calls. This remains a closed checker-selected set so
@@ -100,6 +102,7 @@ pub enum PlatformIntrinsic {
     DecimalSetScale,
     DecimalAbs,
     DecimalScale,
+    DoubleValueOf,
     IdValueOf,
     IdTo15,
     IdTo18,
@@ -109,6 +112,7 @@ pub enum PlatformIntrinsic {
     ObjectToString,
     JsonSerialize,
     JsonSerializePretty,
+    JsonDeserialize,
     JsonDeserializeUntyped,
     PatternCompile,
     PatternQuote,
@@ -120,10 +124,43 @@ pub enum PlatformIntrinsic {
     MatcherEnd,
     SchemaGetGlobalDescribe,
     SObjectTypeGetDescribe,
+    SObjectTypeGetName,
+    SObjectTypeNewSObject,
     SObjectGetSObjectType,
     DescribeGetName,
+    DescribeGetLocalName,
+    DescribeGetLabel,
+    DescribeGetLabelPlural,
     DescribeGetKeyPrefix,
     DescribeIsCustom,
+    DescribeIsCustomSetting,
+    DescribeIsAccessible,
+    DescribeIsDeletable,
+    DescribeIsUpdateable,
+    SObjectFieldGetDescribe,
+    SObjectFieldMapGetMap,
+    FieldSetMapGetMap,
+    DescribeFieldGetName,
+    DescribeFieldGetLocalName,
+    DescribeFieldGetLabel,
+    DescribeFieldGetLength,
+    DescribeFieldGetInlineHelpText,
+    DescribeFieldGetRelationshipName,
+    DescribeFieldGetSoapType,
+    DescribeFieldGetType,
+    DescribeFieldGetReferenceTo,
+    DescribeFieldGetPicklistValues,
+    DescribeFieldIsNameField,
+    DescribeFieldIsSortable,
+    DescribeFieldIsAccessible,
+    FieldSetGetName,
+    FieldSetGetLabel,
+    FieldSetGetNamespace,
+    FieldSetGetFields,
+    FieldSetMemberGetFieldPath,
+    FieldSetMemberGetLabel,
+    FieldSetMemberGetSObjectField,
+    PicklistEntryGetValue,
     TestStartTest,
     TestStopTest,
     TestIsRunningTest,
@@ -147,6 +184,9 @@ pub enum PlatformIntrinsic {
     RequestGetRequestId,
     RequestGetQuiddity,
     PlatformEnumName,
+    PlatformEnumOrdinal,
+    LoggingLevelValues,
+    LoggingLevelValueOf,
     CacheGetPartition,
     CachePartitionContains,
     CachePartitionGet,
@@ -189,6 +229,10 @@ pub enum PlatformIntrinsic {
     HttpResponseGetStatus,
     HttpSend,
     HttpCalloutMockRespond,
+    VisualEditorDataRowGetLabel,
+    VisualEditorDataRowGetValue,
+    VisualEditorRowsAddRow,
+    VisualEditorRowsGetDataRows,
 }
 
 impl PlatformIntrinsic {
@@ -205,10 +249,12 @@ impl PlatformIntrinsic {
                 | Self::TimeNewInstance
                 | Self::TimeValueOf
                 | Self::DecimalValueOf
+                | Self::DoubleValueOf
                 | Self::IdValueOf
                 | Self::BlobValueOf
                 | Self::JsonSerialize
                 | Self::JsonSerializePretty
+                | Self::JsonDeserialize
                 | Self::JsonDeserializeUntyped
                 | Self::PatternCompile
                 | Self::PatternQuote
@@ -228,6 +274,8 @@ impl PlatformIntrinsic {
                 | Self::RequestGetCurrent
                 | Self::CacheGetPartition
                 | Self::TypeForName
+                | Self::LoggingLevelValues
+                | Self::LoggingLevelValueOf
                 | Self::LimitsGetQueries
                 | Self::LimitsGetLimitQueries
                 | Self::LimitsGetDmlStatements
@@ -325,6 +373,7 @@ pub enum ListIntrinsic {
     AddAll,
     Clear,
     Clone,
+    DeepClone,
     Contains,
     Get,
     IndexOf,
@@ -358,6 +407,7 @@ pub enum SetIntrinsic {
 pub enum MapIntrinsic {
     Clear,
     Clone,
+    DeepClone,
     ContainsKey,
     Get,
     IsEmpty,

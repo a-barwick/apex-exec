@@ -7,8 +7,9 @@ use crate::{
     diagnostic::Diagnostic,
     hir::{
         CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
-        DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId,
-        PlaceTarget, Program, ReferenceTarget, SecurityDecisionMethod, TriggerContextVariable,
+        CustomMetadataMethod, DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget,
+        NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget, SchemaMemberTarget,
+        SecurityDecisionMethod, TriggerContextVariable,
     },
     platform::{DmlError as PlatformDmlError, DmlRowOutcome, FieldType},
     span::Span,
@@ -48,6 +49,27 @@ use instrumentation::{
     DebugSnapshotBuilder, InstrumentationPolicy, InstrumentationState, StatementInstrumentation,
 };
 use store::ExecutionStore;
+
+#[derive(Clone, Copy, Debug)]
+struct ApexDouble(f64);
+
+impl ApexDouble {
+    fn new(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+
+    fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for ApexDouble {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for ApexDouble {}
 
 /// Complete deterministic trace from one debugger launch.
 #[derive(Clone, Debug)]
@@ -89,6 +111,7 @@ enum Value {
     Integer(i64),
     Long(i64),
     Decimal(Decimal),
+    Double(ApexDouble),
     Date(NaiveDate),
     Datetime(DateTime<Utc>),
     Time(NaiveTime),
@@ -125,8 +148,32 @@ enum PlatformValue {
     Http,
     HttpRequest(HttpRequestData),
     HttpResponse(HttpResponseData),
+    VisualEditorDataRow {
+        label: String,
+        value: String,
+    },
+    VisualEditorDynamicPickListRows(Vec<PlatformValueId>),
     SObjectType(usize),
     DescribeSObject(usize),
+    SObjectField {
+        object_id: usize,
+        field_id: usize,
+    },
+    DescribeField {
+        object_id: usize,
+        field_id: usize,
+    },
+    SObjectFieldMap(usize),
+    FieldSetMap(usize),
+    FieldSet {
+        object_id: usize,
+        name: String,
+    },
+    FieldSetMember {
+        object_id: usize,
+        field_id: usize,
+    },
+    PicklistEntry(String),
     AsyncContext {
         ty: TypeName,
         job_id: String,
@@ -161,8 +208,17 @@ impl PlatformValue {
             Self::Http => TypeName::Http,
             Self::HttpRequest(_) => TypeName::HttpRequest,
             Self::HttpResponse(_) => TypeName::HttpResponse,
+            Self::VisualEditorDataRow { .. } => TypeName::VisualEditorDataRow,
+            Self::VisualEditorDynamicPickListRows(_) => TypeName::VisualEditorDynamicPickListRows,
             Self::SObjectType(_) => TypeName::SObjectType,
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
+            Self::SObjectField { .. } => TypeName::SObjectField,
+            Self::DescribeField { .. } => TypeName::DescribeFieldResult,
+            Self::SObjectFieldMap(_) => TypeName::SObjectFieldMap,
+            Self::FieldSetMap(_) => TypeName::FieldSetMap,
+            Self::FieldSet { .. } => TypeName::FieldSet,
+            Self::FieldSetMember { .. } => TypeName::FieldSetMember,
+            Self::PicklistEntry(_) => TypeName::PicklistEntry,
             Self::AsyncContext { ty, .. } => ty.clone(),
             Self::QueryLocator(_) => TypeName::QueryLocator,
             Self::DmlResult { ty, .. } => ty.clone(),
@@ -250,6 +306,7 @@ enum Place {
     ClassMember {
         target: ClassMemberId,
         receiver: Option<ObjectId>,
+        property_storage: bool,
     },
     ListIndex {
         collection: CollectionId,
@@ -1497,7 +1554,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::AggregateResultGet
                     | CallTarget::DmlResultMethod(_)
                     | CallTarget::DmlErrorMethod(_)
-                    | CallTarget::SecurityDecisionMethod(_) => Err(Diagnostic::new(
+                    | CallTarget::SecurityDecisionMethod(_)
+                    | CallTarget::CustomMetadataMethod { .. } => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -1613,6 +1671,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ReferenceTarget::StaticMember(target) => {
                 self.read_class_member(target, None, identifier.span)
             }
+            ReferenceTarget::InstancePropertyStorage(target) => {
+                let receiver = self
+                    .current_receiver
+                    .ok_or_else(|| Diagnostic::new("missing instance receiver", identifier.span))?;
+                self.read_property_storage(target, Some(receiver), identifier.span)
+            }
+            ReferenceTarget::StaticPropertyStorage(target) => {
+                self.read_property_storage(target, None, identifier.span)
+            }
             ReferenceTarget::EnumConstant { class_id, ordinal } => {
                 Ok(enum_value(class_id, ordinal))
             }
@@ -1664,6 +1731,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             Some(CallTarget::SObjectPut) => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
+            }
+            Some(CallTarget::CustomMetadataMethod { object_id, method }) => {
+                self.evaluate_custom_metadata_method(object_id, method, arguments, span)
             }
             Some(
                 target @ (CallTarget::DatabaseDml(_)
@@ -1737,6 +1807,42 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ),
             _ => unreachable!("only data method targets use this helper"),
+        }
+    }
+
+    fn evaluate_custom_metadata_method(
+        &mut self,
+        object_id: ObjectTypeId,
+        method: CustomMetadataMethod,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let object = self
+            .program()
+            .schema()
+            .object_at(object_id.index())
+            .expect("checked custom metadata object index is valid");
+        let object_type = TypeName::Custom(crate::ast::NamedType::new(
+            object.api_name().to_owned(),
+            span,
+        ));
+        match method {
+            CustomMetadataMethod::GetAll => {
+                if !arguments.is_empty() {
+                    return Err(invalid_runtime_operands(span));
+                }
+                Ok(self.store.allocate_collection(Collection::Map {
+                    key_type: TypeName::String,
+                    value_type: object_type,
+                    entries: Vec::new(),
+                }))
+            }
+            CustomMetadataMethod::GetInstance => {
+                let [_] = self.evaluate_arguments(arguments)?.as_slice() else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::Null(Some(object_type)))
+            }
         }
     }
 
@@ -2035,6 +2141,27 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 self.read_class_member(target, Some(receiver), span)
             }
+            MemberTarget::StaticPropertyStorage(target) => {
+                self.read_property_storage(target, None, span)
+            }
+            MemberTarget::InstancePropertyStorage(target) => {
+                let receiver_value = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(receiver)?,
+                };
+                let receiver = match receiver_value {
+                    Value::Object(receiver) => receiver,
+                    Value::Null(_) => {
+                        return Err(runtime_exception(
+                            "NullPointerException",
+                            "member access receiver is null",
+                            receiver.span(),
+                        ));
+                    }
+                    _ => return Err(invalid_runtime_operands(receiver.span())),
+                };
+                self.read_property_storage(target, Some(receiver), span)
+            }
             MemberTarget::SObjectField {
                 object_id,
                 field_id,
@@ -2066,6 +2193,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 &relationship,
                 span,
             ),
+            MemberTarget::Schema(target) => {
+                self.evaluate_schema_member(target, receiver, evaluated_receiver, span)
+            }
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
             target @ (MemberTarget::DmlStatus(_)
             | MemberTarget::AccessLevel(_)
@@ -2103,6 +2233,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 )))
             }
             _ => unreachable!("only constant members use this helper"),
+        })
+    }
+
+    fn evaluate_schema_member(
+        &mut self,
+        target: SchemaMemberTarget,
+        expression: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        Ok(match target {
+            SchemaMemberTarget::SObjectType { object_id } => self
+                .store
+                .allocate_platform(PlatformValue::SObjectType(object_id)),
+            SchemaMemberTarget::SObjectField {
+                object_id,
+                field_id,
+            } => self.store.allocate_platform(PlatformValue::SObjectField {
+                object_id,
+                field_id,
+            }),
+            SchemaMemberTarget::DescribeFields => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(expression)?,
+                };
+                let object_id = self.expect_any_schema_object(Some(receiver), span)?;
+                self.store
+                    .allocate_platform(PlatformValue::SObjectFieldMap(object_id))
+            }
+            SchemaMemberTarget::DescribeFieldSets => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(expression)?,
+                };
+                let object_id = self.expect_any_schema_object(Some(receiver), span)?;
+                self.store
+                    .allocate_platform(PlatformValue::FieldSetMap(object_id))
+            }
+            SchemaMemberTarget::PicklistValue(value) => Value::String(value),
         })
     }
 
@@ -2244,8 +2414,24 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid checked SObject.get call", span));
         };
         let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
-        let field_name = match self.evaluate(field_name)? {
-            Value::String(value) => value,
+        let object_id = self.store.sobject(receiver).object_id;
+        let field_value = self.evaluate(field_name)?;
+        let field_id = match field_value {
+            Value::String(value) => self.sobject_field_id(object_id, &value, span)?,
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::SObjectField {
+                    object_id: field_object,
+                    field_id,
+                } if *field_object == object_id => *field_id,
+                PlatformValue::SObjectField { .. } => {
+                    return Err(runtime_exception(
+                        "SObjectException",
+                        "SObject field token belongs to a different object type",
+                        field_name.span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(field_name.span())),
+            },
             Value::Null(_) => {
                 return Err(runtime_exception(
                     "IllegalArgumentException",
@@ -2255,23 +2441,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             _ => return Err(invalid_runtime_operands(field_name.span())),
         };
-        let object_id = self.store.sobject(receiver).object_id;
-        let object = self
-            .program()
-            .schema()
-            .object_at(object_id)
-            .expect("runtime SObject schema index is valid");
-        let field_id = object.field_index(&field_name).ok_or_else(|| {
-            runtime_exception(
-                "IllegalArgumentException",
-                format!(
-                    "unknown field `{}` on SObject `{}`",
-                    field_name,
-                    object.api_name()
-                ),
-                span,
-            )
-        })?;
         self.read_sobject_field(receiver, object_id, field_id, span)
     }
 
@@ -2288,20 +2457,47 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
         let field_name_value = self.evaluate(field_name)?;
         let value = self.evaluate(value)?;
-        let Value::String(field_name) = field_name_value else {
-            return Err(runtime_exception(
-                "IllegalArgumentException",
-                "SObject field name must be a non-null String",
-                field_name.span(),
-            ));
-        };
         let object_id = self.store.sobject(receiver).object_id;
+        let field_id = match field_name_value {
+            Value::String(field_name) => self.sobject_field_id(object_id, &field_name, span)?,
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::SObjectField {
+                    object_id: field_object,
+                    field_id,
+                } if *field_object == object_id => *field_id,
+                PlatformValue::SObjectField { .. } => {
+                    return Err(runtime_exception(
+                        "SObjectException",
+                        "SObject field token belongs to a different object type",
+                        field_name.span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(field_name.span())),
+            },
+            _ => {
+                return Err(runtime_exception(
+                    "IllegalArgumentException",
+                    "SObject field name must be a non-null String or Schema.SObjectField",
+                    field_name.span(),
+                ));
+            }
+        };
+        self.write_sobject_field(receiver, object_id, field_id, value, span)?;
+        Ok(Value::Void)
+    }
+
+    fn sobject_field_id(
+        &self,
+        object_id: usize,
+        field_name: &str,
+        span: Span,
+    ) -> Result<usize, Diagnostic> {
         let object = self
             .program()
             .schema()
             .object_at(object_id)
             .expect("runtime SObject schema index is valid");
-        let field_id = object.field_index(&field_name).ok_or_else(|| {
+        object.field_index(field_name).ok_or_else(|| {
             runtime_exception(
                 "IllegalArgumentException",
                 format!(
@@ -2311,9 +2507,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 ),
                 span,
             )
-        })?;
-        self.write_sobject_field(receiver, object_id, field_id, value, span)?;
-        Ok(Value::Void)
+        })
     }
 
     fn evaluate_sobject_receiver(
@@ -2516,6 +2710,72 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn read_property_storage(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
+        let ClassMember::Property(property) =
+            &self.classes()[target.class_id].members[target.member_id]
+        else {
+            return Err(Diagnostic::new(
+                "property storage target is not a property",
+                span,
+            ));
+        };
+        if property.modifiers.contains(&Modifier::Static) {
+            Ok(self
+                .store
+                .static_slot(&target)
+                .expect("property storage exists")
+                .value
+                .clone())
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            Ok(self.store.object(receiver).fields[&target].value.clone())
+        }
+    }
+
+    fn write_property_storage(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
+        let ClassMember::Property(property) =
+            &self.classes()[target.class_id].members[target.member_id]
+        else {
+            return Err(Diagnostic::new(
+                "property storage target is not a property",
+                span,
+            ));
+        };
+        let ty = property.ty.clone();
+        let is_static = property.modifiers.contains(&Modifier::Static);
+        let value = typed_value(value, &ty);
+        if is_static {
+            self.store
+                .static_slot_mut(&target)
+                .expect("property storage exists")
+                .value = value.clone();
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            self.store
+                .object_mut(receiver)
+                .fields
+                .get_mut(&target)
+                .expect("property storage exists")
+                .value = value.clone();
+        }
+        Ok(value)
+    }
+
     fn write_class_property(
         &mut self,
         target: ClassMemberId,
@@ -2615,19 +2875,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        if !arguments.is_empty() {
-            return Err(Diagnostic::new(
-                "platform constructor received unexpected arguments",
-                span,
-            ));
-        }
         let value = match constructor {
-            crate::hir::PlatformConstructor::Http => PlatformValue::Http,
+            crate::hir::PlatformConstructor::Http => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::Http
+            }
             crate::hir::PlatformConstructor::HttpRequest => {
+                require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpRequest(HttpRequestData::default())
             }
             crate::hir::PlatformConstructor::HttpResponse => {
+                require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+            crate::hir::PlatformConstructor::VisualEditorDataRow => {
+                let evaluated = self.evaluate_arguments(arguments)?;
+                let [label, value] = evaluated.as_slice() else {
+                    return Err(Diagnostic::new(
+                        "VisualEditor.DataRow constructor requires two arguments",
+                        span,
+                    ));
+                };
+                let (Value::String(label), Value::String(value)) = (&label.value, &value.value)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                PlatformValue::VisualEditorDataRow {
+                    label: label.clone(),
+                    value: value.clone(),
+                }
+            }
+            crate::hir::PlatformConstructor::VisualEditorDynamicPickListRows => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::VisualEditorDynamicPickListRows(Vec::new())
             }
         };
         Ok(self.store.allocate_platform(value))
@@ -3249,6 +3529,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         match (&value, target) {
             (Value::Integer(value), TypeName::Long) => return Ok(Value::Long(*value)),
+            (Value::Integer(_) | Value::Long(_) | Value::Decimal(_), TypeName::Double) => {
+                return Ok(typed_value(value, target));
+            }
             (Value::Long(value), TypeName::Integer) => {
                 return i32::try_from(*value)
                     .map(|value| Value::Integer(i64::from(value)))
@@ -3370,6 +3653,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             PlaceTarget::StaticMember(target) => Ok(Place::ClassMember {
                 target,
                 receiver: None,
+                property_storage: false,
+            }),
+            PlaceTarget::InstancePropertyStorage(target) => {
+                let mut place = self.resolve_instance_member_place(syntax, target, span)?;
+                let Place::ClassMember {
+                    property_storage, ..
+                } = &mut place
+                else {
+                    unreachable!("instance member resolution creates a class member place")
+                };
+                *property_storage = true;
+                Ok(place)
+            }
+            PlaceTarget::StaticPropertyStorage(target) => Ok(Place::ClassMember {
+                target,
+                receiver: None,
+                property_storage: true,
             }),
             PlaceTarget::ListIndex => self.resolve_list_index_place(syntax, span),
             PlaceTarget::SObjectField {
@@ -3407,6 +3707,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(Place::ClassMember {
             target,
             receiver: Some(receiver),
+            property_storage: false,
         })
     }
 
@@ -3455,8 +3756,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn read_place(&mut self, place: &Place, span: Span) -> Result<Value, Diagnostic> {
         match place {
             Place::Local(identifier) => self.lookup(identifier).map(|slot| slot.value.clone()),
-            Place::ClassMember { target, receiver } => {
-                self.read_class_member(*target, *receiver, span)
+            Place::ClassMember {
+                target,
+                receiver,
+                property_storage,
+            } => {
+                if *property_storage {
+                    self.read_property_storage(*target, *receiver, span)
+                } else {
+                    self.read_class_member(*target, *receiver, span)
+                }
             }
             Place::ListIndex { collection, index } => {
                 let Collection::List { elements, .. } = self.collection(*collection) else {
@@ -3480,8 +3789,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         match place {
             Place::Local(identifier) => self.assign_variable(identifier, value),
-            Place::ClassMember { target, receiver } => {
-                self.write_class_member(*target, *receiver, value, span)
+            Place::ClassMember {
+                target,
+                receiver,
+                property_storage,
+            } => {
+                if *property_storage {
+                    self.write_property_storage(*target, *receiver, value, span)
+                } else {
+                    self.write_class_member(*target, *receiver, value, span)
+                }
             }
             Place::ListIndex { collection, index } => {
                 let element_type = match self.collection(*collection) {
@@ -4095,6 +4412,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Integer(_) => matches!(target, TypeName::Integer),
             Value::Long(_) => matches!(target, TypeName::Long),
             Value::Decimal(_) => matches!(target, TypeName::Decimal),
+            Value::Double(_) => matches!(target, TypeName::Double),
             Value::Date(_) => matches!(target, TypeName::Date),
             Value::Datetime(_) => matches!(target, TypeName::Datetime),
             Value::Time(_) => matches!(target, TypeName::Time),
@@ -4149,6 +4467,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Long(_) => TypeName::Long.apex_name(),
             Value::Decimal(_) => TypeName::Decimal.apex_name(),
+            Value::Double(_) => TypeName::Double.apex_name(),
             Value::Date(_) => TypeName::Date.apex_name(),
             Value::Datetime(_) => TypeName::Datetime.apex_name(),
             Value::Time(_) => TypeName::Time.apex_name(),
@@ -4265,6 +4584,20 @@ fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Spa
     Diagnostic::runtime_exception(exception_type, message, span)
 }
 
+fn require_no_constructor_arguments(
+    arguments: &[Expression],
+    span: Span,
+) -> Result<(), Diagnostic> {
+    if arguments.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            "platform constructor received unexpected arguments",
+            span,
+        ))
+    }
+}
+
 fn typed_value(value: Value, ty: &TypeName) -> Value {
     match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
@@ -4272,7 +4605,35 @@ fn typed_value(value: Value, ty: &TypeName) -> Value {
         Value::Integer(value) | Value::Long(value) if *ty == TypeName::Decimal => {
             Value::Decimal(Decimal::from(value))
         }
+        Value::Integer(value) | Value::Long(value) if *ty == TypeName::Double => {
+            Value::Double(ApexDouble(value as f64))
+        }
+        Value::Decimal(value) if *ty == TypeName::Double => value
+            .normalize()
+            .to_string()
+            .parse::<f64>()
+            .ok()
+            .and_then(ApexDouble::new)
+            .map_or(Value::Decimal(value), Value::Double),
         value => value,
+    }
+}
+
+fn double_value(value: &Value, span: Span) -> Result<f64, Diagnostic> {
+    match value {
+        Value::Integer(value) | Value::Long(value) => Ok(*value as f64),
+        Value::Decimal(value) => value
+            .normalize()
+            .to_string()
+            .parse::<f64>()
+            .map_err(|_| invalid_runtime_operands(span)),
+        Value::Double(value) => Ok(value.get()),
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
+            "operator cannot be applied to null at runtime",
+            span,
+        )),
+        _ => Err(invalid_runtime_operands(span)),
     }
 }
 
@@ -4297,6 +4658,14 @@ fn compare_values(
     comparison: impl FnOnce(Ordering) -> bool,
 ) -> Result<Value, Diagnostic> {
     let ordering = match (&left, &right) {
+        (
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),
+        ) if matches!(left, Value::Double(_)) || matches!(right, Value::Double(_)) => {
+            double_value(&left, span)?
+                .partial_cmp(&double_value(&right, span)?)
+                .ok_or_else(|| invalid_runtime_operands(span))?
+        }
         (
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_),
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_),

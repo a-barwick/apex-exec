@@ -689,6 +689,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::Integer
         | TypeName::Long
         | TypeName::Decimal
+        | TypeName::Double
         | TypeName::Date
         | TypeName::Datetime
         | TypeName::Time
@@ -707,6 +708,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::FinalizerContext
         | TypeName::ParentJobResult
         | TypeName::Quiddity
+        | TypeName::LoggingLevel
         | TypeName::CacheVisibility
         | TypeName::CachePartition
         | TypeName::Request
@@ -723,6 +725,17 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::SchedulableContext
         | TypeName::SObjectType
         | TypeName::DescribeSObjectResult
+        | TypeName::SObjectField
+        | TypeName::DescribeFieldResult
+        | TypeName::SObjectFieldMap
+        | TypeName::FieldSetMap
+        | TypeName::FieldSet
+        | TypeName::FieldSetMember
+        | TypeName::PicklistEntry
+        | TypeName::VisualEditorDataRow
+        | TypeName::VisualEditorDynamicPickListRows
+        | TypeName::SoapType
+        | TypeName::DisplayType
         | TypeName::Exception
         | TypeName::NullPointerException
         | TypeName::ListException

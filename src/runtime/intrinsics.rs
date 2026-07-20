@@ -304,8 +304,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[EvaluatedArgument],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let [argument] = arguments else {
-            return Err(invalid_call_arguments(span));
+        let argument = match arguments {
+            [argument] | [_, argument] => argument,
+            _ => {
+                return Err(invalid_call_arguments(span));
+            }
         };
         if matches!(argument.value, Value::Void) {
             return Err(Diagnostic::new("cannot debug void", argument.span));
@@ -662,19 +665,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             ListIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
-                let (element_type, elements) = match self.collection(id) {
-                    Collection::List {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::List {
-                    element_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
+                self.clone_list(id, false, span)
+            }
+            ListIntrinsic::DeepClone => {
+                expect_no_arguments(arguments, span)?;
+                self.clone_list(id, true, span)
             }
             ListIntrinsic::Contains => {
                 let [needle] = arguments else {
@@ -762,59 +757,91 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             ListIntrinsic::Sort => {
                 expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let (element_type, mut elements) = match self.collection(id) {
-                    Collection::List {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.clone()),
-                    _ => unreachable!(),
-                };
-                if matches!(
-                    element_type,
-                    crate::ast::TypeName::String
-                        | crate::ast::TypeName::Integer
-                        | crate::ast::TypeName::Long
-                ) {
-                    sort_primitive_values(&mut elements, span)?;
-                } else {
-                    let crate::ast::TypeName::Custom(name) = &element_type else {
-                        return Err(runtime_exception(
-                            "TypeException",
-                            "List.sort element type escaped Comparable validation",
-                            span,
-                        ));
-                    };
-                    let class_id = self.runtime_class_id(name).ok_or_else(|| {
-                        runtime_exception(
-                            "TypeException",
-                            "List.sort Comparable class is unavailable at runtime",
-                            span,
-                        )
-                    })?;
-                    let target = self
-                        .program()
-                        .comparable_contract(class_id)
-                        .ok_or_else(|| {
-                            runtime_exception(
-                                "TypeException",
-                                "List.sort element type does not implement Comparable",
-                                span,
-                            )
-                        })?;
-                    self.sort_comparable_values(&mut elements, target, span)?;
-                }
-                let Collection::List {
-                    elements: stored, ..
-                } = self.collection_mut(id)
-                else {
-                    unreachable!()
-                };
-                *stored = elements;
-                Ok(Value::Void)
+                self.sort_list(id, span)
             }
         }
+    }
+
+    fn sort_list(&mut self, id: CollectionId, span: Span) -> Result<Value, Diagnostic> {
+        self.ensure_collection_mutable(id, span)?;
+        let (element_type, mut elements) = match self.collection(id) {
+            Collection::List {
+                element_type,
+                elements,
+                ..
+            } => (element_type.clone(), elements.clone()),
+            _ => unreachable!(),
+        };
+        if matches!(
+            element_type,
+            crate::ast::TypeName::String
+                | crate::ast::TypeName::Integer
+                | crate::ast::TypeName::Long
+        ) {
+            sort_primitive_values(&mut elements, span)?;
+        } else {
+            let crate::ast::TypeName::Custom(name) = &element_type else {
+                return Err(runtime_exception(
+                    "TypeException",
+                    "List.sort element type escaped Comparable validation",
+                    span,
+                ));
+            };
+            let class_id = self.runtime_class_id(name).ok_or_else(|| {
+                runtime_exception(
+                    "TypeException",
+                    "List.sort Comparable class is unavailable at runtime",
+                    span,
+                )
+            })?;
+            let target = self
+                .program()
+                .comparable_contract(class_id)
+                .ok_or_else(|| {
+                    runtime_exception(
+                        "TypeException",
+                        "List.sort element type does not implement Comparable",
+                        span,
+                    )
+                })?;
+            self.sort_comparable_values(&mut elements, target, span)?;
+        }
+        let Collection::List {
+            elements: stored, ..
+        } = self.collection_mut(id)
+        else {
+            unreachable!()
+        };
+        *stored = elements;
+        Ok(Value::Void)
+    }
+
+    fn clone_list(
+        &mut self,
+        id: CollectionId,
+        deep: bool,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (element_type, elements) = match self.collection(id) {
+            Collection::List {
+                element_type,
+                elements,
+                ..
+            } => (element_type.clone(), elements.clone()),
+            _ => unreachable!(),
+        };
+        if deep && elements.iter().any(|value| !is_deep_clone_leaf(value)) {
+            return Err(runtime_exception(
+                "TypeException",
+                "deepClone currently requires scalar or empty collections",
+                span,
+            ));
+        }
+        Ok(self.allocate(Collection::List {
+            element_type,
+            elements,
+            iteration_depth: 0,
+        }))
     }
 
     fn sort_comparable_values(
@@ -1110,19 +1137,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             MapIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
-                let (key_type, value_type, entries) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        entries,
-                    } => (key_type.clone(), value_type.clone(), entries.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Map {
-                    key_type,
-                    value_type,
-                    entries,
-                }))
+                self.clone_map(id, false, span)
+            }
+            MapIntrinsic::DeepClone => {
+                expect_no_arguments(arguments, span)?;
+                self.clone_map(id, true, span)
             }
             MapIntrinsic::ContainsKey => {
                 let [key] = arguments else {
@@ -1262,6 +1281,33 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn clone_map(&mut self, id: CollectionId, deep: bool, span: Span) -> Result<Value, Diagnostic> {
+        let (key_type, value_type, entries) = match self.collection(id) {
+            Collection::Map {
+                key_type,
+                value_type,
+                entries,
+            } => (key_type.clone(), value_type.clone(), entries.clone()),
+            _ => unreachable!(),
+        };
+        if deep
+            && entries
+                .iter()
+                .any(|(key, value)| !is_deep_clone_leaf(key) || !is_deep_clone_leaf(value))
+        {
+            return Err(runtime_exception(
+                "TypeException",
+                "deepClone currently requires scalar or empty collections",
+                span,
+            ));
+        }
+        Ok(self.allocate(Collection::Map {
+            key_type,
+            value_type,
+            entries,
+        }))
+    }
+
     fn map_put(&mut self, id: CollectionId, key: Value, value: Value) -> Value {
         if let Some(index) = self.map_key_index(id, &key) {
             let Collection::Map { entries, .. } = self.collection_mut(id) else {
@@ -1372,6 +1418,25 @@ fn nonnegative_usize(value: &Value, span: Span, label: &str) -> Result<usize, Di
 fn collection_size(size: usize, span: Span) -> Result<i64, Diagnostic> {
     i64::try_from(size)
         .map_err(|_| runtime_exception("ListException", "collection size is too large", span))
+}
+
+fn is_deep_clone_leaf(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::String(_)
+            | Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::Long(_)
+            | Value::Decimal(_)
+            | Value::Double(_)
+            | Value::Date(_)
+            | Value::Datetime(_)
+            | Value::Time(_)
+            | Value::Id(_)
+            | Value::Enum { .. }
+            | Value::TypeLiteral(_)
+            | Value::Null(_)
+    )
 }
 
 fn sort_primitive_values(values: &mut [Value], span: Span) -> Result<(), Diagnostic> {

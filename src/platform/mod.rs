@@ -12,15 +12,18 @@
 mod cache;
 mod context;
 mod database;
+mod describe;
+mod logging;
 pub mod metadata;
 pub mod schema;
 pub mod security;
 pub mod sobject;
 pub mod sqlite;
+mod standard_schema;
 pub mod storage;
 
 pub use cache::CacheVisibility;
-pub use context::{ParentJobResult, PlatformEnum, Quiddity};
+pub use context::{ParentJobResult, PlatformEnum, PlatformEnumDescriptor, Quiddity};
 pub use database::{
     AggregateFunction, DatabaseError, DatabaseSnapshot, DmlError, DmlExternalId, DmlOperation,
     DmlRequest, DmlRow, DmlRowOutcome, DmlStatus, LocalDatabase, NullOrder, PreparedDmlOutcome,
@@ -29,10 +32,13 @@ pub use database::{
     QueryRelationship, QuerySelect, QueryValue, SoqlRequest, SortOrder, SoslRequest,
     SoslReturningRequest,
 };
+pub use describe::{DisplayType, SoapType};
+pub use logging::LoggingLevel;
 pub use metadata::{MetadataError, import_metadata};
 pub use schema::{
-    FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider, SharingModel,
-    SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
+    FieldSchema, FieldSetSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError,
+    SchemaProvider, SharingModel, SummaryDefinition, SummaryFilter, SummaryFilterOperator,
+    SummaryOperation,
 };
 pub use security::{
     AccessLevel, AccessType, FieldPermissions, ObjectPermissions, QueryAccessMode, RecordAccess,

@@ -465,6 +465,10 @@ pub enum CallTarget {
     DmlResultMethod(DmlResultMethod),
     DmlErrorMethod(DmlErrorMethod),
     SecurityDecisionMethod(SecurityDecisionMethod),
+    CustomMetadataMethod {
+        object_id: ObjectTypeId,
+        method: CustomMetadataMethod,
+    },
     DatabaseQuery {
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
@@ -482,6 +486,12 @@ pub enum CallTarget {
 pub enum SecurityDecisionMethod {
     GetRecords,
     GetRemovedFields,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomMetadataMethod {
+    GetAll,
+    GetInstance,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,6 +583,8 @@ pub enum PlaceTarget {
     Local,
     InstanceMember(ClassMemberId),
     StaticMember(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
     ListIndex,
     SObjectField {
         object_id: ObjectTypeId,
@@ -585,6 +597,7 @@ pub enum NumericKind {
     Integer,
     Long,
     Decimal,
+    Double,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -619,6 +632,8 @@ pub enum ReferenceTarget {
     Super(usize),
     InstanceMember(ClassMemberId),
     StaticMember(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
     EnumConstant { class_id: ClassId, ordinal: usize },
 }
 
@@ -626,6 +641,8 @@ pub enum ReferenceTarget {
 pub enum MemberTarget {
     Instance(ClassMemberId),
     Static(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
     SObjectField {
         object_id: usize,
         field_id: usize,
@@ -652,6 +669,16 @@ pub enum MemberTarget {
     TypeReference {
         class_id: ClassId,
     },
+    Schema(SchemaMemberTarget),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SchemaMemberTarget {
+    SObjectType { object_id: usize },
+    SObjectField { object_id: usize, field_id: usize },
+    DescribeFields,
+    DescribeFieldSets,
+    PicklistValue(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

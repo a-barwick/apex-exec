@@ -369,6 +369,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 traversal.write(output, &response.status)?;
                 traversal.write(output, "]")
             }
+            PlatformValue::VisualEditorDataRow { label, value } => {
+                traversal.write(output, "VisualEditor.DataRow[")?;
+                traversal.write(output, label)?;
+                traversal.write(output, "=")?;
+                traversal.write(output, value)?;
+                traversal.write(output, "]")
+            }
+            PlatformValue::VisualEditorDynamicPickListRows(rows) => {
+                traversal.write(output, "VisualEditor.DynamicPickListRows[")?;
+                traversal.write(output, &rows.len().to_string())?;
+                traversal.write(output, "]")
+            }
             PlatformValue::SObjectType(object_id) | PlatformValue::DescribeSObject(object_id) => {
                 let name = self
                     .program()
@@ -377,6 +389,38 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map_or("Schema", |object| object.api_name());
                 traversal.write(output, name)
             }
+            PlatformValue::SObjectField {
+                object_id,
+                field_id,
+            }
+            | PlatformValue::DescribeField {
+                object_id,
+                field_id,
+            }
+            | PlatformValue::FieldSetMember {
+                object_id,
+                field_id,
+            } => {
+                let schema = self.program().schema();
+                let object = schema.object_at(*object_id);
+                let object_name = object.map_or("Schema", |object| object.api_name());
+                let field_name = object
+                    .and_then(|object| object.field_at(*field_id))
+                    .map_or("Field", |field| field.api_name());
+                traversal.write(output, object_name)?;
+                traversal.write(output, ".")?;
+                traversal.write(output, field_name)
+            }
+            PlatformValue::SObjectFieldMap(object_id) | PlatformValue::FieldSetMap(object_id) => {
+                let name = self
+                    .program()
+                    .schema()
+                    .object_at(*object_id)
+                    .map_or("Schema", |object| object.api_name());
+                traversal.write(output, name)
+            }
+            PlatformValue::FieldSet { object_id: _, name } => traversal.write(output, name),
+            PlatformValue::PicklistEntry(value) => traversal.write(output, value),
             PlatformValue::AsyncContext { ty, job_id } => {
                 traversal.write(output, &ty.apex_name())?;
                 traversal.write(output, "[")?;
@@ -581,6 +625,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             (Value::Integer(left), Value::Integer(right)) => left == right,
             (Value::Long(left), Value::Long(right)) => left == right,
             (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Double(left), Value::Double(right)) => left == right,
             (Value::Date(left), Value::Date(right)) => left == right,
             (Value::Datetime(left), Value::Datetime(right)) => left == right,
             (Value::Time(left), Value::Time(right)) => left == right,
@@ -628,6 +673,7 @@ fn render_leaf(
         Value::Integer(value) => traversal.write(output, &value.to_string()),
         Value::Long(value) => traversal.write(output, &value.to_string()),
         Value::Decimal(value) => traversal.write(output, &value.normalize().to_string()),
+        Value::Double(value) => traversal.write(output, &value.get().to_string()),
         Value::Date(value) => traversal.write(output, &value.format("%Y-%m-%d").to_string()),
         Value::Datetime(value) => {
             traversal.write(output, &value.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -852,6 +898,17 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
             (Value::Integer(left), Value::Long(right))
             | (Value::Long(right), Value::Integer(left)) => left == right,
             (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Double(left), Value::Double(right)) => left == right,
+            (Value::Integer(left), Value::Double(right))
+            | (Value::Double(right), Value::Integer(left)) => (*left as f64) == right.get(),
+            (Value::Long(left), Value::Double(right))
+            | (Value::Double(right), Value::Long(left)) => (*left as f64) == right.get(),
+            (Value::Decimal(left), Value::Double(right))
+            | (Value::Double(right), Value::Decimal(left)) => left
+                .normalize()
+                .to_string()
+                .parse::<f64>()
+                .is_ok_and(|left| left == right.get()),
             (Value::Integer(left), Value::Decimal(right))
             | (Value::Decimal(right), Value::Integer(left)) => Decimal::from(*left) == *right,
             (Value::Long(left), Value::Decimal(right))
@@ -880,6 +937,66 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
                     (
                         PlatformValue::PlatformEnum(left_value),
                         PlatformValue::PlatformEnum(right_value),
+                    ) => left_value == right_value,
+                    (
+                        PlatformValue::SObjectType(left_object),
+                        PlatformValue::SObjectType(right_object),
+                    )
+                    | (
+                        PlatformValue::DescribeSObject(left_object),
+                        PlatformValue::DescribeSObject(right_object),
+                    )
+                    | (
+                        PlatformValue::SObjectFieldMap(left_object),
+                        PlatformValue::SObjectFieldMap(right_object),
+                    )
+                    | (
+                        PlatformValue::FieldSetMap(left_object),
+                        PlatformValue::FieldSetMap(right_object),
+                    ) => left_object == right_object,
+                    (
+                        PlatformValue::SObjectField {
+                            object_id: left_object,
+                            field_id: left_field,
+                        },
+                        PlatformValue::SObjectField {
+                            object_id: right_object,
+                            field_id: right_field,
+                        },
+                    )
+                    | (
+                        PlatformValue::DescribeField {
+                            object_id: left_object,
+                            field_id: left_field,
+                        },
+                        PlatformValue::DescribeField {
+                            object_id: right_object,
+                            field_id: right_field,
+                        },
+                    )
+                    | (
+                        PlatformValue::FieldSetMember {
+                            object_id: left_object,
+                            field_id: left_field,
+                        },
+                        PlatformValue::FieldSetMember {
+                            object_id: right_object,
+                            field_id: right_field,
+                        },
+                    ) => left_object == right_object && left_field == right_field,
+                    (
+                        PlatformValue::FieldSet {
+                            object_id: left_object,
+                            name: left_name,
+                        },
+                        PlatformValue::FieldSet {
+                            object_id: right_object,
+                            name: right_name,
+                        },
+                    ) => left_object == right_object && left_name.eq_ignore_ascii_case(right_name),
+                    (
+                        PlatformValue::PicklistEntry(left_value),
+                        PlatformValue::PicklistEntry(right_value),
                     ) => left_value == right_value,
                     _ => left == right,
                 }

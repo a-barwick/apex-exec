@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
+use super::DisplayType;
+
 /// Organization-wide default visibility for one SObject.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -76,17 +78,59 @@ pub struct FieldSchema {
     external_id: bool,
     unique: bool,
     relationship_name: Option<String>,
+    label: String,
+    length: usize,
+    inline_help_text: Option<String>,
+    display_type: DisplayType,
+    picklist_values: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldSetSchema {
+    api_name: String,
+    label: String,
+    fields: Vec<String>,
+}
+
+impl FieldSetSchema {
+    pub fn new(api_name: impl Into<String>, label: impl Into<String>, fields: Vec<String>) -> Self {
+        Self {
+            api_name: api_name.into(),
+            label: label.into(),
+            fields,
+        }
+    }
+
+    pub fn api_name(&self) -> &str {
+        &self.api_name
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
 }
 
 impl FieldSchema {
     pub fn new(api_name: impl Into<String>, data_type: FieldType, nullable: bool) -> Self {
+        let api_name = api_name.into();
+        let display_type = display_type_for_field(&data_type);
+        let length = default_field_length(&data_type);
         Self {
-            api_name: api_name.into(),
+            label: api_name.clone(),
+            api_name,
             data_type,
             nullable,
             external_id: false,
             unique: false,
             relationship_name: None,
+            length,
+            inline_help_text: None,
+            display_type,
+            picklist_values: Vec::new(),
         }
     }
 
@@ -98,6 +142,24 @@ impl FieldSchema {
 
     pub fn with_relationship_name(mut self, relationship_name: impl Into<String>) -> Self {
         self.relationship_name = Some(relationship_name.into());
+        self
+    }
+
+    pub fn with_describe(
+        mut self,
+        label: impl Into<String>,
+        length: Option<usize>,
+        inline_help_text: Option<String>,
+        display_type: DisplayType,
+        picklist_values: Vec<String>,
+    ) -> Self {
+        self.label = label.into();
+        if let Some(length) = length {
+            self.length = length;
+        }
+        self.inline_help_text = inline_help_text;
+        self.display_type = display_type;
+        self.picklist_values = picklist_values;
         self
     }
 
@@ -124,6 +186,50 @@ impl FieldSchema {
     pub fn relationship_name(&self) -> Option<&str> {
         self.relationship_name.as_deref()
     }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn length(&self) -> usize {
+        self.length
+    }
+
+    pub fn inline_help_text(&self) -> Option<&str> {
+        self.inline_help_text.as_deref()
+    }
+
+    pub fn display_type(&self) -> DisplayType {
+        self.display_type
+    }
+
+    pub fn picklist_values(&self) -> &[String] {
+        &self.picklist_values
+    }
+}
+
+fn display_type_for_field(field_type: &FieldType) -> DisplayType {
+    match field_type {
+        FieldType::Boolean => DisplayType::Boolean,
+        FieldType::Integer => DisplayType::Integer,
+        FieldType::String => DisplayType::String,
+        FieldType::Date => DisplayType::Date,
+        FieldType::Datetime => DisplayType::Datetime,
+        FieldType::Id => DisplayType::Id,
+        FieldType::Reference { .. } | FieldType::MetadataRelationship { .. } => {
+            DisplayType::Reference
+        }
+        FieldType::Summary { result_type, .. } => display_type_for_field(result_type),
+    }
+}
+
+fn default_field_length(field_type: &FieldType) -> usize {
+    match field_type {
+        FieldType::String => 255,
+        FieldType::Id | FieldType::Reference { .. } | FieldType::MetadataRelationship { .. } => 18,
+        FieldType::Summary { result_type, .. } => default_field_length(result_type),
+        FieldType::Boolean | FieldType::Integer | FieldType::Date | FieldType::Datetime => 0,
+    }
 }
 
 /// A normalized SObject definition with case-insensitive field lookup.
@@ -133,6 +239,7 @@ pub struct ObjectSchema {
     key_prefix: String,
     sharing_model: SharingModel,
     fields: BTreeMap<String, FieldSchema>,
+    field_sets: BTreeMap<String, FieldSetSchema>,
 }
 
 impl ObjectSchema {
@@ -144,6 +251,7 @@ impl ObjectSchema {
             key_prefix,
             sharing_model: SharingModel::default(),
             fields: BTreeMap::new(),
+            field_sets: BTreeMap::new(),
         }
     }
 
@@ -159,6 +267,7 @@ impl ObjectSchema {
             key_prefix,
             sharing_model: SharingModel::default(),
             fields: BTreeMap::new(),
+            field_sets: BTreeMap::new(),
         })
     }
 
@@ -211,6 +320,29 @@ impl ObjectSchema {
 
     pub fn field_at(&self, index: usize) -> Option<&FieldSchema> {
         self.fields.values().nth(index)
+    }
+
+    pub fn insert_field_set(&mut self, field_set: FieldSetSchema) -> Result<(), SchemaError> {
+        for field in field_set.fields() {
+            self.field(field)?;
+        }
+        let canonical = canonical_name(field_set.api_name());
+        if self.field_sets.contains_key(&canonical) {
+            return Err(SchemaError::DuplicateFieldSet {
+                object: self.api_name.clone(),
+                field_set: field_set.api_name().to_owned(),
+            });
+        }
+        self.field_sets.insert(canonical, field_set);
+        Ok(())
+    }
+
+    pub fn field_sets(&self) -> impl ExactSizeIterator<Item = &FieldSetSchema> {
+        self.field_sets.values()
+    }
+
+    pub fn field_set(&self, api_name: &str) -> Option<&FieldSetSchema> {
+        self.field_sets.get(&canonical_name(api_name))
     }
 }
 
@@ -355,6 +487,10 @@ pub enum SchemaError {
         object: String,
         field: String,
     },
+    DuplicateFieldSet {
+        object: String,
+        field_set: String,
+    },
     InvalidKeyPrefix {
         object: String,
         prefix: String,
@@ -378,6 +514,12 @@ impl fmt::Display for SchemaError {
             }
             Self::UnknownField { object, field } => {
                 write!(formatter, "unknown field `{field}` on SObject `{object}`")
+            }
+            Self::DuplicateFieldSet { object, field_set } => {
+                write!(
+                    formatter,
+                    "duplicate field set `{field_set}` on SObject `{object}`"
+                )
             }
             Self::InvalidKeyPrefix { object, prefix } => write!(
                 formatter,

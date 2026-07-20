@@ -1,6 +1,6 @@
 use super::{
-    FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SharingModel,
-    SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
+    DisplayType, FieldSchema, FieldSetSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError,
+    SharingModel, SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
 };
 use chrono::{DateTime, NaiveDate};
 use std::{
@@ -16,13 +16,21 @@ pub fn import_metadata(
 ) -> Result<SchemaCatalog, MetadataError> {
     let mut object_files = Vec::new();
     let mut field_files = Vec::new();
+    let mut field_set_files = Vec::new();
     for root in source_roots {
-        collect_metadata_files(root.as_ref(), &mut object_files, &mut field_files)?;
+        collect_metadata_files(
+            root.as_ref(),
+            &mut object_files,
+            &mut field_files,
+            &mut field_set_files,
+        )?;
     }
     object_files.sort();
     object_files.dedup();
     field_files.sort();
     field_files.dedup();
+    field_set_files.sort();
+    field_set_files.dedup();
 
     let mut objects = BTreeMap::<String, ObjectBuilder>::new();
     for path in object_files {
@@ -31,11 +39,21 @@ pub fn import_metadata(
     for path in field_files {
         import_field_file(&path, &mut objects)?;
     }
+    for path in field_set_files {
+        import_field_set_file(&path, &mut objects)?;
+    }
+    insert_metadata_relationship_targets(&mut objects);
     resolve_summaries(&mut objects)?;
 
     let mut catalog = SchemaCatalog::new();
+    for object in super::standard_schema::standard_objects() {
+        catalog.insert_object(object)?;
+    }
     for builder in objects.into_values() {
-        catalog.insert_object(builder.finish()?)?;
+        let object = builder.finish()?;
+        if catalog.object(object.api_name()).is_err() {
+            catalog.insert_object(object)?;
+        }
     }
     Ok(catalog)
 }
@@ -108,12 +126,13 @@ struct ObjectBuilder {
     api_name: String,
     sharing_model: SharingModel,
     fields: Vec<FieldSchema>,
+    field_sets: Vec<FieldSetSchema>,
     summaries: Vec<PendingSummary>,
 }
 
 impl ObjectBuilder {
     fn new(api_name: String) -> Self {
-        Self {
+        let mut builder = Self {
             api_name,
             sharing_model: SharingModel::default(),
             fields: vec![
@@ -123,8 +142,18 @@ impl ObjectBuilder {
                 FieldSchema::new("LastModifiedDate", FieldType::Datetime, true),
                 FieldSchema::new("IsDeleted", FieldType::Boolean, true),
             ],
+            field_sets: Vec::new(),
             summaries: Vec::new(),
+        };
+        if builder.api_name.ends_with("__mdt") {
+            builder.fields.extend([
+                FieldSchema::new("DeveloperName", FieldType::String, false),
+                FieldSchema::new("MasterLabel", FieldType::String, false),
+                FieldSchema::new("NamespacePrefix", FieldType::String, true),
+                FieldSchema::new("QualifiedApiName", FieldType::String, false),
+            ]);
         }
+        builder
     }
 
     fn push_field(&mut self, field: ParsedField) {
@@ -139,6 +168,9 @@ impl ObjectBuilder {
         let mut object = ObjectSchema::new(self.api_name).with_sharing_model(self.sharing_model);
         for field in self.fields {
             object.insert_field(field)?;
+        }
+        for field_set in self.field_sets {
+            object.insert_field_set(field_set)?;
         }
         Ok(object)
     }
@@ -156,10 +188,42 @@ enum ParsedField {
     Summary(PendingSummary),
 }
 
+fn insert_metadata_relationship_targets(objects: &mut BTreeMap<String, ObjectBuilder>) {
+    let targets = objects
+        .values()
+        .flat_map(|object| object.fields.iter())
+        .filter_map(|field| match field.data_type() {
+            FieldType::MetadataRelationship {
+                target_metadata, ..
+            } => Some(target_metadata.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for target in targets {
+        let canonical = canonical_name(&target);
+        if objects.contains_key(&canonical) {
+            continue;
+        }
+        let fields = match canonical.as_str() {
+            "entitydefinition" => &["DeveloperName", "QualifiedApiName"][..],
+            "fielddefinition" => &["DeveloperName", "QualifiedApiName"][..],
+            _ => continue,
+        };
+        let mut builder = ObjectBuilder::new(target);
+        builder.fields.extend(
+            fields
+                .iter()
+                .map(|name| FieldSchema::new(*name, FieldType::String, false)),
+        );
+        objects.insert(canonical, builder);
+    }
+}
+
 fn collect_metadata_files(
     directory: &Path,
     object_files: &mut Vec<PathBuf>,
     field_files: &mut Vec<PathBuf>,
+    field_set_files: &mut Vec<PathBuf>,
 ) -> Result<(), MetadataError> {
     if !directory.exists() {
         return Err(MetadataError::invalid(
@@ -176,7 +240,7 @@ fn collect_metadata_files(
             .file_type()
             .map_err(|error| MetadataError::io(&path, "inspect", error))?;
         if file_type.is_dir() {
-            collect_metadata_files(&path, object_files, field_files)?;
+            collect_metadata_files(&path, object_files, field_files, field_set_files)?;
         } else if file_type.is_file() {
             let name = path
                 .file_name()
@@ -186,9 +250,51 @@ fn collect_metadata_files(
                 object_files.push(path);
             } else if name.ends_with(".field-meta.xml") {
                 field_files.push(path);
+            } else if name.ends_with(".fieldSet-meta.xml") {
+                field_set_files.push(path);
             }
         }
     }
+    Ok(())
+}
+
+fn import_field_set_file(
+    path: &Path,
+    objects: &mut BTreeMap<String, ObjectBuilder>,
+) -> Result<(), MetadataError> {
+    let xml = fs::read_to_string(path).map_err(|error| MetadataError::io(path, "read", error))?;
+    let object_name = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            MetadataError::invalid(
+                path,
+                "field set file must be under objects/<Object>/fieldSets",
+            )
+        })?;
+    let fallback_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".fieldSet-meta.xml"))
+        .ok_or_else(|| MetadataError::invalid(path, "invalid field set metadata filename"))?;
+    let builder = objects
+        .get_mut(&canonical_name(object_name))
+        .ok_or_else(|| {
+            MetadataError::invalid(
+                path,
+                format!("field set belongs to unknown custom object `{object_name}`"),
+            )
+        })?;
+    let api_name = tag_text(&xml, "fullName").unwrap_or_else(|| fallback_name.to_owned());
+    let label = tag_text(&xml, "label").unwrap_or_else(|| api_name.clone());
+    let fields = elements(&xml, "displayedFields")
+        .map(|entry| required_text(path, entry, "field"))
+        .collect::<Result<Vec<_>, _>>()?;
+    builder
+        .field_sets
+        .push(FieldSetSchema::new(api_name, label, fields));
     Ok(())
 }
 
@@ -280,6 +386,7 @@ fn parse_field(
     if metadata_type == "Summary" {
         return parse_summary(path, xml, api_name);
     }
+    let display_type = metadata_display_type(&metadata_type);
     let data_type = match metadata_type.as_str() {
         "Checkbox" => FieldType::Boolean,
         "Number" => {
@@ -332,7 +439,27 @@ fn parse_field(
         tag_text(xml, "externalId").is_some_and(|value| value.eq_ignore_ascii_case("true"));
     let unique = tag_text(xml, "unique").is_some_and(|value| value.eq_ignore_ascii_case("true"));
     let relationship_name = tag_text(xml, "relationshipName");
-    let mut field = FieldSchema::new(api_name, data_type, !required);
+    let label = tag_text(xml, "label").unwrap_or_else(|| api_name.clone());
+    let length = tag_text(xml, "length")
+        .map(|value| {
+            value.parse::<usize>().map_err(|_| {
+                MetadataError::invalid(
+                    path,
+                    format!("field `{api_name}` has invalid length `{value}`"),
+                )
+            })
+        })
+        .transpose()?;
+    let picklist_values = elements(xml, "value")
+        .filter_map(|value| tag_text(value, "fullName"))
+        .collect();
+    let mut field = FieldSchema::new(api_name, data_type, !required).with_describe(
+        label,
+        length,
+        tag_text(xml, "inlineHelpText"),
+        display_type,
+        picklist_values,
+    );
     if external_id {
         field = field.with_external_id(unique);
     }
@@ -340,6 +467,27 @@ fn parse_field(
         Some(name) => field.with_relationship_name(name),
         None => field,
     }))
+}
+
+fn metadata_display_type(metadata_type: &str) -> DisplayType {
+    match metadata_type {
+        "Checkbox" => DisplayType::Boolean,
+        "Number" => DisplayType::Double,
+        "Text" | "AutoNumber" => DisplayType::String,
+        "TextArea" | "LongTextArea" => DisplayType::TextArea,
+        "Email" => DisplayType::Email,
+        "Phone" => DisplayType::Phone,
+        "Url" => DisplayType::Url,
+        "Picklist" => DisplayType::Picklist,
+        "MultiselectPicklist" => DisplayType::MultiPicklist,
+        "EncryptedText" => DisplayType::EncryptedString,
+        "Date" => DisplayType::Date,
+        "DateTime" => DisplayType::Datetime,
+        "Lookup" | "MasterDetail" | "MetadataRelationship" => DisplayType::Reference,
+        "Id" => DisplayType::Id,
+        "Summary" => DisplayType::Double,
+        _ => DisplayType::AnyType,
+    }
 }
 
 fn parse_summary(path: &Path, xml: &str, api_name: String) -> Result<ParsedField, MetadataError> {

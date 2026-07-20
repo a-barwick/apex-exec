@@ -1211,8 +1211,12 @@ fn hydrate_row<T: StorageTransaction>(
     let mut relationships = BTreeMap::new();
     if parent_depth > 0 {
         for field in object.fields() {
-            let FieldType::Reference { target_object } = field.data_type() else {
-                continue;
+            let target_object = match field.data_type() {
+                FieldType::Reference { target_object } => target_object,
+                FieldType::MetadataRelationship {
+                    target_metadata, ..
+                } => target_metadata,
+                _ => continue,
             };
             let Some(id) = record.field(field.api_name()).and_then(data_record_id) else {
                 continue;

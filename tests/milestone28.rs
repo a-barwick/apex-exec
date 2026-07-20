@@ -197,6 +197,13 @@ private class TestVisibleDemoTest {
 fn lexical_family_types_share_private_members_without_crossing_top_level_boundaries() {
     let source = r#"
 public class LexicalPrivateDemo {
+    private static final Integer BASE = 40;
+    private static Integer observations = 0;
+
+    private static Integer outerTwo() {
+        return 2;
+    }
+
     private class Left {
         private static Integer forty() {
             return 40;
@@ -209,7 +216,8 @@ public class LexicalPrivateDemo {
 
     private class Right {
         private static Integer total() {
-            return Left.forty() + Left.two();
+            observations++;
+            return Left.forty() + Left.two() + BASE + outerTwo() + observations;
         }
     }
 
@@ -222,7 +230,7 @@ public class LexicalPrivateDemo {
     let compilation = project::compile(&root).unwrap();
     assert_eq!(
         compilation.invoke("LexicalPrivateDemo.run").unwrap(),
-        ["42"]
+        ["85"]
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -244,6 +252,7 @@ public class EnterpriseStringDemo {
         System.debug(pieces.size() + ':' + pieces[0] + ':' + pieces[1]);
         System.debug(String.format('{0}:{1}', new List<Object>{'value', 42}));
         System.debug(String.escapeSingleQuotes('O\'Brien'));
+        System.debug(System.JSON.serialize(new Map<String, Object>{'key' => 'value'}));
 
         try {
             'value'.split('[');
@@ -269,6 +278,7 @@ public class EnterpriseStringDemo {
             "2:a:b",
             "value:42",
             "O\\'Brien",
+            "{\"key\":\"value\"}",
         ]
     );
     fs::remove_dir_all(root).unwrap();
@@ -682,6 +692,224 @@ System.debug(JSON.serialize(state));
 }
 
 #[test]
+fn logging_level_is_a_typed_platform_enum_with_stable_ordering() {
+    let output = execute(
+        r#"
+System.LoggingLevel level = System.LoggingLevel.valueOf('WARN');
+System.debug(level.name());
+System.debug(level.ordinal());
+System.debug(LoggingLevel.values().size());
+System.debug(LoggingLevel.values().get(7).name());
+System.debug(System.LoggingLevel.FINEST, 'leveled');
+try {
+    LoggingLevel.valueOf('NOT_A_LEVEL');
+} catch (TypeException error) {
+    System.debug(error.getTypeName());
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        output,
+        ["WARN", "2", "8", "FINEST", "leveled", "TypeException"]
+    );
+
+    let invalid = check(
+        "public class InvalidLoggingLevel {
+            public void assign() {
+                System.LoggingLevel.ERROR = System.LoggingLevel.INFO;
+            }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        invalid.message.contains("constants are read-only"),
+        "{invalid}"
+    );
+}
+
+#[test]
+fn final_fields_are_assignable_in_declarations_initializers_and_constructors_only() {
+    let output = execute(
+        r#"
+public class FinalFieldRules {
+    private final Integer constructorValue;
+    private final Integer declaredValue = 1;
+    private static final Integer staticValue;
+
+    {
+        this.constructorValue = 2;
+    }
+
+    static {
+        FinalFieldRules.staticValue = 7;
+    }
+
+    public FinalFieldRules(Boolean firstBranch) {
+        if (firstBranch) {
+            this.constructorValue = 3;
+        } else {
+            this.constructorValue = 4;
+        }
+        this.declaredValue = 5;
+    }
+
+    public void show() {
+        System.debug(this.constructorValue);
+        System.debug(this.declaredValue);
+        System.debug(FinalFieldRules.staticValue);
+    }
+}
+
+new FinalFieldRules(true).show();
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["3", "5", "7"]);
+
+    let invalid = check(
+        "public class InvalidFinalFieldMutation {
+            private final Integer value;
+            public InvalidFinalFieldMutation() {
+                this.value = 1;
+            }
+            public void mutate() {
+                this.value = 2;
+            }
+        }",
+    )
+    .unwrap_err();
+    assert!(invalid.message.contains("member `value` is read-only"));
+}
+
+#[test]
+fn final_properties_support_lazy_static_accessors() {
+    let output = execute(
+        r#"
+public class FinalPropertyRules {
+    public static final String LAZY_VALUE {
+        get {
+            if (LAZY_VALUE == null) {
+                LAZY_VALUE = 'ready';
+            }
+            return LAZY_VALUE;
+        }
+        private set;
+    }
+}
+
+System.debug(FinalPropertyRules.LAZY_VALUE);
+System.debug(FinalPropertyRules.LAZY_VALUE);
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["ready", "ready"]);
+}
+
+#[test]
+fn double_values_are_typed_castable_and_finite() {
+    let output = execute(
+        r#"
+Double literalValue = 123456.0987;
+Object untypedValue = JSON.deserializeUntyped('123.45');
+Double castValue = (Double) untypedValue;
+Double parsedValue = Double.valueOf('678.09');
+Object boxedDouble = castValue;
+
+System.debug(literalValue);
+System.debug(castValue == 123.45);
+System.debug(parsedValue.toString());
+System.debug(boxedDouble instanceof Double);
+System.debug(Double.class.getName());
+System.debug(JSON.serialize(new List<Double>{ castValue, parsedValue }));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        output,
+        [
+            "123456.0987",
+            "true",
+            "678.09",
+            "true",
+            "Double",
+            "[123.45,678.09]",
+        ]
+    );
+}
+
+#[test]
+fn typed_json_deserialization_converts_scalars_collections_and_user_objects() {
+    let output = execute(
+        r#"
+public class TypedJsonEnvelope {
+    public String name;
+    public Date created;
+    public List<Double> values;
+}
+
+TypedJsonEnvelope envelope = (TypedJsonEnvelope) System.JSON.deserialize(
+    '{"name":"ready","created":"2026-07-19","values":[1.25,2.5]}',
+    TypedJsonEnvelope.class
+);
+List<String> labels = (List<String>) JSON.deserialize(
+    '["first","second"]',
+    List<String>.class
+);
+
+System.debug(envelope.name);
+System.debug(envelope.created);
+System.debug(envelope.values.get(1));
+System.debug(labels.get(0));
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["ready", "2026-07-19", "2.5", "first"]);
+}
+
+#[test]
+fn visual_editor_dynamic_picklists_return_typed_rows() {
+    let output = execute(
+        r#"
+public class LocalDynamicPicklist extends VisualEditor.DynamicPickList {
+    public override VisualEditor.DataRow getDefaultValue() {
+        return new VisualEditor.DataRow('Default Label', 'default-value');
+    }
+
+    public override VisualEditor.DynamicPickListRows getValues() {
+        VisualEditor.DynamicPickListRows rows =
+            new VisualEditor.DynamicPickListRows();
+        rows.addRow(new VisualEditor.DataRow('First Label', 'first-value'));
+        rows.addRow(new VisualEditor.DataRow('Second Label', 'second-value'));
+        return rows;
+    }
+}
+
+LocalDynamicPicklist picklist = new LocalDynamicPicklist();
+System.debug(picklist.getDefaultValue().getValue());
+List<VisualEditor.DataRow> rows = picklist.getValues().getDataRows();
+System.debug(rows.size());
+System.debug(rows.get(1).getLabel());
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["default-value", "2", "Second Label"]);
+
+    let invalid = check(
+        "public class InvalidPicklist extends VisualEditor.DynamicPickList {
+            public override String getValues() { return ''; }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .message
+            .contains("does not override an inherited method"),
+        "{invalid}"
+    );
+}
+
+#[test]
 fn aura_enabled_options_are_validated_and_runtime_neutral() {
     let source = r#"
 public class AuraSurface {
@@ -948,6 +1176,138 @@ private class PlatformCacheBoundaryTest {
 }
 
 #[test]
+fn custom_metadata_accessors_and_bounded_deep_clone_are_typed() {
+    let source = r#"
+public class CustomMetadataDemo {
+    public static void run() {
+        Map<String, M28Setting__mdt> settings = M28Setting__mdt.getAll();
+        Map<String, M28Setting__mdt> copy = settings.deepClone();
+        System.debug(settings.size() + ':' + copy.size());
+        System.debug(M28Setting__mdt.getInstance('Missing') == null);
+
+        List<M28Setting__mdt> queried = [
+            SELECT
+                DeveloperName,
+                TargetType__r.DeveloperName,
+                TargetField__r.QualifiedApiName
+            FROM M28Setting__mdt
+            WHERE TargetType__r.DeveloperName = 'Invoice'
+        ];
+        for (M28Setting__mdt setting : queried) {
+            System.debug(setting.TargetType__r.DeveloperName);
+            System.debug(setting.TargetField__r.QualifiedApiName);
+        }
+        System.debug(queried.size());
+
+        List<Integer> values = new List<Integer>{1};
+        List<Integer> clonedValues = values.deepClone();
+        clonedValues.add(2);
+        System.debug(values.size() + ':' + clonedValues.size());
+
+        try {
+            new List<M28Alpha__c>{new M28Alpha__c()}.deepClone();
+            System.assert(false);
+        } catch (TypeException error) {
+            System.debug(error.getMessage());
+        }
+    }
+}
+"#;
+    let root = test_project("CustomMetadataDemo", source, &[]);
+    write_object(
+        &root.join("force-app/main/default"),
+        "M28Setting__mdt",
+        "M28 Setting",
+    );
+    let fields = root.join("force-app/main/default/objects/M28Setting__mdt/fields");
+    fs::create_dir_all(&fields).unwrap();
+    fs::write(
+        fields.join("TargetType__c.field-meta.xml"),
+        "<CustomField><fullName>TargetType__c</fullName><referenceTo>EntityDefinition</referenceTo><type>MetadataRelationship</type></CustomField>",
+    )
+    .unwrap();
+    fs::write(
+        fields.join("TargetField__c.field-meta.xml"),
+        "<CustomField><fullName>TargetField__c</fullName><metadataRelationshipControllingField>M28Setting__mdt.TargetType__c</metadataRelationshipControllingField><referenceTo>FieldDefinition</referenceTo><type>MetadataRelationship</type></CustomField>",
+    )
+    .unwrap();
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("CustomMetadataDemo.run").unwrap(),
+        [
+            "0:0",
+            "true",
+            "0",
+            "1:2",
+            "deepClone currently requires scalar or empty collections",
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn schema_tokens_describe_fields_and_field_sets_are_typed_and_structural() {
+    let source = r#"
+public class SchemaDescribeDemo {
+    public static void run() {
+        Schema.SObjectType directType = Schema.M28Alpha__c.SObjectType;
+        Schema.SObjectType globalType = Schema.getGlobalDescribe().get('M28Alpha__c');
+        System.assertEquals(directType, globalType);
+
+        Schema.SObjectField directField = Schema.M28Alpha__c.Code__c;
+        Schema.DescribeSObjectResult objectDescribe = directType.getDescribe();
+        Schema.SObjectField mappedField = objectDescribe.fields.getMap().get('Code__c');
+        System.assertEquals(directField, mappedField);
+
+        Schema.DescribeFieldResult fieldDescribe = directField.getDescribe();
+        System.assertEquals('Code__c', fieldDescribe.getName());
+        System.assertEquals('Code', fieldDescribe.getLabel());
+        System.assertEquals(12, fieldDescribe.getLength());
+        System.assertEquals(Schema.SoapType.STRING, fieldDescribe.getSoapType());
+        System.assertEquals(Schema.DisplayType.STRING, fieldDescribe.getType());
+
+        SObject record = directType.newSObject();
+        record.put(directField, 'value');
+        System.assertEquals('value', record.get(mappedField));
+
+        Schema.FieldSet fieldSet = objectDescribe.fieldSets.getMap().get('Summary');
+        System.assertEquals('Summary Fields', fieldSet.getLabel());
+        List<Schema.FieldSetMember> members = fieldSet.getFields();
+        System.assertEquals(1, members.size());
+        System.assertEquals(directField, members[0].getSObjectField());
+
+        Map<Schema.SObjectType, Schema.SObjectField> tokenMap =
+            new Map<Schema.SObjectType, Schema.SObjectField>{ directType => directField };
+        System.debug(
+            tokenMap.get(globalType).getDescribe().getLocalName()
+            + ':' + members[0].getFieldPath()
+        );
+    }
+}
+"#;
+    let root = test_project("SchemaDescribeDemo", source, &[]);
+    let object = root.join("force-app/main/default/objects/M28Alpha__c");
+    fs::create_dir_all(object.join("fields")).unwrap();
+    fs::write(
+        object.join("fields/Code__c.field-meta.xml"),
+        "<CustomField><fullName>Code__c</fullName><label>Code</label><length>12</length><type>Text</type></CustomField>",
+    )
+    .unwrap();
+    fs::create_dir_all(object.join("fieldSets")).unwrap();
+    fs::write(
+        object.join("fieldSets/Summary.fieldSet-meta.xml"),
+        "<FieldSet><fullName>Summary</fullName><displayedFields><field>Code__c</field><isRequired>false</isRequired></displayedFields><label>Summary Fields</label></FieldSet>",
+    )
+    .unwrap();
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("SchemaDescribeDemo.run").unwrap(),
+        ["Code__c:Code__c"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sobject_type_switch_checks_and_executes_with_single_evaluation() {
     let root = test_project(
         "M28SwitchDemo",
@@ -1196,8 +1556,13 @@ public class ExactEqualityDemo {
         List<Integer> copy = new List<Integer>{1};
         Object expected = 'Delete';
         Object wrongCase = 'DELETE';
+        Object cacheValue = 'sentinel';
 
         System.debug(first == copy);
+        System.debug(cacheValue == 'sentinel');
+        cacheValue = 5;
+        System.debug(cacheValue == 'sentinel');
+        System.debug('sentinel' == cacheValue);
         System.debug(first === alias);
         System.debug(first === copy);
         System.debug(first !== copy);
@@ -1214,7 +1579,8 @@ public class ExactEqualityDemo {
     assert_eq!(
         compilation.invoke("ExactEqualityDemo.run").unwrap(),
         [
-            "true", "true", "false", "true", "true", "false", "true", "true", "1"
+            "true", "true", "false", "false", "true", "false", "true", "true", "false", "true",
+            "true", "1"
         ]
     );
 

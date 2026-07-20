@@ -1,13 +1,14 @@
 use super::{
-    Collection, CollectionId, EvaluatedArgument, Interpreter, PlatformHost, PlatformValue,
-    SObjectId, SObjectInstance, Value, invalid_runtime_operands, runtime_exception,
+    ApexDouble, Collection, CollectionId, EvaluatedArgument, Interpreter, PlatformHost,
+    PlatformValue, SObjectId, SObjectInstance, Value, apex_field_type, invalid_runtime_operands,
+    runtime_exception,
     value_graph::{CycleBehavior, GraphIdentity, TraversalError, ValueGraphTraversal},
 };
 use crate::{
     ast::TypeName,
     diagnostic::Diagnostic,
     hir::PlatformIntrinsic,
-    platform::{ObjectSchema, RecordId},
+    platform::{LoggingLevel, ObjectSchema, RecordId},
     span::Span,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -22,6 +23,26 @@ use std::{collections::BTreeMap, str::FromStr};
 
 const STRIP_INACCESSIBLE_DEPTH_LIMIT: usize = 32;
 const STRIP_INACCESSIBLE_NODE_LIMIT: usize = 10_000;
+const TYPED_JSON_DEPTH_LIMIT: usize = 64;
+const TYPED_JSON_NODE_LIMIT: usize = 4_096;
+
+#[derive(Default)]
+struct TypedJsonState {
+    nodes: usize,
+}
+
+impl TypedJsonState {
+    fn visit(&mut self, depth: usize, span: Span) -> Result<(), Diagnostic> {
+        self.nodes = self.nodes.saturating_add(1);
+        if depth > TYPED_JSON_DEPTH_LIMIT || self.nodes > TYPED_JSON_NODE_LIMIT {
+            return Err(platform_error(
+                "typed JSON exceeds the bounded conversion limits",
+                span,
+            ));
+        }
+        Ok(())
+    }
+}
 
 struct StripInputs {
     access_type: crate::platform::AccessType,
@@ -53,6 +74,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         use PlatformIntrinsic as P;
+        if is_schema_intrinsic(intrinsic) {
+            return self.call_schema_intrinsic(intrinsic, receiver, arguments, span);
+        }
+        if matches!(
+            intrinsic,
+            P::LoggingLevelValues | P::LoggingLevelValueOf | P::PlatformEnumOrdinal
+        ) {
+            return self.call_logging_level(intrinsic, receiver, arguments, span);
+        }
         match intrinsic {
             P::DateNewInstance => {
                 let [year, month, day] = arguments else {
@@ -268,6 +298,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map(Value::Decimal)
                     .map_err(|_| platform_error(format!("invalid Decimal `{value}`"), span))
             }
+            P::DoubleValueOf => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let value = expect_string(&value.value, value.span)?;
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(ApexDouble::new)
+                    .map(Value::Double)
+                    .ok_or_else(|| platform_error(format!("invalid Double `{value}`"), span))
+            }
             P::DecimalSetScale => {
                 let mut decimal = expect_decimal(receiver, span)?;
                 let [scale] = arguments else {
@@ -354,6 +396,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 })?;
                 Ok(Value::String(serialized))
             }
+            P::JsonDeserialize => {
+                let [source, target] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let source_span = source.span;
+                let source = expect_string(&source.value, source_span)?;
+                let Value::TypeLiteral(target) = &target.value else {
+                    return Err(invalid_call_arguments(target.span));
+                };
+                let json: JsonValue = serde_json::from_str(source).map_err(|error| {
+                    platform_error(format!("invalid JSON: {error}"), source_span)
+                })?;
+                self.typed_json_to_value(json, target, span, 0, &mut TypedJsonState::default())
+            }
             P::JsonDeserializeUntyped => {
                 let [value] = arguments else {
                     return Err(invalid_call_arguments(span));
@@ -408,31 +464,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::MatcherGroup | P::MatcherStart | P::MatcherEnd => {
                 self.matcher_capture(receiver, intrinsic, arguments, span)
             }
-            P::SchemaGetGlobalDescribe => {
-                expect_no_arguments(arguments, span)?;
-                let objects = self
-                    .program()
-                    .schema()
-                    .objects()
-                    .enumerate()
-                    .map(|(index, object)| (index, object.api_name().to_owned()))
-                    .collect::<Vec<_>>();
-                let entries = objects
-                    .into_iter()
-                    .map(|(index, name)| {
-                        (
-                            Value::String(name),
-                            self.store
-                                .allocate_platform(PlatformValue::SObjectType(index)),
-                        )
-                    })
-                    .collect();
-                Ok(self.allocate(Collection::Map {
-                    key_type: TypeName::String,
-                    value_type: TypeName::SObjectType,
-                    entries,
-                }))
-            }
             P::SObjectGetSObjectType => {
                 expect_no_arguments(arguments, span)?;
                 let Some(Value::SObject(id)) = receiver else {
@@ -442,28 +473,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(self
                     .store
                     .allocate_platform(PlatformValue::SObjectType(object_id)))
-            }
-            P::SObjectTypeGetDescribe => {
-                expect_no_arguments(arguments, span)?;
-                let object_id = self.expect_schema_object(receiver, false, span)?;
-                Ok(self
-                    .store
-                    .allocate_platform(PlatformValue::DescribeSObject(object_id)))
-            }
-            P::DescribeGetName | P::DescribeGetKeyPrefix | P::DescribeIsCustom => {
-                expect_no_arguments(arguments, span)?;
-                let object_id = self.expect_schema_object(receiver, true, span)?;
-                let object = self
-                    .program()
-                    .schema()
-                    .object_at(object_id)
-                    .expect("describe handle references schema object");
-                Ok(match intrinsic {
-                    P::DescribeGetName => Value::String(object.api_name().to_owned()),
-                    P::DescribeGetKeyPrefix => Value::String(object.key_prefix().to_owned()),
-                    P::DescribeIsCustom => Value::Boolean(object.api_name().ends_with("__c")),
-                    _ => unreachable!(),
-                })
             }
             P::TestStartTest | P::TestStopTest | P::TestIsRunningTest => {
                 self.call_test_context(intrinsic, arguments, span)
@@ -553,6 +562,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .resolve_type_for_name(name, span)
                     .map_or_else(|| Value::Null(Some(TypeName::Type)), Value::TypeLiteral))
             }
+            P::LoggingLevelValues | P::LoggingLevelValueOf | P::PlatformEnumOrdinal => {
+                unreachable!("LoggingLevel intrinsics are dispatched before the platform match")
+            }
             P::AsyncContextGetJobId
             | P::BatchableContextGetChildJobId
             | P::FinalizerContextGetAsyncApexJobId
@@ -632,6 +644,58 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(Value::Void)
             }
             P::CallableCall => self.call_callable(receiver, arguments, span),
+            P::VisualEditorDataRowGetLabel | P::VisualEditorDataRowGetValue => {
+                expect_no_arguments(arguments, span)?;
+                let id = platform_id(receiver, span)?;
+                let PlatformValue::VisualEditorDataRow { label, value } = self.store.platform(id)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::String(
+                    if intrinsic == P::VisualEditorDataRowGetLabel {
+                        label.clone()
+                    } else {
+                        value.clone()
+                    },
+                ))
+            }
+            P::VisualEditorRowsAddRow => {
+                let rows = platform_id(receiver, span)?;
+                let [row] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let Value::Platform(row) = row.value else {
+                    return Err(invalid_runtime_operands(row.span));
+                };
+                if !matches!(
+                    self.store.platform(row),
+                    PlatformValue::VisualEditorDataRow { .. }
+                ) {
+                    return Err(invalid_runtime_operands(span));
+                }
+                let PlatformValue::VisualEditorDynamicPickListRows(values) =
+                    self.store.platform_mut(rows)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                values.push(row);
+                Ok(Value::Void)
+            }
+            P::VisualEditorRowsGetDataRows => {
+                expect_no_arguments(arguments, span)?;
+                let rows = platform_id(receiver, span)?;
+                let PlatformValue::VisualEditorDynamicPickListRows(values) =
+                    self.store.platform(rows)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let elements = values.iter().copied().map(Value::Platform).collect();
+                Ok(self.allocate(Collection::List {
+                    element_type: TypeName::VisualEditorDataRow,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
             P::TypeGetName => {
                 expect_no_arguments(arguments, span)?;
                 let Some(Value::TypeLiteral(ty)) = receiver else {
@@ -642,6 +706,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::TypeNewInstance => {
                 expect_no_arguments(arguments, span)?;
                 self.instantiate_type(receiver, span)
+            }
+            P::SchemaGetGlobalDescribe
+            | P::SObjectTypeGetDescribe
+            | P::SObjectTypeGetName
+            | P::SObjectTypeNewSObject
+            | P::DescribeGetName
+            | P::DescribeGetLocalName
+            | P::DescribeGetLabel
+            | P::DescribeGetLabelPlural
+            | P::DescribeGetKeyPrefix
+            | P::DescribeIsCustom
+            | P::DescribeIsCustomSetting
+            | P::DescribeIsAccessible
+            | P::DescribeIsDeletable
+            | P::DescribeIsUpdateable
+            | P::SObjectFieldGetDescribe
+            | P::SObjectFieldMapGetMap
+            | P::FieldSetMapGetMap
+            | P::DescribeFieldGetName
+            | P::DescribeFieldGetLocalName
+            | P::DescribeFieldGetLabel
+            | P::DescribeFieldGetLength
+            | P::DescribeFieldGetInlineHelpText
+            | P::DescribeFieldGetRelationshipName
+            | P::DescribeFieldGetSoapType
+            | P::DescribeFieldGetType
+            | P::DescribeFieldGetReferenceTo
+            | P::DescribeFieldGetPicklistValues
+            | P::DescribeFieldIsNameField
+            | P::DescribeFieldIsSortable
+            | P::DescribeFieldIsAccessible
+            | P::FieldSetGetName
+            | P::FieldSetGetLabel
+            | P::FieldSetGetNamespace
+            | P::FieldSetGetFields
+            | P::FieldSetMemberGetFieldPath
+            | P::FieldSetMemberGetLabel
+            | P::FieldSetMemberGetSObjectField
+            | P::PicklistEntryGetValue => {
+                unreachable!("schema intrinsics are dispatched before the platform match")
             }
             P::LimitsGetQueries
             | P::LimitsGetLimitQueries
@@ -761,6 +865,64 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn call_logging_level(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::LoggingLevelValues => {
+                expect_no_arguments(arguments, span)?;
+                let elements = LoggingLevel::VALUES
+                    .into_iter()
+                    .map(|value| {
+                        self.store.allocate_platform(PlatformValue::PlatformEnum(
+                            crate::platform::PlatformEnum::LoggingLevel(value),
+                        ))
+                    })
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type: TypeName::LoggingLevel,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            P::LoggingLevelValueOf => {
+                let [name] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let name_span = name.span;
+                let name = expect_string(&name.value, name_span)?;
+                let value = LoggingLevel::from_apex_name(name).ok_or_else(|| {
+                    runtime_exception(
+                        "TypeException",
+                        format!("Invalid enum value: {name}"),
+                        name_span,
+                    )
+                })?;
+                Ok(self.store.allocate_platform(PlatformValue::PlatformEnum(
+                    crate::platform::PlatformEnum::LoggingLevel(value),
+                )))
+            }
+            P::PlatformEnumOrdinal => {
+                expect_no_arguments(arguments, span)?;
+                let Some(Value::Platform(id)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let PlatformValue::PlatformEnum(crate::platform::PlatformEnum::LoggingLevel(value)) =
+                    self.store.platform(id)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::Integer(value.ordinal()))
+            }
+            _ => unreachable!("only LoggingLevel intrinsics use this helper"),
+        }
+    }
+
     fn set_test_mock(
         &mut self,
         arguments: &[EvaluatedArgument],
@@ -849,84 +1011,98 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match receiver {
-            Some(Value::Platform(id)) => {
-                let PlatformValue::AsyncContext { job_id, .. } = self.store.platform(id) else {
-                    return Err(invalid_runtime_operands(span));
-                };
-                let job_id = job_id.clone();
-                Ok(match intrinsic {
-                    PlatformIntrinsic::AsyncContextGetJobId
-                    | PlatformIntrinsic::FinalizerContextGetAsyncApexJobId
-                    | PlatformIntrinsic::SchedulableContextGetTriggerId => Value::Id(job_id),
-                    PlatformIntrinsic::BatchableContextGetChildJobId => {
-                        Value::Null(Some(TypeName::Id))
-                    }
-                    PlatformIntrinsic::FinalizerContextGetException => {
-                        Value::Null(Some(TypeName::Exception))
-                    }
-                    PlatformIntrinsic::FinalizerContextGetResult => {
-                        self.store.allocate_platform(PlatformValue::PlatformEnum(
-                            crate::platform::PlatformEnum::ParentJobResult(
-                                crate::platform::ParentJobResult::Success,
-                            ),
-                        ))
-                    }
-                    PlatformIntrinsic::FinalizerContextGetRequestId => {
-                        Value::String(self.current_request_id())
-                    }
-                    _ => unreachable!("non-context intrinsic reached context dispatch"),
-                })
-            }
+            Some(Value::Platform(id)) => self.call_native_async_context(id, intrinsic, span),
             Some(Value::Object(receiver)) => {
-                let class_id = self.store.object(receiver).class_id;
-                let target = match intrinsic {
-                    PlatformIntrinsic::AsyncContextGetJobId => self
-                        .program()
-                        .batchable_context_contract(class_id)
-                        .map(|contract| contract.get_job_id)
-                        .or_else(|| self.program().queueable_context_contract(class_id)),
-                    PlatformIntrinsic::BatchableContextGetChildJobId => self
-                        .program()
-                        .batchable_context_contract(class_id)
-                        .map(|contract| contract.get_child_job_id),
-                    PlatformIntrinsic::FinalizerContextGetAsyncApexJobId => self
-                        .program()
-                        .finalizer_context_contract(class_id)
-                        .map(|contract| contract.get_async_apex_job_id),
-                    PlatformIntrinsic::FinalizerContextGetException => self
-                        .program()
-                        .finalizer_context_contract(class_id)
-                        .map(|contract| contract.get_exception),
-                    PlatformIntrinsic::FinalizerContextGetResult => self
-                        .program()
-                        .finalizer_context_contract(class_id)
-                        .map(|contract| contract.get_result),
-                    PlatformIntrinsic::FinalizerContextGetRequestId => self
-                        .program()
-                        .finalizer_context_contract(class_id)
-                        .map(|contract| contract.get_request_id),
-                    PlatformIntrinsic::SchedulableContextGetTriggerId => {
-                        self.program().schedulable_context_contract(class_id)
-                    }
-                    _ => unreachable!("non-context intrinsic reached context dispatch"),
-                }
-                .ok_or_else(|| {
-                    runtime_exception(
-                        "TypeException",
-                        "runtime object does not implement the checked platform context contract",
-                        span,
-                    )
-                })?;
-                self.evaluate_class_method_arguments(
-                    target,
-                    Some(receiver),
-                    Vec::new(),
-                    span,
-                    true,
-                    false,
-                )
+                self.call_mock_async_context(receiver, intrinsic, span)
             }
             _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn call_native_async_context(
+        &mut self,
+        id: super::PlatformValueId,
+        intrinsic: PlatformIntrinsic,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let PlatformValue::AsyncContext { job_id, .. } = self.store.platform(id) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let job_id = job_id.clone();
+        Ok(match intrinsic {
+            PlatformIntrinsic::AsyncContextGetJobId
+            | PlatformIntrinsic::FinalizerContextGetAsyncApexJobId
+            | PlatformIntrinsic::SchedulableContextGetTriggerId => Value::Id(job_id),
+            PlatformIntrinsic::BatchableContextGetChildJobId => Value::Null(Some(TypeName::Id)),
+            PlatformIntrinsic::FinalizerContextGetException => {
+                Value::Null(Some(TypeName::Exception))
+            }
+            PlatformIntrinsic::FinalizerContextGetResult => self.store.allocate_platform(
+                PlatformValue::PlatformEnum(crate::platform::PlatformEnum::ParentJobResult(
+                    crate::platform::ParentJobResult::Success,
+                )),
+            ),
+            PlatformIntrinsic::FinalizerContextGetRequestId => {
+                Value::String(self.current_request_id())
+            }
+            _ => unreachable!("non-context intrinsic reached context dispatch"),
+        })
+    }
+
+    fn call_mock_async_context(
+        &mut self,
+        receiver: super::ObjectId,
+        intrinsic: PlatformIntrinsic,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let class_id = self.store.object(receiver).class_id;
+        let target = self
+            .mock_async_context_target(class_id, intrinsic)
+            .ok_or_else(|| {
+                runtime_exception(
+                    "TypeException",
+                    "runtime object does not implement the checked platform context contract",
+                    span,
+                )
+            })?;
+        self.evaluate_class_method_arguments(target, Some(receiver), Vec::new(), span, true, false)
+    }
+
+    fn mock_async_context_target(
+        &self,
+        class_id: usize,
+        intrinsic: PlatformIntrinsic,
+    ) -> Option<crate::hir::ClassMemberId> {
+        match intrinsic {
+            PlatformIntrinsic::AsyncContextGetJobId => self
+                .program()
+                .batchable_context_contract(class_id)
+                .map(|contract| contract.get_job_id)
+                .or_else(|| self.program().queueable_context_contract(class_id)),
+            PlatformIntrinsic::BatchableContextGetChildJobId => self
+                .program()
+                .batchable_context_contract(class_id)
+                .map(|contract| contract.get_child_job_id),
+            PlatformIntrinsic::FinalizerContextGetAsyncApexJobId => self
+                .program()
+                .finalizer_context_contract(class_id)
+                .map(|contract| contract.get_async_apex_job_id),
+            PlatformIntrinsic::FinalizerContextGetException => self
+                .program()
+                .finalizer_context_contract(class_id)
+                .map(|contract| contract.get_exception),
+            PlatformIntrinsic::FinalizerContextGetResult => self
+                .program()
+                .finalizer_context_contract(class_id)
+                .map(|contract| contract.get_result),
+            PlatformIntrinsic::FinalizerContextGetRequestId => self
+                .program()
+                .finalizer_context_contract(class_id)
+                .map(|contract| contract.get_request_id),
+            PlatformIntrinsic::SchedulableContextGetTriggerId => {
+                self.program().schedulable_context_contract(class_id)
+            }
+            _ => unreachable!("non-context intrinsic reached context dispatch"),
         }
     }
 
@@ -1530,6 +1706,446 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    pub(super) fn expect_any_schema_object(
+        &self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<usize, Diagnostic> {
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match self.store.platform(id) {
+            PlatformValue::SObjectType(object_id)
+            | PlatformValue::DescribeSObject(object_id)
+            | PlatformValue::SObjectFieldMap(object_id)
+            | PlatformValue::FieldSetMap(object_id) => Ok(*object_id),
+            _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn expect_schema_field(
+        &self,
+        receiver: Option<Value>,
+        describe: bool,
+        span: Span,
+    ) -> Result<(usize, usize), Diagnostic> {
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match self.store.platform(id) {
+            PlatformValue::SObjectField {
+                object_id,
+                field_id,
+            } if !describe => Ok((*object_id, *field_id)),
+            PlatformValue::DescribeField {
+                object_id,
+                field_id,
+            } if describe => Ok((*object_id, *field_id)),
+            _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn call_schema_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        if intrinsic != P::SObjectTypeNewSObject {
+            expect_no_arguments(arguments, span)?;
+        }
+        match intrinsic {
+            P::SchemaGetGlobalDescribe => self.schema_global_describe(),
+            P::SObjectTypeGetDescribe => {
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                Ok(self
+                    .store
+                    .allocate_platform(PlatformValue::DescribeSObject(object_id)))
+            }
+            P::SObjectTypeGetName => {
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                Ok(Value::String(
+                    self.schema_object(object_id).api_name().to_owned(),
+                ))
+            }
+            P::SObjectTypeNewSObject => {
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                self.schema_new_sobject(object_id, arguments, span)
+            }
+            P::DescribeGetName
+            | P::DescribeGetLocalName
+            | P::DescribeGetLabel
+            | P::DescribeGetLabelPlural
+            | P::DescribeGetKeyPrefix
+            | P::DescribeIsCustom
+            | P::DescribeIsCustomSetting
+            | P::DescribeIsAccessible
+            | P::DescribeIsDeletable
+            | P::DescribeIsUpdateable => self.describe_sobject_value(intrinsic, receiver, span),
+            P::SObjectFieldGetDescribe => {
+                let (object_id, field_id) = self.expect_schema_field(receiver, false, span)?;
+                Ok(self.store.allocate_platform(PlatformValue::DescribeField {
+                    object_id,
+                    field_id,
+                }))
+            }
+            P::SObjectFieldMapGetMap => self.sobject_field_map(receiver, span),
+            P::FieldSetMapGetMap => self.field_set_map(receiver, span),
+            P::DescribeFieldGetName
+            | P::DescribeFieldGetLocalName
+            | P::DescribeFieldGetLabel
+            | P::DescribeFieldGetLength
+            | P::DescribeFieldGetInlineHelpText
+            | P::DescribeFieldGetRelationshipName
+            | P::DescribeFieldGetSoapType
+            | P::DescribeFieldGetType
+            | P::DescribeFieldGetReferenceTo
+            | P::DescribeFieldGetPicklistValues
+            | P::DescribeFieldIsNameField
+            | P::DescribeFieldIsSortable
+            | P::DescribeFieldIsAccessible => self.describe_field_value(intrinsic, receiver, span),
+            P::FieldSetGetName
+            | P::FieldSetGetLabel
+            | P::FieldSetGetNamespace
+            | P::FieldSetGetFields => self.field_set_value(intrinsic, receiver, span),
+            P::FieldSetMemberGetFieldPath
+            | P::FieldSetMemberGetLabel
+            | P::FieldSetMemberGetSObjectField => {
+                self.field_set_member_value(intrinsic, receiver, span)
+            }
+            P::PicklistEntryGetValue => {
+                let Some(Value::Platform(id)) = receiver else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let PlatformValue::PicklistEntry(value) = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::String(value.clone()))
+            }
+            _ => unreachable!("schema intrinsic dispatch is closed"),
+        }
+    }
+
+    fn schema_global_describe(&mut self) -> Result<Value, Diagnostic> {
+        let objects = self
+            .program()
+            .schema()
+            .objects()
+            .enumerate()
+            .map(|(index, object)| (index, object.api_name().to_owned()))
+            .collect::<Vec<_>>();
+        let entries = objects
+            .into_iter()
+            .map(|(index, name)| {
+                (
+                    Value::String(name),
+                    self.store
+                        .allocate_platform(PlatformValue::SObjectType(index)),
+                )
+            })
+            .collect();
+        Ok(self.allocate(Collection::Map {
+            key_type: TypeName::String,
+            value_type: TypeName::SObjectType,
+            entries,
+        }))
+    }
+
+    fn schema_object(&self, object_id: usize) -> &ObjectSchema {
+        self.program()
+            .schema()
+            .object_at(object_id)
+            .expect("schema handle references a checked object")
+    }
+
+    fn schema_new_sobject(
+        &mut self,
+        object_id: usize,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        if arguments.len() > 2 {
+            return Err(invalid_call_arguments(span));
+        }
+        let id = match arguments.first() {
+            None => None,
+            Some(argument) => match &argument.value {
+                Value::Id(id) | Value::String(id) => Some(id.clone()),
+                Value::Null(_) => None,
+                _ => return Err(invalid_runtime_operands(argument.span)),
+            },
+        };
+        if let Some(load_defaults) = arguments.get(1)
+            && !matches!(load_defaults.value, Value::Boolean(_))
+        {
+            return Err(invalid_runtime_operands(load_defaults.span));
+        }
+        let value = self.store.allocate_sobject(object_id);
+        if let (Value::SObject(sobject), Some(id)) = (&value, id)
+            && let Some(field_id) = self.schema_object(object_id).field_index("Id")
+        {
+            self.store
+                .sobject_mut(*sobject)
+                .fields
+                .insert(field_id, Value::Id(id));
+        }
+        Ok(value)
+    }
+
+    fn describe_sobject_value(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        let object_id = self.expect_schema_object(receiver, true, span)?;
+        let object = self.schema_object(object_id);
+        Ok(match intrinsic {
+            P::DescribeGetName => Value::String(object.api_name().to_owned()),
+            P::DescribeGetLocalName => Value::String(local_schema_name(object.api_name())),
+            P::DescribeGetLabel => Value::String(schema_label(object.api_name())),
+            P::DescribeGetLabelPlural => {
+                Value::String(format!("{}s", schema_label(object.api_name())))
+            }
+            P::DescribeGetKeyPrefix => Value::String(object.key_prefix().to_owned()),
+            P::DescribeIsCustom => Value::Boolean(
+                object.api_name().ends_with("__c")
+                    || object.api_name().ends_with("__e")
+                    || object.api_name().ends_with("__mdt"),
+            ),
+            P::DescribeIsCustomSetting => Value::Boolean(false),
+            P::DescribeIsAccessible | P::DescribeIsDeletable | P::DescribeIsUpdateable => {
+                Value::Boolean(true)
+            }
+            _ => unreachable!("describe SObject accessor is closed"),
+        })
+    }
+
+    fn sobject_field_map(
+        &mut self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let object_id = self.expect_any_schema_object(receiver, span)?;
+        let fields = self
+            .schema_object(object_id)
+            .fields()
+            .enumerate()
+            .map(|(field_id, field)| (field_id, field.api_name().to_owned()))
+            .collect::<Vec<_>>();
+        let entries = fields
+            .into_iter()
+            .map(|(field_id, name)| {
+                (
+                    Value::String(name),
+                    self.store.allocate_platform(PlatformValue::SObjectField {
+                        object_id,
+                        field_id,
+                    }),
+                )
+            })
+            .collect();
+        Ok(self.allocate(Collection::Map {
+            key_type: TypeName::String,
+            value_type: TypeName::SObjectField,
+            entries,
+        }))
+    }
+
+    fn describe_field_value(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        let (object_id, field_id) = self.expect_schema_field(receiver, true, span)?;
+        let field = self
+            .schema_object(object_id)
+            .field_at(field_id)
+            .expect("describe field handle references a checked field");
+        Ok(match intrinsic {
+            P::DescribeFieldGetName => Value::String(field.api_name().to_owned()),
+            P::DescribeFieldGetLocalName => Value::String(local_schema_name(field.api_name())),
+            P::DescribeFieldGetLabel => Value::String(field.label().to_owned()),
+            P::DescribeFieldGetLength => {
+                Value::Integer(i64::try_from(field.length()).unwrap_or(i64::MAX))
+            }
+            P::DescribeFieldGetInlineHelpText => field
+                .inline_help_text()
+                .map(|value| Value::String(value.to_owned()))
+                .unwrap_or_else(|| Value::Null(Some(TypeName::String))),
+            P::DescribeFieldGetRelationshipName => field
+                .relationship_name()
+                .map(|value| Value::String(value.to_owned()))
+                .unwrap_or_else(|| Value::Null(Some(TypeName::String))),
+            P::DescribeFieldGetSoapType => {
+                let value = schema_soap_type(field);
+                self.store
+                    .allocate_platform(PlatformValue::PlatformEnum(value))
+            }
+            P::DescribeFieldGetType => self.store.allocate_platform(PlatformValue::PlatformEnum(
+                crate::platform::PlatformEnum::DisplayType(field.display_type()),
+            )),
+            P::DescribeFieldGetReferenceTo => {
+                let target = match field.data_type() {
+                    crate::platform::FieldType::Reference { target_object } => {
+                        Some(target_object.as_str())
+                    }
+                    crate::platform::FieldType::MetadataRelationship {
+                        target_metadata, ..
+                    } => Some(target_metadata.as_str()),
+                    _ => None,
+                };
+                let elements = target
+                    .and_then(|target| self.program().schema().object_index(target))
+                    .map(|target| {
+                        vec![
+                            self.store
+                                .allocate_platform(PlatformValue::SObjectType(target)),
+                        ]
+                    })
+                    .unwrap_or_default();
+                self.allocate(Collection::List {
+                    element_type: TypeName::SObjectType,
+                    elements,
+                    iteration_depth: 0,
+                })
+            }
+            P::DescribeFieldGetPicklistValues => {
+                let values = field.picklist_values().to_vec();
+                let elements = values
+                    .into_iter()
+                    .map(|value| {
+                        self.store
+                            .allocate_platform(PlatformValue::PicklistEntry(value))
+                    })
+                    .collect();
+                self.allocate(Collection::List {
+                    element_type: TypeName::PicklistEntry,
+                    elements,
+                    iteration_depth: 0,
+                })
+            }
+            P::DescribeFieldIsNameField => {
+                Value::Boolean(field.api_name().eq_ignore_ascii_case("Name"))
+            }
+            P::DescribeFieldIsSortable | P::DescribeFieldIsAccessible => Value::Boolean(true),
+            _ => unreachable!("describe field accessor is closed"),
+        })
+    }
+
+    fn field_set_map(&mut self, receiver: Option<Value>, span: Span) -> Result<Value, Diagnostic> {
+        let object_id = self.expect_any_schema_object(receiver, span)?;
+        let field_sets = self
+            .schema_object(object_id)
+            .field_sets()
+            .map(|field_set| field_set.api_name().to_owned())
+            .collect::<Vec<_>>();
+        let entries = field_sets
+            .into_iter()
+            .map(|name| {
+                (
+                    Value::String(name.clone()),
+                    self.store
+                        .allocate_platform(PlatformValue::FieldSet { object_id, name }),
+                )
+            })
+            .collect();
+        Ok(self.allocate(Collection::Map {
+            key_type: TypeName::String,
+            value_type: TypeName::FieldSet,
+            entries,
+        }))
+    }
+
+    fn field_set_value(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let PlatformValue::FieldSet { object_id, name } = self.store.platform(id) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let object_id = *object_id;
+        let name = name.clone();
+        let field_set = self
+            .schema_object(object_id)
+            .field_set(&name)
+            .expect("field set handle references imported metadata");
+        Ok(match intrinsic {
+            P::FieldSetGetName => Value::String(name),
+            P::FieldSetGetLabel => Value::String(field_set.label().to_owned()),
+            P::FieldSetGetNamespace => Value::Null(Some(TypeName::String)),
+            P::FieldSetGetFields => {
+                let field_ids = field_set
+                    .fields()
+                    .iter()
+                    .filter_map(|field| self.schema_object(object_id).field_index(field))
+                    .collect::<Vec<_>>();
+                let elements = field_ids
+                    .into_iter()
+                    .map(|field_id| {
+                        self.store.allocate_platform(PlatformValue::FieldSetMember {
+                            object_id,
+                            field_id,
+                        })
+                    })
+                    .collect();
+                self.allocate(Collection::List {
+                    element_type: TypeName::FieldSetMember,
+                    elements,
+                    iteration_depth: 0,
+                })
+            }
+            _ => unreachable!("field set accessor is closed"),
+        })
+    }
+
+    fn field_set_member_value(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let PlatformValue::FieldSetMember {
+            object_id,
+            field_id,
+        } = self.store.platform(id)
+        else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let object_id = *object_id;
+        let field_id = *field_id;
+        let field = self
+            .schema_object(object_id)
+            .field_at(field_id)
+            .expect("field set member references a checked field");
+        Ok(match intrinsic {
+            P::FieldSetMemberGetFieldPath => Value::String(field.api_name().to_owned()),
+            P::FieldSetMemberGetLabel => Value::String(field.label().to_owned()),
+            P::FieldSetMemberGetSObjectField => {
+                self.store.allocate_platform(PlatformValue::SObjectField {
+                    object_id,
+                    field_id,
+                })
+            }
+            _ => unreachable!("field set member accessor is closed"),
+        })
+    }
+
     fn mutate_http_request(
         &mut self,
         receiver: Option<Value>,
@@ -1720,6 +2336,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 JsonNumber::from_str(&value.normalize().to_string())
                     .map_err(|_| platform_error("Decimal cannot be serialized to JSON", span))?,
             ),
+            Value::Double(value) => JsonNumber::from_f64(value.get())
+                .map(JsonValue::Number)
+                .ok_or_else(|| platform_error("Double cannot be serialized to JSON", span))?,
             Value::String(value) | Value::Id(value) => JsonValue::String(value.clone()),
             Value::Date(value) => JsonValue::String(value.format("%Y-%m-%d").to_string()),
             Value::Datetime(value) => {
@@ -1867,6 +2486,281 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         result
     }
 
+    fn typed_json_to_value(
+        &mut self,
+        value: JsonValue,
+        target: &TypeName,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        state.visit(depth, span)?;
+        if value.is_null() {
+            return Ok(Value::Null(Some(target.clone())));
+        }
+        match target {
+            TypeName::Object => self.bounded_untyped_json(value, span, depth, state),
+            TypeName::String => match value {
+                JsonValue::String(value) => Ok(Value::String(value)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Boolean => match value {
+                JsonValue::Bool(value) => Ok(Value::Boolean(value)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Integer => match value.as_i64().and_then(|value| i32::try_from(value).ok()) {
+                Some(value) => Ok(Value::Integer(i64::from(value))),
+                None => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Long => value
+                .as_i64()
+                .map(Value::Long)
+                .ok_or_else(|| typed_json_mismatch(target, span)),
+            TypeName::Decimal => match value {
+                JsonValue::Number(value) => Decimal::from_str(&value.to_string())
+                    .map(Value::Decimal)
+                    .map_err(|_| typed_json_mismatch(target, span)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Double => match value {
+                JsonValue::Number(value) => value
+                    .as_f64()
+                    .and_then(ApexDouble::new)
+                    .map(Value::Double)
+                    .ok_or_else(|| typed_json_mismatch(target, span)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Date => match value {
+                JsonValue::String(value) => NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                    .map(Value::Date)
+                    .map_err(|_| typed_json_mismatch(target, span)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Datetime => match value {
+                JsonValue::String(value) => parse_json_datetime(&value, span).map(Value::Datetime),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Time => match value {
+                JsonValue::String(value) => NaiveTime::parse_from_str(&value, "%H:%M:%S%.f")
+                    .map(Value::Time)
+                    .map_err(|_| typed_json_mismatch(target, span)),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::Id => match value {
+                JsonValue::String(value) => validate_id(&value, span).map(Value::Id),
+                _ => Err(typed_json_mismatch(target, span)),
+            },
+            TypeName::List(element) | TypeName::Set(element) => {
+                let JsonValue::Array(values) = value else {
+                    return Err(typed_json_mismatch(target, span));
+                };
+                let elements = values
+                    .into_iter()
+                    .map(|value| self.typed_json_to_value(value, element, span, depth + 1, state))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self
+                    .store
+                    .allocate_collection(if matches!(target, TypeName::List(_)) {
+                        Collection::List {
+                            element_type: (**element).clone(),
+                            elements,
+                            iteration_depth: 0,
+                        }
+                    } else {
+                        Collection::Set {
+                            element_type: (**element).clone(),
+                            elements,
+                            iteration_depth: 0,
+                        }
+                    }))
+            }
+            TypeName::Map(key, value_type) if **key == TypeName::String => {
+                let JsonValue::Object(values) = value else {
+                    return Err(typed_json_mismatch(target, span));
+                };
+                let entries = values
+                    .into_iter()
+                    .map(|(key, value)| {
+                        self.typed_json_to_value(value, value_type, span, depth + 1, state)
+                            .map(|value| (Value::String(key), value))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.store.allocate_collection(Collection::Map {
+                    key_type: TypeName::String,
+                    value_type: (**value_type).clone(),
+                    entries,
+                }))
+            }
+            TypeName::Custom(name) => {
+                let JsonValue::Object(values) = value else {
+                    return Err(typed_json_mismatch(target, span));
+                };
+                self.typed_json_object(name, values, span, depth, state)
+            }
+            _ => Err(platform_error(
+                format!(
+                    "JSON.deserialize does not yet support target {}",
+                    target.apex_name()
+                ),
+                span,
+            )),
+        }
+    }
+
+    fn bounded_untyped_json(
+        &mut self,
+        value: JsonValue,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        Ok(match value {
+            JsonValue::Null => Value::Null(Some(TypeName::Object)),
+            JsonValue::Bool(value) => Value::Boolean(value),
+            JsonValue::String(value) => Value::String(value),
+            JsonValue::Number(value) => {
+                if let Some(integer) = value.as_i64() {
+                    if i32::try_from(integer).is_ok() {
+                        Value::Integer(integer)
+                    } else {
+                        Value::Long(integer)
+                    }
+                } else {
+                    Value::Decimal(
+                        Decimal::from_str(&value.to_string())
+                            .map_err(|_| platform_error("JSON number is out of range", span))?,
+                    )
+                }
+            }
+            JsonValue::Array(values) => {
+                let elements = values
+                    .into_iter()
+                    .map(|value| {
+                        state.visit(depth + 1, span)?;
+                        self.bounded_untyped_json(value, span, depth + 1, state)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.allocate(Collection::List {
+                    element_type: TypeName::Object,
+                    elements,
+                    iteration_depth: 0,
+                })
+            }
+            JsonValue::Object(values) => {
+                let entries = values
+                    .into_iter()
+                    .map(|(key, value)| {
+                        state.visit(depth + 1, span)?;
+                        self.bounded_untyped_json(value, span, depth + 1, state)
+                            .map(|value| (Value::String(key), value))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.allocate(Collection::Map {
+                    key_type: TypeName::String,
+                    value_type: TypeName::Object,
+                    entries,
+                })
+            }
+        })
+    }
+
+    fn typed_json_object(
+        &mut self,
+        name: &crate::ast::NamedType,
+        values: JsonMap<String, JsonValue>,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        if let Some(object_id) = self
+            .program()
+            .schema()
+            .object_index(crate::hir::schema_api_name(name))
+        {
+            return self.typed_json_sobject(object_id, values, span, depth, state);
+        }
+        let class_id = self.runtime_class_id(name).ok_or_else(|| {
+            platform_error(
+                format!("unknown JSON target class `{}`", name.spelling),
+                span,
+            )
+        })?;
+        let object = self.store.allocate_object(class_id);
+        self.allocate_instance_fields(object, class_id);
+        let metadata = self
+            .program()
+            .class_metadata(crate::hir::ClassId::from_index(class_id))
+            .clone();
+        let mut slots = Vec::new();
+        for owner in metadata.lineage_base_first {
+            for target in &self.program().class_metadata(owner).instance_slots {
+                let member = &self.classes()[target.class_id].members[target.member_id];
+                let (name, ty) = match member {
+                    crate::ast::ClassMember::Field(field) => {
+                        (field.name.canonical.clone(), field.ty.clone())
+                    }
+                    crate::ast::ClassMember::Property(property) => {
+                        (property.name.canonical.clone(), property.ty.clone())
+                    }
+                    _ => unreachable!("instance slot metadata refers to a value member"),
+                };
+                slots.push((name, *target, ty));
+            }
+        }
+        for (name, value) in values {
+            let canonical = name.to_ascii_lowercase();
+            let Some((_, target, ty)) = slots.iter().find(|(name, _, _)| name == &canonical) else {
+                continue;
+            };
+            let value = self.typed_json_to_value(value, ty, span, depth + 1, state)?;
+            self.store
+                .object_mut(object)
+                .fields
+                .get_mut(target)
+                .expect("allocated JSON target has a runtime slot")
+                .value = value;
+        }
+        Ok(Value::Object(object))
+    }
+
+    fn typed_json_sobject(
+        &mut self,
+        object_id: usize,
+        values: JsonMap<String, JsonValue>,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        let Value::SObject(record) = self.store.allocate_sobject(object_id) else {
+            unreachable!("SObject allocation returns an SObject value")
+        };
+        for (name, value) in values {
+            if name.eq_ignore_ascii_case("attributes") {
+                continue;
+            }
+            let (field_id, ty) = {
+                let object = self
+                    .program()
+                    .schema()
+                    .object_at(object_id)
+                    .expect("typed JSON object ID is valid");
+                let Some(field_id) = object.field_index(&name) else {
+                    continue;
+                };
+                let field = object
+                    .field_at(field_id)
+                    .expect("typed JSON field index is valid");
+                (field_id, apex_field_type(field.data_type()))
+            };
+            let value = self.typed_json_to_value(value, &ty, span, depth + 1, state)?;
+            self.store
+                .sobject_mut(record)
+                .fields
+                .insert(field_id, value);
+        }
+        Ok(Value::SObject(record))
+    }
+
     fn json_to_value(&mut self, value: JsonValue, span: Span) -> Result<Value, Diagnostic> {
         Ok(match value {
             JsonValue::Null => Value::Null(Some(TypeName::Object)),
@@ -1963,6 +2857,23 @@ fn add_months(date: NaiveDate, months: i64) -> Option<NaiveDate> {
     }
 }
 
+fn parse_json_datetime(value: &str, span: Span) -> Result<DateTime<Utc>, Diagnostic> {
+    if let Ok(value) = DateTime::parse_from_rfc3339(value) {
+        return Ok(value.with_timezone(&Utc));
+    }
+    parse_datetime(value, span).map_err(|_| typed_json_mismatch(&TypeName::Datetime, span))
+}
+
+fn typed_json_mismatch(target: &TypeName, span: Span) -> Diagnostic {
+    platform_error(
+        format!(
+            "JSON value cannot be converted to target {}",
+            target.apex_name()
+        ),
+        span,
+    )
+}
+
 fn expect_date(receiver: Option<Value>, span: Span) -> Result<NaiveDate, Diagnostic> {
     match receiver {
         Some(Value::Date(value)) => Ok(value),
@@ -1996,6 +2907,86 @@ fn expect_id(receiver: Option<Value>, span: Span) -> Result<String, Diagnostic> 
         Some(Value::Id(value)) => Ok(value),
         _ => Err(invalid_runtime_operands(span)),
     }
+}
+
+fn is_schema_intrinsic(intrinsic: PlatformIntrinsic) -> bool {
+    use PlatformIntrinsic as P;
+    matches!(
+        intrinsic,
+        P::SchemaGetGlobalDescribe
+            | P::SObjectTypeGetDescribe
+            | P::SObjectTypeGetName
+            | P::SObjectTypeNewSObject
+            | P::DescribeGetName
+            | P::DescribeGetLocalName
+            | P::DescribeGetLabel
+            | P::DescribeGetLabelPlural
+            | P::DescribeGetKeyPrefix
+            | P::DescribeIsCustom
+            | P::DescribeIsCustomSetting
+            | P::DescribeIsAccessible
+            | P::DescribeIsDeletable
+            | P::DescribeIsUpdateable
+            | P::SObjectFieldGetDescribe
+            | P::SObjectFieldMapGetMap
+            | P::FieldSetMapGetMap
+            | P::DescribeFieldGetName
+            | P::DescribeFieldGetLocalName
+            | P::DescribeFieldGetLabel
+            | P::DescribeFieldGetLength
+            | P::DescribeFieldGetInlineHelpText
+            | P::DescribeFieldGetRelationshipName
+            | P::DescribeFieldGetSoapType
+            | P::DescribeFieldGetType
+            | P::DescribeFieldGetReferenceTo
+            | P::DescribeFieldGetPicklistValues
+            | P::DescribeFieldIsNameField
+            | P::DescribeFieldIsSortable
+            | P::DescribeFieldIsAccessible
+            | P::FieldSetGetName
+            | P::FieldSetGetLabel
+            | P::FieldSetGetNamespace
+            | P::FieldSetGetFields
+            | P::FieldSetMemberGetFieldPath
+            | P::FieldSetMemberGetLabel
+            | P::FieldSetMemberGetSObjectField
+            | P::PicklistEntryGetValue
+    )
+}
+
+fn local_schema_name(api_name: &str) -> String {
+    let segments = api_name.split("__").collect::<Vec<_>>();
+    if segments.len() >= 3 {
+        segments[1..].join("__")
+    } else {
+        api_name.to_owned()
+    }
+}
+
+fn schema_label(api_name: &str) -> String {
+    local_schema_name(api_name)
+        .trim_end_matches("__c")
+        .trim_end_matches("__e")
+        .trim_end_matches("__mdt")
+        .replace('_', " ")
+}
+
+fn schema_soap_type(field: &crate::platform::FieldSchema) -> crate::platform::PlatformEnum {
+    use crate::platform::{FieldType, PlatformEnum, SoapType};
+    let value = match field.data_type() {
+        FieldType::Boolean => SoapType::Boolean,
+        FieldType::Integer if field.display_type() == crate::platform::DisplayType::Double => {
+            SoapType::Double
+        }
+        FieldType::Integer | FieldType::Summary { .. } => SoapType::Integer,
+        FieldType::String => SoapType::String,
+        FieldType::Date => SoapType::Date,
+        FieldType::Datetime => SoapType::Datetime,
+        FieldType::Id | FieldType::Reference { .. } | FieldType::MetadataRelationship { .. } => {
+            SoapType::Id
+        }
+    };
+    PlatformEnum::SoapType(value)
 }
 
 fn validate_id(value: &str, span: Span) -> Result<String, Diagnostic> {

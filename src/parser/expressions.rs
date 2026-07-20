@@ -457,7 +457,12 @@ impl Parser {
 
         if matches!(
             ty,
-            TypeName::Custom(_) | TypeName::Http | TypeName::HttpRequest | TypeName::HttpResponse
+            TypeName::Custom(_)
+                | TypeName::Http
+                | TypeName::HttpRequest
+                | TypeName::HttpResponse
+                | TypeName::VisualEditorDataRow
+                | TypeName::VisualEditorDynamicPickListRows
         ) {
             if !self.check(&TokenKind::LeftParen) {
                 return Err(Diagnostic::new(
