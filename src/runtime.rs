@@ -1622,6 +1622,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let value = self.evaluate(value)?;
                 Ok(Value::Boolean(if matches!(value, Value::Null(_)) {
                     profile.null_instanceof_result()
+                } else if let (Value::String(value), TypeName::Id) = (&value, target) {
+                    crate::platform::RecordId::parse(value.clone()).is_ok()
                 } else {
                     self.value_has_type(&value, target)
                 }))

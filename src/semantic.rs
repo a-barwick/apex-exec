@@ -6531,6 +6531,9 @@ impl Checker {
     }
 
     fn instanceof_types_can_overlap(&self, declared: &TypeName, target: &TypeName) -> bool {
+        if matches!((declared, target), (TypeName::String, TypeName::Id)) {
+            return true;
+        }
         if self.is_runtime_subtype(target, declared) {
             return true;
         }

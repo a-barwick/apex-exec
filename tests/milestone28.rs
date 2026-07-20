@@ -453,6 +453,10 @@ public class IdStringWideningDemo {
         List<Id> identifiers = new List<Id>();
         identifiers.add(validText);
         System.debug(converted + ':' + identifiers[0]);
+        System.debug(validText instanceof Id);
+        System.debug('not-an-id' instanceof Id);
+        String absent = null;
+        System.debug(absent instanceof Id);
 
         try {
             String invalidText = 'not-an-id';
@@ -471,6 +475,9 @@ public class IdStringWideningDemo {
         [
             "a00000000000001AAA:a00000000000001AAA",
             "001000000000001AAA:001000000000001AAA",
+            "true",
+            "false",
+            "false",
             "Invalid id: not-an-id",
         ]
     );
