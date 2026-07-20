@@ -1,0 +1,10 @@
+{
+  "packageDirectories": [
+    {
+      "path": "main",
+      "default": true
+    }
+  ],
+  "name": "apex-exec-m26-mutation",
+  "sourceApiVersion": "65.0"
+}

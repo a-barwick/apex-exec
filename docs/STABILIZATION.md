@@ -10,10 +10,10 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Completed feature milestone:** M25 — API-version compatibility profiles on
-  `codex/milestone-25-api-version-profiles`
-- **Active feature milestone:** M26 — complete metadata accounting
-- **Feature policy:** M18 through M25 are complete. M26 is the next platform
+- **Completed feature milestone:** M26 — complete metadata accounting on
+  `codex/milestone-26-metadata-accounting`
+- **Active feature milestone:** M27 — sharing and security profiles
+- **Feature policy:** M18 through M26 are complete. M27 is the next platform
   milestone.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`

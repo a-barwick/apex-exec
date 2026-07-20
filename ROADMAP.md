@@ -721,7 +721,7 @@ or replayed result is bound to its effective profile.
 
 ### M26 — Metadata inventory and org-configuration breadth
 
-**Status:** Planned
+**Status:** Complete
 
 #### Scope
 
@@ -747,6 +747,27 @@ and local runtime semantics. Two clean live inventories have zero unexplained
 drift, while controlled org-only addition, removal, and mutation each produce
 the expected finding. Unsupported Metadata API types remain measured and
 explicit.
+
+#### Completion evidence
+
+- The pinned 548-type catalog combines 527 Salesforce source-registry types
+  with 21 live-described types and records API 31.0 and API 60.0–66.0
+  availability without treating org absence as catalog absence.
+- The unchanged M22 representative root reports 1,055/1,055 files and 876/876
+  components accounted, with zero unsupported or unclassified files.
+- API 65.0 reports 253/548 retrieve and deploy support, 548/548 inventory and
+  drift accounting, and 4/548 local-semantics support as separate metrics.
+- Two final guarded inventories are release-ready with zero project drift.
+  The controlled org-only addition is reported separately; controlled removal
+  and mutation each block readiness with the expected typed finding. The
+  tracked baseline was restored afterward.
+- Verification passes 439 tests with no failures or ignored tests, formatting,
+  Clippy with warnings denied, documentation validation, and the Lizard
+  ratchet. LLVM source-line coverage is 29,348/34,485 (**85.10%**) overall and
+  2,869/3,449 (**83.18%**) across the three changed production Rust modules.
+- North Star remains lexer 7/7 and parser 7/7, 14/14 total, a change of zero.
+  These are syntax indicators, not runtime or Salesforce compatibility
+  percentages.
 
 ### M27 — Sharing and security profiles
 

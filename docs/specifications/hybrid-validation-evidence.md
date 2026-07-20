@@ -1,8 +1,9 @@
 # Hybrid Validation Evidence
 
-**Status:** Implemented and live-reviewed in M17, extended by M25. The clean,
+**Status:** Implemented and live-reviewed in M17, extended by M25 and M26. The clean,
 replayed, and controlled-blocker artifacts are in `evidence/milestone17/`;
-M25 profile evidence is in `evidence/milestone25/`.
+M25 profile evidence is in `evidence/milestone25/`; M26 catalog and controlled
+org-accounting evidence is in `evidence/milestone26/`.
 
 This specification defines the observable candidate-bound evidence contract
 for `apex-exec hybrid`. It sits above M14 hermetic CI and the M15 hybrid
@@ -11,9 +12,9 @@ execution.
 
 ## Schema
 
-Validation snapshots use strict schema version 3. Unknown fields and earlier
-schema versions are rejected. Schema-2 M17 artifacts retain historical review
-value but are not current replay inputs. A snapshot contains:
+Validation snapshots use strict schema version 4. Unknown fields and earlier
+schema versions are rejected. Schema-2 M17 and schema-3 M25 artifacts retain
+historical review value but are not current replay inputs. A snapshot contains:
 
 - the exact serialized M14 manifest SHA-256;
 - the M14 cache key and exact CI-result SHA-256;
@@ -28,6 +29,8 @@ value but are not current replay inputs. A snapshot contains:
 - Apex Exec and Salesforce CLI versions;
 - UTC capture time and maximum permitted evidence age;
 - normalized retrieved-inventory SHA-256 and retrieval count;
+- API-profiled type capabilities, every package-file disposition, and separate
+  file/component/transport/drift/local-semantics metrics;
 - check-only deployment and normalized test observations; and
 - a SHA-256 over the complete snapshot contents, excluding the seal field.
 

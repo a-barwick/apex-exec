@@ -58,3 +58,4 @@ history.
 - [0026 — Recheck dynamic SOQL into checked plans](0026-recheck-dynamic-soql-into-checked-plans.md)
 - [0027 — Structure partial DML requests and outcomes](0027-structure-partial-dml-outcomes.md)
 - [0028 — Bind compatibility profiles per source](0028-bind-compatibility-profiles-per-source.md)
+- [0029 — Separate metadata catalog, accounting, and org discovery](0029-separate-metadata-catalog-accounting-and-org-discovery.md)

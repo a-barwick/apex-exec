@@ -194,6 +194,15 @@ age mismatches before readiness evaluation. The reviewed M17 bundle preserves
 the clean authenticated, exact replay, and controlled-drift blocker outcomes
 for one sealed candidate without adding org behavior to language phases.
 
+M26 replaces path heuristics with a generated metadata catalog above the
+compiler/runtime boundary. Source-registry conventions and exact profiled
+`describeMetadata` results remain distinct inputs. Package-root walking assigns
+one explicit disposition per file, then groups recognized parts into stable
+component identities and digests. Configuration retrieval is type-wide so
+org-only additions are observable. Org-only components are reported separately
+from missing or mutated project-owned drift. Schema-4 hybrid evidence seals the
+catalog capabilities, dispositions, and independent denominators.
+
 M22 adds a representative-project evidence layer above the same boundaries.
 An immutable third-party candidate manifest is captured before local
 compatibility inspection, and Salesforce `RunLocalTests` supplies the raw,
@@ -527,7 +536,7 @@ Each retrieve directory is precreated with `main/default` so both legacy and
 current Salesforce CLI output contracts have a valid conversion target, then
 removed after inventory capture. It never creates an org, authenticates
 interactively, requests an auth URL, or persists credentials. M25 records the
-resulting observations in strict schema-version-3 evidence. Live capture
+resulting observations in strict schema-version-4 evidence. Live capture
 requires a cacheable M14 result, pins the project API version on both retrieves
 and deployment, binds the canonical effective profile for every Apex source,
 and compares two independently retrieved normalized inventories. The bound
