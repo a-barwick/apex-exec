@@ -484,9 +484,20 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 ## Immediate target
 
 M27 sharing and security profiles is complete. M28 measured enterprise
-compatibility closure is the next planned milestone. The package tracker is in
-`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
-baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+compatibility closure is active on
+`codex/milestone-28-enterprise-compatibility`. Ten bounded slices are
+checkpointed: typed SObject switch patterns, `@IsTest(IsParallel=...)`,
+metadata relationships, roll-up summaries, exact equality, `ALL ROWS` and
+undelete behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable
+sorting, and `Database.Stateful`.
+
+The last completed frozen enterprise replay parses 1,159/1,159 tests and checks
+0/1,159, with `System.Comparable` as its first blocker. Comparable and Stateful
+were implemented and passed focused tests afterward, but a new full replay was
+not completed. The strict numerator therefore remains 0/1,159 in published
+evidence, the 60% exit criterion is unmet, and M28 must not merge as complete.
+The exact handoff, commands, evidence, and limitations are in
+`docs/MILESTONE_28_CHECKPOINT.md`.
 
 ## North Star indicators
 

@@ -622,11 +622,48 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ListIntrinsic::Sort => {
                 expect_no_arguments(arguments, span)?;
                 self.ensure_collection_mutable(id, span)?;
-                let mut elements = match self.collection(id) {
-                    Collection::List { elements, .. } => elements.clone(),
+                let (element_type, mut elements) = match self.collection(id) {
+                    Collection::List {
+                        element_type,
+                        elements,
+                        ..
+                    } => (element_type.clone(), elements.clone()),
                     _ => unreachable!(),
                 };
-                sort_primitive_values(&mut elements, span)?;
+                if matches!(
+                    element_type,
+                    crate::ast::TypeName::String
+                        | crate::ast::TypeName::Integer
+                        | crate::ast::TypeName::Long
+                ) {
+                    sort_primitive_values(&mut elements, span)?;
+                } else {
+                    let crate::ast::TypeName::Custom(name) = &element_type else {
+                        return Err(runtime_exception(
+                            "TypeException",
+                            "List.sort element type escaped Comparable validation",
+                            span,
+                        ));
+                    };
+                    let class_id = self.runtime_class_id(name).ok_or_else(|| {
+                        runtime_exception(
+                            "TypeException",
+                            "List.sort Comparable class is unavailable at runtime",
+                            span,
+                        )
+                    })?;
+                    let target = self
+                        .program()
+                        .comparable_contract(class_id)
+                        .ok_or_else(|| {
+                            runtime_exception(
+                                "TypeException",
+                                "List.sort element type does not implement Comparable",
+                                span,
+                            )
+                        })?;
+                    self.sort_comparable_values(&mut elements, target, span)?;
+                }
                 let Collection::List {
                     elements: stored, ..
                 } = self.collection_mut(id)
@@ -636,6 +673,100 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 *stored = elements;
                 Ok(Value::Void)
             }
+        }
+    }
+
+    fn sort_comparable_values(
+        &mut self,
+        values: &mut Vec<Value>,
+        target: crate::hir::ClassMemberId,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let length = values.len();
+        if length < 2 {
+            return Ok(());
+        }
+        let mut source = values.clone();
+        let mut destination = source.clone();
+        let mut width = 1usize;
+        while width < length {
+            let mut start = 0usize;
+            while start < length {
+                let middle = start.saturating_add(width).min(length);
+                let end = middle.saturating_add(width).min(length);
+                let (mut left, mut right, mut output) = (start, middle, start);
+                while left < middle && right < end {
+                    if self.compare_comparable_values(
+                        &source[left],
+                        &source[right],
+                        target,
+                        span,
+                    )? != Ordering::Greater
+                    {
+                        destination[output] = source[left].clone();
+                        left += 1;
+                    } else {
+                        destination[output] = source[right].clone();
+                        right += 1;
+                    }
+                    output += 1;
+                }
+                while left < middle {
+                    destination[output] = source[left].clone();
+                    left += 1;
+                    output += 1;
+                }
+                while right < end {
+                    destination[output] = source[right].clone();
+                    right += 1;
+                    output += 1;
+                }
+                start = end;
+            }
+            std::mem::swap(&mut source, &mut destination);
+            width = width.saturating_mul(2);
+        }
+        *values = source;
+        Ok(())
+    }
+
+    fn compare_comparable_values(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        target: crate::hir::ClassMemberId,
+        span: Span,
+    ) -> Result<Ordering, Diagnostic> {
+        match (left, right) {
+            (Value::Null(_), Value::Null(_)) => Ok(Ordering::Equal),
+            (Value::Null(_), _) => Ok(Ordering::Less),
+            (_, Value::Null(_)) => Ok(Ordering::Greater),
+            (Value::Object(left), Value::Object(_)) => {
+                let result = self.evaluate_class_method_arguments(
+                    target,
+                    Some(*left),
+                    vec![EvaluatedArgument {
+                        value: right.clone(),
+                        span,
+                    }],
+                    span,
+                    true,
+                    false,
+                )?;
+                let Value::Integer(result) = result else {
+                    return Err(runtime_exception(
+                        "TypeException",
+                        "Comparable.compareTo returned a non-Integer value",
+                        span,
+                    ));
+                };
+                Ok(result.cmp(&0))
+            }
+            _ => Err(runtime_exception(
+                "TypeException",
+                "List.sort encountered a non-Comparable value",
+                span,
+            )),
         }
     }
 

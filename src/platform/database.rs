@@ -1,6 +1,6 @@
 use super::{
     DataValue, FieldType, Record, RecordId, SObject, SchemaCatalog, SqliteStorage, Storage,
-    StorageTransaction,
+    StorageTransaction, SummaryDefinition, SummaryFilterOperator, SummaryOperation,
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use std::{
@@ -325,6 +325,7 @@ pub struct SoqlRequest {
     pub order_by: Vec<QueryOrder>,
     pub limit: Option<usize>,
     pub offset: usize,
+    pub all_rows: bool,
     pub count_scalar: bool,
     pub now_millis: i64,
 }
@@ -480,9 +481,24 @@ impl LocalDatabase {
             .storage
             .begin_transaction()
             .map_err(DatabaseError::storage)?;
-        let records = transaction
+        let mut records = transaction
             .scan(&request.object)
             .map_err(DatabaseError::storage)?;
+        for record in &mut records {
+            record.set_field("IsDeleted", false);
+        }
+        if request.all_rows {
+            records.extend(
+                self.recycle_bin
+                    .iter()
+                    .filter(|((object, _), _)| object.eq_ignore_ascii_case(&request.object))
+                    .map(|(_, record)| {
+                        let mut record = record.clone();
+                        record.set_field("IsDeleted", true);
+                        record
+                    }),
+            );
+        }
         let records = match &request.visible_record_ids {
             Some(visible) => records
                 .into_iter()
@@ -497,6 +513,8 @@ impl LocalDatabase {
             records,
             requested_parent_depth(request),
         )?;
+        self.last_query_object_scans +=
+            hydrate_summary_fields(&schema, &mut transaction, &request.object, &mut rows)?;
         if let Some(condition) = &request.condition {
             rows.retain(|row| evaluate_condition(row, condition, request.now_millis));
         }
@@ -565,6 +583,7 @@ impl LocalDatabase {
                     .max()
                     .unwrap_or(0),
             )?;
+            hydrate_summary_fields(&schema, &mut transaction, &returning.object, &mut rows)?;
             rows.retain(|row| {
                 searchable.iter().any(|field| {
                     matches!(
@@ -1224,6 +1243,213 @@ fn data_record_id(value: &DataValue) -> Option<RecordId> {
     }
 }
 
+fn hydrate_summary_fields<T: StorageTransaction>(
+    schema: &SchemaCatalog,
+    transaction: &mut T,
+    parent_object: &str,
+    parents: &mut [EvalRow],
+) -> Result<usize, DatabaseError> {
+    let object = schema
+        .object(parent_object)
+        .map_err(DatabaseError::schema)?;
+    let summaries = object
+        .fields()
+        .filter_map(|field| {
+            let FieldType::Summary {
+                result_type,
+                definition,
+            } = field.data_type()
+            else {
+                return None;
+            };
+            Some((
+                field.api_name().to_owned(),
+                result_type.as_ref().clone(),
+                definition.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if summaries.is_empty() || parents.is_empty() {
+        return Ok(0);
+    }
+
+    let mut children_by_object = BTreeMap::<String, Vec<Record>>::new();
+    for (_, _, definition) in &summaries {
+        let canonical = definition.child_object.to_ascii_lowercase();
+        if !children_by_object.contains_key(&canonical) {
+            children_by_object.insert(
+                canonical,
+                transaction
+                    .scan(&definition.child_object)
+                    .map_err(DatabaseError::storage)?,
+            );
+        }
+    }
+    let scans = children_by_object.len();
+    let parent_ids = parents
+        .iter()
+        .map(|parent| parent.record.id().to_string())
+        .collect::<BTreeSet<_>>();
+
+    for (field, result_type, definition) in summaries {
+        let initial = match definition.operation {
+            SummaryOperation::Count | SummaryOperation::Sum => DataValue::Integer(0),
+            SummaryOperation::Min | SummaryOperation::Max => DataValue::Null,
+        };
+        let mut values = parent_ids
+            .iter()
+            .map(|id| (id.clone(), initial.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let children = children_by_object
+            .get(&definition.child_object.to_ascii_lowercase())
+            .expect("summary child records were scanned");
+        for child in children {
+            let Some(parent_id) = child
+                .field(&definition.foreign_key_field)
+                .and_then(data_record_id)
+                .map(|id| id.to_string())
+            else {
+                continue;
+            };
+            let Some(current) = values.get_mut(&parent_id) else {
+                continue;
+            };
+            if !summary_filters_match(schema, &definition, child)? {
+                continue;
+            }
+            match definition.operation {
+                SummaryOperation::Count => {
+                    let DataValue::Integer(count) = current else {
+                        unreachable!("count roll-up accumulator is Integer")
+                    };
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        DatabaseError::new(format!(
+                            "roll-up summary `{parent_object}.{field}` overflowed Integer"
+                        ))
+                    })?;
+                }
+                SummaryOperation::Sum => {
+                    let Some(DataValue::Integer(value)) = definition
+                        .summarized_field
+                        .as_deref()
+                        .and_then(|field| child.field(field))
+                    else {
+                        continue;
+                    };
+                    let DataValue::Integer(sum) = current else {
+                        unreachable!("sum roll-up accumulator is Integer")
+                    };
+                    *sum = sum.checked_add(*value).ok_or_else(|| {
+                        DatabaseError::new(format!(
+                            "roll-up summary `{parent_object}.{field}` overflowed Integer"
+                        ))
+                    })?;
+                }
+                SummaryOperation::Min | SummaryOperation::Max => {
+                    let Some(candidate) = definition
+                        .summarized_field
+                        .as_deref()
+                        .and_then(|field| child.field(field))
+                        .filter(|value| !matches!(value, DataValue::Null))
+                    else {
+                        continue;
+                    };
+                    let replace = matches!(current, DataValue::Null)
+                        || matches!(
+                            (definition.operation, compare_values(candidate, current)),
+                            (SummaryOperation::Min, Ordering::Less)
+                                | (SummaryOperation::Max, Ordering::Greater)
+                        );
+                    if replace {
+                        *current = candidate.clone();
+                    }
+                }
+            }
+        }
+        for parent in parents.iter_mut() {
+            let value = values
+                .remove(parent.record.id().as_str())
+                .unwrap_or(initial.clone());
+            debug_assert!(summary_value_matches(&result_type, &value));
+            parent.record.set_field(&field, value);
+        }
+    }
+    Ok(scans)
+}
+
+fn summary_filters_match(
+    schema: &SchemaCatalog,
+    definition: &SummaryDefinition,
+    child: &Record,
+) -> Result<bool, DatabaseError> {
+    let object = schema
+        .object(&definition.child_object)
+        .map_err(DatabaseError::schema)?;
+    for filter in &definition.filters {
+        let field = object.field(&filter.field).map_err(DatabaseError::schema)?;
+        let Some(expected) = summary_filter_value(field.data_type(), &filter.value) else {
+            return Err(DatabaseError::new(format!(
+                "invalid roll-up summary filter value `{}` for {}.{}",
+                filter.value,
+                object.api_name(),
+                field.api_name()
+            )));
+        };
+        let actual = child.field(field.api_name()).unwrap_or(&DataValue::Null);
+        let matches = match filter.operator {
+            SummaryFilterOperator::Equal => values_equal(actual, &expected),
+        };
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn summary_filter_value(field_type: &FieldType, value: &str) -> Option<DataValue> {
+    match field_type {
+        FieldType::Boolean if value.eq_ignore_ascii_case("true") => Some(DataValue::Boolean(true)),
+        FieldType::Boolean if value.eq_ignore_ascii_case("false") => {
+            Some(DataValue::Boolean(false))
+        }
+        FieldType::Boolean => None,
+        FieldType::Integer => value.parse::<i64>().ok().map(DataValue::Integer),
+        FieldType::String | FieldType::MetadataRelationship { .. } => {
+            Some(DataValue::String(value.to_owned()))
+        }
+        FieldType::Date => {
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
+            let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+            i32::try_from(date.signed_duration_since(epoch).num_days())
+                .ok()
+                .map(DataValue::Date)
+        }
+        FieldType::Datetime => chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|value| DataValue::Datetime(value.timestamp_millis())),
+        FieldType::Id | FieldType::Reference { .. } => Some(DataValue::String(value.to_owned())),
+        FieldType::Summary { .. } => None,
+    }
+}
+
+fn summary_value_matches(field_type: &FieldType, value: &DataValue) -> bool {
+    matches!(
+        (field_type, value),
+        (_, DataValue::Null)
+            | (FieldType::Boolean, DataValue::Boolean(_))
+            | (FieldType::Integer, DataValue::Integer(_))
+            | (FieldType::String, DataValue::String(_))
+            | (FieldType::Date, DataValue::Date(_))
+            | (FieldType::Datetime, DataValue::Datetime(_))
+            | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
+            | (
+                FieldType::Reference { .. },
+                DataValue::Id(_) | DataValue::String(_)
+            )
+            | (FieldType::MetadataRelationship { .. }, DataValue::String(_))
+    )
+}
+
 fn field_value<'row>(row: &'row EvalRow, field: &QueryField) -> &'row DataValue {
     static NULL: DataValue = DataValue::Null;
     let mut current = row;
@@ -1610,6 +1836,7 @@ fn hydrate_child_subqueries<T: StorageTransaction>(
         scans += 1;
         let mut children =
             hydrate_rows(schema, transaction, records, requested_parent_depth(query))?;
+        scans += hydrate_summary_fields(schema, transaction, &query.object, &mut children)?;
         if let Some(condition) = &query.condition {
             children.retain(|row| evaluate_condition(row, condition, request.now_millis));
         }

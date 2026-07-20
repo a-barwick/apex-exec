@@ -1205,6 +1205,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .map(|value| self.query_usize(value, span))
                 .transpose()?
                 .unwrap_or(0),
+            all_rows: query.all_rows,
             count_scalar: query.result == QueryResultKind::Count,
             now_millis,
         })

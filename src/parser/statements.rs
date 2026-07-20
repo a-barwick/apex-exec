@@ -277,6 +277,15 @@ impl Parser {
             let labels = if self.check(&TokenKind::Else) {
                 saw_else = true;
                 SwitchLabels::Else(self.advance().span)
+            } else if self.is_switch_type_pattern_start() {
+                let (ty, type_span) = self.parse_type_name()?;
+                let binding =
+                    self.expect_identifier("expected a binding name after switch pattern type")?;
+                SwitchLabels::TypePattern {
+                    span: type_span.merge(binding.span),
+                    ty,
+                    binding,
+                }
             } else {
                 let mut labels = vec![self.parse_expression()?];
                 while self.check(&TokenKind::Comma) {
@@ -303,6 +312,14 @@ impl Parser {
             value,
             arms,
             span: start.span.merge(end.span),
+        })
+    }
+
+    fn is_switch_type_pattern_start(&self) -> bool {
+        let mut probe = self.clone();
+        probe.parse_type_name().is_ok_and(|_| {
+            matches!(probe.current().kind, TokenKind::Identifier(_))
+                && matches!(probe.peek(1).kind, TokenKind::LeftBrace)
         })
     }
 

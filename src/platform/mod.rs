@@ -28,6 +28,7 @@ pub use database::{
 pub use metadata::{MetadataError, import_metadata};
 pub use schema::{
     FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider, SharingModel,
+    SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
 };
 pub use security::{
     AccessLevel, AccessType, FieldPermissions, ObjectPermissions, QueryAccessMode, RecordAccess,

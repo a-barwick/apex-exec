@@ -156,6 +156,8 @@ impl Parser {
             &[
                 (TokenKind::EqualEqual, BinaryOperator::Equal),
                 (TokenKind::BangEqual, BinaryOperator::NotEqual),
+                (TokenKind::ExactEqual, BinaryOperator::ExactEqual),
+                (TokenKind::ExactBangEqual, BinaryOperator::ExactNotEqual),
             ],
         )
     }

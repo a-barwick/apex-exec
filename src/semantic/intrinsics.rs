@@ -232,10 +232,10 @@ impl Checker {
                     &[0],
                     arguments,
                 )?;
-                if !sortable_list_element(element) {
+                if !self.sortable_list_element(element) {
                     return Err(Diagnostic::new(
                         format!(
-                            "method `sort` requires List<String> or List<Integer>, found {}",
+                            "method `sort` requires primitive or Comparable list elements, found {}",
                             receiver_type.apex_name()
                         ),
                         method.span,
@@ -1705,13 +1705,20 @@ impl Checker {
             ))
         }
     }
-}
 
-fn sortable_list_element(element: &TypeName) -> bool {
-    matches!(
-        element,
-        TypeName::String | TypeName::Integer | TypeName::Long
-    )
+    fn sortable_list_element(&self, element: &TypeName) -> bool {
+        matches!(
+            element,
+            TypeName::String | TypeName::Integer | TypeName::Long
+        ) || matches!(
+            element,
+            TypeName::Custom(name)
+                if self
+                    .class_ids
+                    .get(&name.canonical)
+                    .is_some_and(|class_id| self.comparable_contracts.contains_key(class_id))
+        )
+    }
 }
 
 pub(super) fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> Diagnostic {

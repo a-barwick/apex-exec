@@ -12,9 +12,13 @@ on prior conversation context.
 - **Completed gate:** S0 — process safety and correctness
 - **Completed feature milestone:** M27 — sharing and security profiles on
   `codex/milestone-27-sharing-security`
-- **Active feature milestone:** None; M28 is planned
-- **Feature policy:** M18 through M27 are complete. M28 remains gated on its
-  roadmap decisions and measured enterprise-compatibility scope.
+- **Active feature milestone:** M28 — measured enterprise compatibility
+  closure on `codex/milestone-28-enterprise-compatibility`
+- **Feature policy:** M18 through M27 are complete. M28 is active within its
+  frozen M22 denominator, source, outcome, and measured-compatibility scope.
+- **M28 checkpoint:** Implementation is paused after ten typed slices. The
+  latest completed full replay parses 1,159/1,159 tests but remains 0/1,159
+  strict; see `docs/MILESTONE_28_CHECKPOINT.md`. M28 is not ready to merge.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.

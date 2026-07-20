@@ -4,7 +4,7 @@ use crate::{
         BinaryOperator, CatchClause, ClassDeclaration, ClassKind, ClassMember,
         CollectionInitializer, ConstructorDeclaration, ConstructorDelegationKind, Expression,
         Identifier, MethodDeclaration, Modifier, PostfixOperator, Program, ReturnType, Statement,
-        TriggerDeclaration, TypeName, UnaryOperator,
+        SwitchArm, SwitchLabels, TriggerDeclaration, TypeName, UnaryOperator,
     },
     compatibility::{CompatibilityProfile, SourceProfiles},
     diagnostic::Diagnostic,
@@ -198,9 +198,11 @@ struct Checker {
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
     type_literals: HashMap<Span, TypeName>,
+    switch_patterns: HashMap<Span, ObjectTypeId>,
     queries: HashMap<Span, hir::CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, hir::AsyncClassContract>,
+    comparable_contracts: HashMap<usize, ClassMemberId>,
     classes: Vec<ClassDeclaration>,
     class_ids: HashMap<String, usize>,
     current_class: Option<usize>,
@@ -226,9 +228,11 @@ impl Checker {
             binary_operations: HashMap::new(),
             unary_operations: HashMap::new(),
             type_literals: HashMap::new(),
+            switch_patterns: HashMap::new(),
             queries: HashMap::new(),
             null_aware_queries: HashSet::new(),
             async_contracts: HashMap::new(),
+            comparable_contracts: HashMap::new(),
             classes: Vec::new(),
             class_ids: HashMap::new(),
             current_class: None,
@@ -244,6 +248,7 @@ impl Checker {
         self.collect_classes(program)?;
         self.collect_method_signatures(program)?;
         self.validate_class_hierarchy()?;
+        self.validate_comparable_contracts()?;
         for class_id in 0..self.classes.len() {
             self.check_class(class_id)?;
         }
@@ -265,9 +270,11 @@ impl Checker {
                 binary_operations: self.binary_operations,
                 unary_operations: self.unary_operations,
                 type_literals: self.type_literals,
+                switch_patterns: self.switch_patterns,
                 queries: self.queries,
                 null_aware_queries: self.null_aware_queries,
                 async_contracts: self.async_contracts,
+                comparable_contracts: self.comparable_contracts,
             },
             self.schema,
             self.profiles,
@@ -506,7 +513,7 @@ impl Checker {
         class: &ClassDeclaration,
         interface: &crate::ast::NamedType,
     ) -> Result<Option<usize>, Diagnostic> {
-        if is_platform_async_interface(&interface.canonical) {
+        if is_platform_interface(&interface.canonical) {
             self.validate_platform_interface_edge(class, interface)?;
             return Ok(None);
         }
@@ -582,7 +589,7 @@ impl Checker {
     ) -> Result<(), Diagnostic> {
         if class.kind != ClassKind::Class {
             return Err(Diagnostic::new(
-                "platform async interfaces can only be implemented by classes",
+                "platform interfaces can only be implemented by classes",
                 interface.span,
             ));
         }
@@ -604,11 +611,65 @@ impl Checker {
         Ok(())
     }
 
+    fn validate_comparable_contracts(&mut self) -> Result<(), Diagnostic> {
+        for class_id in 0..self.classes.len() {
+            if !self.class_implements_comparable(class_id) {
+                continue;
+            }
+            let candidates = self
+                .class_methods_named(class_id, "compareto")
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.parameter_types == [TypeName::Object]
+                        && candidate.return_type == ReturnType::Value(TypeName::Integer)
+                        && !candidate.modifiers.contains(&Modifier::Static)
+                        && (candidate.modifiers.contains(&Modifier::Public)
+                            || candidate.modifiers.contains(&Modifier::Global))
+                        && self.method_declaration(candidate.target).body.is_some()
+                })
+                .map(|candidate| candidate.target)
+                .collect::<Vec<_>>();
+            let [target] = candidates.as_slice() else {
+                return Err(Diagnostic::new(
+                    format!(
+                        "Comparable class `{}` requires exactly one public or global instance `Integer compareTo(Object)` method",
+                        self.classes[class_id].name.spelling
+                    ),
+                    self.classes[class_id].name.span,
+                ));
+            };
+            self.comparable_contracts.insert(class_id, *target);
+        }
+        Ok(())
+    }
+
+    fn class_implements_comparable(&self, class_id: usize) -> bool {
+        let mut cursor = Some(class_id);
+        let mut visited = vec![false; self.classes.len()];
+        while let Some(current) = cursor {
+            if std::mem::replace(&mut visited[current], true) {
+                return false;
+            }
+            if self.classes[current]
+                .interfaces
+                .iter()
+                .any(|interface| is_comparable_interface(&interface.canonical))
+            {
+                return true;
+            }
+            cursor = self.parent_class_id(current);
+        }
+        false
+    }
+
     fn validate_test_class(&self, class: &ClassDeclaration) -> Result<(), Diagnostic> {
         let mut saw_is_test = false;
         for annotation in &class.annotations {
             match annotation.kind {
-                AnnotationKind::IsTest { see_all_data } => {
+                AnnotationKind::IsTest {
+                    see_all_data,
+                    is_parallel: _,
+                } => {
                     if saw_is_test {
                         return Err(Diagnostic::new(
                             "duplicate `@IsTest` annotation on class",
@@ -635,6 +696,8 @@ impl Checker {
                         annotation.span,
                     ));
                 }
+                AnnotationKind::SuppressWarnings => {}
+                AnnotationKind::TestVisible => {}
                 AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
             }
         }
@@ -955,7 +1018,16 @@ impl Checker {
         let mut future = None;
         for annotation in &method.annotations {
             let kind_name = match annotation.kind {
-                AnnotationKind::IsTest { see_all_data } => {
+                AnnotationKind::IsTest {
+                    see_all_data,
+                    is_parallel,
+                } => {
+                    if is_parallel.is_some() {
+                        return Err(Diagnostic::new(
+                            "`IsParallel` is only valid on an `@IsTest` class",
+                            annotation.span,
+                        ));
+                    }
                     if see_all_data == Some(true) {
                         return Err(Diagnostic::new(
                             "`@IsTest(SeeAllData=true)` is unsupported without an org data host",
@@ -972,6 +1044,8 @@ impl Checker {
                     ));
                 }
                 AnnotationKind::Future => continue,
+                AnnotationKind::SuppressWarnings => continue,
+                AnnotationKind::TestVisible => continue,
                 AnnotationKind::Other => return Err(unsupported_annotation(annotation)),
             };
             if test_kind.is_some() {
@@ -1151,7 +1225,7 @@ impl Checker {
                 pending.push(parent);
             }
             for interface in &self.classes[current].interfaces {
-                if !is_platform_async_interface(&interface.canonical) {
+                if !is_platform_interface(&interface.canonical) {
                     pending.push(self.class_ids[&interface.canonical]);
                 }
             }
@@ -1262,6 +1336,10 @@ impl Checker {
             execute,
             finish,
             scope_type,
+            stateful: self.classes[class_id]
+                .interfaces
+                .iter()
+                .any(|interface| is_stateful_interface(&interface.canonical)),
         })
     }
 
@@ -1456,7 +1534,7 @@ impl Checker {
                 }
             }
             for interface in &self.classes[id].interfaces {
-                if is_platform_async_interface(&interface.canonical) {
+                if is_platform_interface(&interface.canonical) {
                     continue;
                 }
                 let interface_id = self.class_ids[&interface.canonical];
@@ -1489,7 +1567,7 @@ impl Checker {
                 pending.push(parent);
             }
             for interface in self.classes[current].interfaces.iter().rev() {
-                if !is_platform_async_interface(&interface.canonical) {
+                if !is_platform_interface(&interface.canonical) {
                     pending.push(self.class_ids[&interface.canonical]);
                 }
             }
@@ -1578,7 +1656,7 @@ impl Checker {
         match ty {
             TypeName::Custom(name)
                 if !self.class_ids.contains_key(&name.canonical)
-                    && self.schema.object(&name.spelling).is_err()
+                    && self.schema.object(hir::schema_api_name(name)).is_err()
                     && name.canonical != "sobject" =>
             {
                 Err(Diagnostic::new(
@@ -1617,6 +1695,10 @@ impl Checker {
                 == outermost_type(&class.qualified_name.canonical)
         });
         if same_outer
+            || (class_has_annotation(class, AnnotationKind::TestVisible)
+                && self
+                    .current_class
+                    .is_some_and(|current| self.class_is_test_context(current)))
             || (class.modifiers.contains(&Modifier::Protected)
                 && self
                     .current_class
@@ -2095,10 +2177,9 @@ impl Checker {
                 self.with_loop(|checker| checker.check_statement(body))?;
                 self.require_boolean(condition)
             }
-            Statement::Switch { span, .. } => Err(Diagnostic::new(
-                "`switch on`/`when` is parsed but unsupported by the active compatibility profile",
-                *span,
-            )),
+            Statement::Switch { value, arms, span } => {
+                self.check_sobject_type_switch(value, arms, *span)
+            }
             Statement::For {
                 initializer,
                 condition,
@@ -2203,6 +2284,96 @@ impl Checker {
             } => self.check_dml_statement(*operation, *access, value, external_id.as_ref(), *span),
             Statement::Return { value, span } => self.check_return(value.as_ref(), *span),
         }
+    }
+
+    fn check_sobject_type_switch(
+        &mut self,
+        value: &Expression,
+        arms: &[SwitchArm],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let value_type = match self.expression_type(value)? {
+            ExpressionType::Value(ty)
+                if self.is_sobject_type(&ty) || self.is_dynamic_sobject_type(&ty) =>
+            {
+                ty
+            }
+            actual => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "SObject type-pattern switch requires an SObject value, found {}",
+                        actual.name()
+                    ),
+                    value.span(),
+                ));
+            }
+        };
+        let mut seen_types = HashSet::new();
+        let mut pattern_count = 0usize;
+        for arm in arms {
+            match &arm.labels {
+                SwitchLabels::TypePattern {
+                    ty,
+                    binding,
+                    span: pattern_span,
+                } => {
+                    self.validate_type(ty, *pattern_span)?;
+                    if !self.is_sobject_type(ty) {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "switch type pattern must name a concrete SObject, found {}",
+                                ty.apex_name()
+                            ),
+                            *pattern_span,
+                        ));
+                    }
+                    let object_id = self
+                        .sobject_object_id(ty)
+                        .expect("validated concrete SObject has a schema identity");
+                    if !self.is_dynamic_sobject_type(&value_type)
+                        && self.sobject_object_id(&value_type) != Some(object_id)
+                    {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "{} cannot match switch value type {}",
+                                ty.apex_name(),
+                                value_type.apex_name()
+                            ),
+                            *pattern_span,
+                        ));
+                    }
+                    self.switch_patterns
+                        .insert(*pattern_span, ObjectTypeId::from_index(object_id));
+                    if !seen_types.insert(object_id) {
+                        return Err(Diagnostic::new(
+                            format!("duplicate switch type pattern `{}`", ty.apex_name()),
+                            *pattern_span,
+                        ));
+                    }
+                    pattern_count += 1;
+                    self.with_scope(|checker| {
+                        checker
+                            .current_scope_mut()
+                            .insert(binding.canonical.clone(), ty.clone());
+                        checker.check_statement(&arm.body)
+                    })?;
+                }
+                SwitchLabels::Else(_) => self.check_statement(&arm.body)?,
+                SwitchLabels::Expressions(_) => {
+                    return Err(Diagnostic::new(
+                        "scalar `switch when` labels are parsed but unsupported by the active compatibility profile",
+                        arm.span,
+                    ));
+                }
+            }
+        }
+        if pattern_count == 0 {
+            return Err(Diagnostic::new(
+                "SObject type-pattern switch requires at least one typed `when` arm",
+                span,
+            ));
+        }
+        Ok(())
     }
 
     fn check_declaration_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
@@ -2803,7 +2974,7 @@ impl Checker {
                 span,
             ));
         };
-        if let Some(object_id) = self.schema.object_index(&name.spelling) {
+        if let Some(object_id) = self.schema.object_index(hir::schema_api_name(name)) {
             for argument in arguments {
                 self.expression_type(argument)?;
             }
@@ -3250,6 +3421,19 @@ impl Checker {
             let field = object
                 .field_at(field_id)
                 .expect("schema field index is valid");
+            if for_write
+                && (matches!(field.data_type(), FieldType::Summary { .. })
+                    || field.api_name().eq_ignore_ascii_case("IsDeleted"))
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "field `{}.{}` is read-only",
+                        object.api_name(),
+                        field.api_name()
+                    ),
+                    name.span,
+                ));
+            }
             let field_type = apex_field_type(field.data_type());
             self.members.insert(
                 span,
@@ -3522,6 +3706,8 @@ impl Checker {
         };
         if accessing == target.class_id
             || access_rank(modifiers) >= access_rank(&[Modifier::Public])
+            || (self.member_has_annotation(target, AnnotationKind::TestVisible)
+                && self.class_is_test_context(accessing))
             || (modifiers.contains(&Modifier::Protected)
                 && self.class_is_or_inherits(accessing, target.class_id))
         {
@@ -3529,6 +3715,37 @@ impl Checker {
         } else {
             Err(Diagnostic::new("member is not accessible", span))
         }
+    }
+
+    fn member_has_annotation(&self, target: ClassMemberId, kind: AnnotationKind) -> bool {
+        let annotations = match &self.classes[target.class_id].members[target.member_id] {
+            ClassMember::Field(field) => &field.annotations,
+            ClassMember::FieldGroup(group) => &group.annotations,
+            ClassMember::Property(property) => &property.annotations,
+            ClassMember::Constructor(constructor) => &constructor.annotations,
+            ClassMember::Method(method) => &method.annotations,
+            ClassMember::Initializer(_) => return false,
+        };
+        annotations.iter().any(|annotation| annotation.kind == kind)
+    }
+
+    fn class_is_test_context(&self, mut class_id: usize) -> bool {
+        let mut remaining = self.classes.len();
+        while remaining > 0 {
+            let class = &self.classes[class_id];
+            if class_is_test(class) {
+                return true;
+            }
+            let Some(enclosing) = &class.enclosing_type else {
+                return false;
+            };
+            let Some(enclosing_id) = self.class_ids.get(&enclosing.canonical).copied() else {
+                return false;
+            };
+            class_id = enclosing_id;
+            remaining -= 1;
+        }
+        false
     }
 
     fn parameter_types_more_specific(&self, left: &[TypeName], right: &[TypeName]) -> bool {
@@ -4472,7 +4689,7 @@ impl Checker {
     }
 
     fn is_sobject_type(&self, ty: &TypeName) -> bool {
-        matches!(ty, TypeName::Custom(name) if self.schema.object(&name.spelling).is_ok())
+        matches!(ty, TypeName::Custom(name) if self.schema.object(hir::schema_api_name(name)).is_ok())
     }
 
     fn is_dynamic_sobject_type(&self, ty: &TypeName) -> bool {
@@ -4483,7 +4700,7 @@ impl Checker {
         let TypeName::Custom(name) = ty else {
             return None;
         };
-        self.schema.object_index(&name.spelling)
+        self.schema.object_index(hir::schema_api_name(name))
     }
 
     fn select_class_method_call(
@@ -4671,6 +4888,9 @@ impl Checker {
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
                 checked_equality_type(left_type, operator, right_type, operator_span)
             }
+            BinaryOperator::ExactEqual | BinaryOperator::ExactNotEqual => {
+                self.checked_exact_equality_type(left_type, operator, right_type, operator_span)
+            }
             BinaryOperator::BitwiseAnd | BinaryOperator::BitwiseOr | BinaryOperator::BitwiseXor => {
                 self.checked_bitwise_type(left_type, operator, right_type, operator_span)
             }
@@ -4682,6 +4902,29 @@ impl Checker {
             BinaryOperator::And | BinaryOperator::Or => {
                 checked_boolean_type(left_type, operator, right_type, operator_span)
             }
+        }
+    }
+
+    fn checked_exact_equality_type(
+        &self,
+        left: ExpressionType,
+        operator: BinaryOperator,
+        right: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let comparable = match (&left, &right) {
+            (ExpressionType::Value(left), ExpressionType::Value(right)) => {
+                self.is_subtype(left, right) || self.is_subtype(right, left)
+            }
+            (ExpressionType::Null, ExpressionType::Value(_))
+            | (ExpressionType::Value(_), ExpressionType::Null)
+            | (ExpressionType::Null, ExpressionType::Null) => true,
+            (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
+        };
+        if comparable {
+            Ok(ExpressionType::Value(TypeName::Boolean))
+        } else {
+            Err(invalid_binary_operands(operator, &left, &right, span))
         }
     }
 
@@ -5253,8 +5496,29 @@ fn class_is_test(class: &ClassDeclaration) -> bool {
         .any(|annotation| annotation.kind.is_test())
 }
 
+fn class_has_annotation(class: &ClassDeclaration, kind: AnnotationKind) -> bool {
+    class
+        .annotations
+        .iter()
+        .any(|annotation| annotation.kind == kind)
+}
+
 fn is_platform_async_interface(name: &str) -> bool {
     is_queueable_interface(name) || is_batchable_interface(name) || is_schedulable_interface(name)
+}
+
+fn is_platform_interface(name: &str) -> bool {
+    is_platform_async_interface(name)
+        || is_comparable_interface(name)
+        || is_stateful_interface(name)
+}
+
+fn is_comparable_interface(name: &str) -> bool {
+    matches!(name, "comparable" | "system.comparable")
+}
+
+fn is_stateful_interface(name: &str) -> bool {
+    matches!(name, "stateful" | "database.stateful")
 }
 
 fn is_queueable_interface(name: &str) -> bool {
@@ -5608,6 +5872,8 @@ fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
         BinaryOperator::GreaterEqual => ">=",
         BinaryOperator::Equal => "==",
         BinaryOperator::NotEqual => "!=",
+        BinaryOperator::ExactEqual => "===",
+        BinaryOperator::ExactNotEqual => "!==",
         BinaryOperator::BitwiseAnd => "&",
         BinaryOperator::BitwiseOr => "|",
         BinaryOperator::BitwiseXor => "^",
@@ -5651,7 +5917,11 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
     match field_type {
         FieldType::Boolean => TypeName::Boolean,
         FieldType::Integer => TypeName::Integer,
-        FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+        FieldType::String
+        | FieldType::Id
+        | FieldType::Reference { .. }
+        | FieldType::MetadataRelationship { .. } => TypeName::String,
+        FieldType::Summary { result_type, .. } => apex_field_type(result_type),
         FieldType::Date => TypeName::Date,
         FieldType::Datetime => TypeName::Datetime,
     }

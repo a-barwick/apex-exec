@@ -332,9 +332,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .and_then(|contract| contract.batch.clone())
             .ok_or_else(|| Diagnostic::new("missing checked Batchable contract", span))?;
         let context = self.async_context_value(TypeName::BatchableContext, job_id);
+        let mut transaction_receiver = if contract.stateful {
+            receiver
+        } else {
+            self.snapshot_async_object(Value::Object(receiver), span)?
+        };
         let start_result = self.evaluate_class_method_arguments(
             contract.start,
-            Some(receiver),
+            Some(transaction_receiver),
             vec![EvaluatedArgument {
                 value: context.clone(),
                 span,
@@ -346,6 +351,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let elements = self.batch_start_elements(start_result, span)?;
 
         for chunk in elements.chunks(scope_size) {
+            if !contract.stateful {
+                transaction_receiver = self.snapshot_async_object(Value::Object(receiver), span)?;
+            }
             let scope = self.store.allocate_collection(Collection::List {
                 element_type: contract.scope_type.clone(),
                 elements: chunk.to_vec(),
@@ -353,7 +361,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             });
             self.evaluate_class_method_arguments(
                 contract.execute,
-                Some(receiver),
+                Some(transaction_receiver),
                 vec![
                     EvaluatedArgument {
                         value: context.clone(),
@@ -366,9 +374,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 false,
             )?;
         }
+        if !contract.stateful {
+            transaction_receiver = self.snapshot_async_object(Value::Object(receiver), span)?;
+        }
         self.evaluate_class_method_arguments(
             contract.finish,
-            Some(receiver),
+            Some(transaction_receiver),
             vec![EvaluatedArgument {
                 value: context,
                 span,

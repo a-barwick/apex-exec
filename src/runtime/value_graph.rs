@@ -565,6 +565,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    pub(super) fn operator_values_identical(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::String(left), Value::String(right)) => left == right,
+            (Value::Boolean(left), Value::Boolean(right)) => left == right,
+            (Value::Integer(left), Value::Integer(right)) => left == right,
+            (Value::Long(left), Value::Long(right)) => left == right,
+            (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Date(left), Value::Date(right)) => left == right,
+            (Value::Datetime(left), Value::Datetime(right)) => left == right,
+            (Value::Time(left), Value::Time(right)) => left == right,
+            (Value::Id(left), Value::Id(right)) => left == right,
+            (Value::Platform(left), Value::Platform(right)) => left == right,
+            (Value::Collection(left), Value::Collection(right)) => left == right,
+            (Value::Object(left), Value::Object(right)) => left == right,
+            (
+                Value::Enum {
+                    class_id: left_class,
+                    ordinal: left_ordinal,
+                },
+                Value::Enum {
+                    class_id: right_class,
+                    ordinal: right_ordinal,
+                },
+            ) => left_class == right_class && left_ordinal == right_ordinal,
+            (Value::TypeLiteral(left), Value::TypeLiteral(right)) => left == right,
+            (Value::SObject(left), Value::SObject(right)) => left == right,
+            (Value::AggregateResult(left), Value::AggregateResult(right)) => left == right,
+            (Value::Exception(left), Value::Exception(right)) => std::ptr::eq(left, right),
+            (Value::Null(_), Value::Null(_)) | (Value::Void, Value::Void) => true,
+            _ => false,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn values_equal_with_stats<'value>(
         &'value self,

@@ -17,6 +17,16 @@ pub use intrinsic::{
     SystemIntrinsic,
 };
 
+pub(crate) fn schema_api_name(name: &ast::NamedType) -> &str {
+    if name.canonical.starts_with("schema.") {
+        name.spelling
+            .split_once('.')
+            .map_or(name.spelling.as_str(), |(_, api_name)| api_name)
+    } else {
+        &name.spelling
+    }
+}
+
 /// The checked program consumed by execution.
 ///
 /// Parsed syntax stays immutable and free of semantic annotations. Resolution
@@ -32,9 +42,11 @@ pub struct Program {
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
     type_literals: HashMap<Span, ast::TypeName>,
+    switch_patterns: HashMap<Span, ObjectTypeId>,
     queries: HashMap<Span, CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
+    comparable_contracts: HashMap<usize, ClassMemberId>,
     class_metadata: Vec<ClassRuntimeMetadata>,
     schema: SchemaCatalog,
     profiles: SourceProfiles,
@@ -56,9 +68,11 @@ impl Program {
             binary_operations,
             unary_operations,
             type_literals,
+            switch_patterns,
             queries,
             null_aware_queries,
             async_contracts,
+            comparable_contracts,
         } = facts;
         let class_metadata = build_class_metadata(&ast);
         Self {
@@ -71,9 +85,11 @@ impl Program {
             binary_operations,
             unary_operations,
             type_literals,
+            switch_patterns,
             queries,
             null_aware_queries,
             async_contracts,
+            comparable_contracts,
             class_metadata,
             schema,
             profiles,
@@ -116,6 +132,10 @@ impl Program {
         self.type_literals.get(&span)
     }
 
+    pub(crate) fn switch_pattern(&self, span: Span) -> Option<ObjectTypeId> {
+        self.switch_patterns.get(&span).copied()
+    }
+
     pub fn checked_query(&self, span: Span) -> Option<&CheckedQuery> {
         self.queries.get(&span)
     }
@@ -126,6 +146,10 @@ impl Program {
 
     pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
         self.async_contracts.get(&class_id)
+    }
+
+    pub(crate) fn comparable_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.comparable_contracts.get(&class_id).copied()
     }
 
     pub(crate) fn class_metadata(&self, class_id: ClassId) -> &ClassRuntimeMetadata {
@@ -297,9 +321,11 @@ pub(crate) struct ProgramFacts {
     pub binary_operations: HashMap<Span, CheckedBinaryOperation>,
     pub unary_operations: HashMap<Span, CheckedUnaryOperation>,
     pub type_literals: HashMap<Span, ast::TypeName>,
+    pub switch_patterns: HashMap<Span, ObjectTypeId>,
     pub queries: HashMap<Span, CheckedQuery>,
     pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
+    pub comparable_contracts: HashMap<usize, ClassMemberId>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -315,6 +341,7 @@ pub struct BatchContract {
     pub execute: ClassMemberId,
     pub finish: ClassMemberId,
     pub scope_type: ast::TypeName,
+    pub stateful: bool,
 }
 
 impl Deref for Program {
@@ -589,6 +616,7 @@ pub struct CheckedSoqlQuery {
     pub order_by: Vec<CheckedOrderBy>,
     pub limit: Option<CheckedValue>,
     pub offset: Option<CheckedValue>,
+    pub all_rows: bool,
     pub result: QueryResultKind,
 }
 

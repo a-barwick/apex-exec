@@ -127,6 +127,7 @@ impl Checker {
                 order_by,
                 limit,
                 offset,
+                all_rows: query.all_rows,
                 result,
             })),
         );
@@ -188,6 +189,12 @@ impl Checker {
         child: &SoqlQuery,
         span: crate::span::Span,
     ) -> Result<CheckedSelectItem, Diagnostic> {
+        if child.all_rows {
+            return Err(Diagnostic::new(
+                "`ALL ROWS` is only valid on a top-level SOQL query",
+                child.span,
+            ));
+        }
         if child
             .select
             .iter()
@@ -660,11 +667,15 @@ impl Checker {
         value: &SoqlValue,
         expected: &FieldType,
     ) -> Result<CheckedValue, Diagnostic> {
+        let expected = query_value_field_type(expected);
         let checked = match value {
             SoqlValue::String(value, span) => {
                 if !matches!(
                     expected,
-                    FieldType::String | FieldType::Id | FieldType::Reference { .. }
+                    FieldType::String
+                        | FieldType::Id
+                        | FieldType::Reference { .. }
+                        | FieldType::MetadataRelationship { .. }
                 ) {
                     return Err(query_value_mismatch(expected, "String", *span));
                 }
@@ -1253,5 +1264,14 @@ fn field_type_name(field_type: &FieldType) -> &'static str {
         FieldType::Datetime => "Datetime",
         FieldType::Id => "Id",
         FieldType::Reference { .. } => "relationship",
+        FieldType::MetadataRelationship { .. } => "metadata relationship",
+        FieldType::Summary { result_type, .. } => field_type_name(result_type),
+    }
+}
+
+fn query_value_field_type(field_type: &FieldType) -> &FieldType {
+    match field_type {
+        FieldType::Summary { result_type, .. } => query_value_field_type(result_type),
+        other => other,
     }
 }

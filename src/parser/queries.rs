@@ -45,10 +45,17 @@ impl Parser {
         let order_by = self.parse_optional_order_by()?;
         let limit = self.parse_optional_value_clause("limit")?;
         let offset = self.parse_optional_value_clause("offset")?;
-        let end = offset
-            .as_ref()
-            .or(limit.as_ref())
-            .map_or(from.span, SoqlValue::span);
+        let all_rows = if self.check_keyword("all") {
+            let start = self.advance().span;
+            let end = self.expect_keyword("rows", "expected `ROWS` after `ALL`")?;
+            Some(start.merge(end.span))
+        } else {
+            None
+        };
+        let end = all_rows
+            .or_else(|| offset.as_ref().map(SoqlValue::span))
+            .or_else(|| limit.as_ref().map(SoqlValue::span))
+            .unwrap_or(from.span);
         Ok(SoqlQuery {
             select,
             from,
@@ -59,6 +66,7 @@ impl Parser {
             order_by,
             limit,
             offset,
+            all_rows: all_rows.is_some(),
             span: start.span.merge(end),
         })
     }

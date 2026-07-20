@@ -505,39 +505,48 @@ impl Parser {
             let (arguments, parenthesized) = self.parse_annotation_arguments()?;
             let kind = match name.canonical.as_str() {
                 "istest" => {
-                    let see_all_data = match arguments.as_slice() {
-                        [] if !parenthesized => None,
-                        [] => {
+                    if parenthesized && arguments.is_empty() {
+                        return Err(Diagnostic::new(
+                            "expected a named `@IsTest` option",
+                            name.span,
+                        ));
+                    }
+                    let mut see_all_data = None;
+                    let mut is_parallel = None;
+                    for argument in &arguments {
+                        let Some(argument_name) = &argument.name else {
                             return Err(Diagnostic::new(
-                                "expected `SeeAllData` in `@IsTest` annotation",
-                                name.span,
+                                "`@IsTest` options must be named",
+                                argument.span,
                             ));
-                        }
-                        [argument] => {
-                            if argument.name.as_ref().map(|name| name.canonical.as_str())
-                                != Some("seealldata")
-                            {
+                        };
+                        let Expression::BooleanLiteral(value, _) = argument.value else {
+                            return Err(Diagnostic::new(
+                                format!("`{}` requires a Boolean literal", argument_name.spelling),
+                                argument.value.span(),
+                            ));
+                        };
+                        let slot = match argument_name.canonical.as_str() {
+                            "seealldata" => &mut see_all_data,
+                            "isparallel" => &mut is_parallel,
+                            _ => {
                                 return Err(Diagnostic::new(
-                                    "only `SeeAllData` is supported in `@IsTest`",
-                                    argument.span,
+                                    "supported `@IsTest` options are `SeeAllData` and `IsParallel`",
+                                    argument_name.span,
                                 ));
                             }
-                            let Expression::BooleanLiteral(value, _) = argument.value else {
-                                return Err(Diagnostic::new(
-                                    "`SeeAllData` requires a Boolean literal",
-                                    argument.value.span(),
-                                ));
-                            };
-                            Some(value)
-                        }
-                        _ => {
+                        };
+                        if slot.replace(value).is_some() {
                             return Err(Diagnostic::new(
-                                "only `SeeAllData` is supported in `@IsTest`",
-                                arguments[1].span,
+                                format!("duplicate `@IsTest` option `{}`", argument_name.spelling),
+                                argument_name.span,
                             ));
                         }
-                    };
-                    AnnotationKind::IsTest { see_all_data }
+                    }
+                    AnnotationKind::IsTest {
+                        see_all_data,
+                        is_parallel,
+                    }
                 }
                 "testsetup" => {
                     if parenthesized {
@@ -556,6 +565,33 @@ impl Parser {
                         ));
                     }
                     AnnotationKind::Future
+                }
+                "suppresswarnings" => {
+                    if !parenthesized
+                        || !matches!(
+                            arguments.as_slice(),
+                            [AnnotationArgument {
+                                name: None,
+                                value: Expression::StringLiteral(_, _),
+                                ..
+                            }]
+                        )
+                    {
+                        return Err(Diagnostic::new(
+                            "`@SuppressWarnings` requires exactly one positional String literal",
+                            name.span,
+                        ));
+                    }
+                    AnnotationKind::SuppressWarnings
+                }
+                "testvisible" => {
+                    if parenthesized {
+                        return Err(Diagnostic::new(
+                            "`@TestVisible` does not accept arguments",
+                            name.span,
+                        ));
+                    }
+                    AnnotationKind::TestVisible
                 }
                 _ => AnnotationKind::Other,
             };

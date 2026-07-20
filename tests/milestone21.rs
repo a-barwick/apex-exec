@@ -87,7 +87,10 @@ impl<'ast> Visitor<'ast> for GrammarCensus {
     }
 
     fn visit_annotation(&mut self, annotation: &'ast ast::Annotation) {
-        if annotation.kind == AnnotationKind::Other {
+        if matches!(
+            annotation.kind,
+            AnnotationKind::Other | AnnotationKind::SuppressWarnings | AnnotationKind::TestVisible
+        ) {
             *self
                 .annotations
                 .entry(annotation.name.spelling.clone())

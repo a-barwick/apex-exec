@@ -811,7 +811,12 @@ profile catalog.
 
 ### M28 — Measured enterprise compatibility closure
 
-**Status:** Planned
+**Status:** Active on `codex/milestone-28-enterprise-compatibility`
+
+**Checkpoint:** In progress; see
+[`docs/MILESTONE_28_CHECKPOINT.md`](docs/MILESTONE_28_CHECKPOINT.md). The last
+completed full replay parses 1,159/1,159 tests but remains 0/1,159 in the strict
+numerator. The exit criterion has not been met.
 
 #### Scope
 

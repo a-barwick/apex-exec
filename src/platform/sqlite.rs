@@ -1,6 +1,6 @@
 use super::{
     DataValue, FieldSchema, FieldType, ObjectSchema, Record, RecordId, SchemaCatalog, SchemaError,
-    Storage, StorageTransaction,
+    Storage, StorageTransaction, SummaryDefinition, SummaryFilterOperator, SummaryOperation,
 };
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use rusqlite::{
@@ -110,7 +110,7 @@ impl StorageTransaction for SqliteStorageTransaction<'_> {
         let object = self.schema.object(object_api_name)?;
         let fields = object
             .fields()
-            .filter(|field| !is_id(field))
+            .filter(|field| is_stored_field(field))
             .collect::<Vec<_>>();
         let mut sql = format!(
             "SELECT {} FROM {} WHERE {} = ?1",
@@ -145,12 +145,18 @@ impl StorageTransaction for SqliteStorageTransaction<'_> {
         RecordId::parse(record.id().to_string()).map_err(SqliteError::invalid_id)?;
         for (name, value) in record.fields() {
             let field = object.field(name)?;
+            if matches!(field.data_type(), FieldType::Summary { .. }) {
+                return Err(SqliteError::ReadOnlyField {
+                    object: object.api_name().to_owned(),
+                    field: field.api_name().to_owned(),
+                });
+            }
             validate_data_value(object.api_name(), field, value)?;
         }
 
         let fields = object
             .fields()
-            .filter(|field| !is_id(field))
+            .filter(|field| is_stored_field(field))
             .collect::<Vec<_>>();
         let mut values = vec![SqlValue::Text(record.id().to_string())];
         for field in &fields {
@@ -203,7 +209,7 @@ impl StorageTransaction for SqliteStorageTransaction<'_> {
         let object = self.schema.object(object_api_name)?;
         let fields = object
             .fields()
-            .filter(|field| !is_id(field))
+            .filter(|field| is_stored_field(field))
             .collect::<Vec<_>>();
         let columns = std::iter::once(quote("Id"))
             .chain(fields.iter().map(|field| quote(field.api_name())))
@@ -301,6 +307,10 @@ pub enum SqliteError {
         object: String,
         field: String,
     },
+    ReadOnlyField {
+        object: String,
+        field: String,
+    },
     InvalidSavepoint(String),
 }
 
@@ -341,6 +351,9 @@ impl fmt::Display for SqliteError {
             Self::MissingRequiredField { object, field } => {
                 write!(formatter, "required field `{object}.{field}` is missing")
             }
+            Self::ReadOnlyField { object, field } => {
+                write!(formatter, "field `{object}.{field}` is read-only")
+            }
             Self::InvalidSavepoint(name) => {
                 write!(formatter, "invalid storage savepoint name `{name}`")
             }
@@ -378,7 +391,7 @@ fn configure(connection: &Connection) -> Result<(), SqliteError> {
 fn migrate(connection: &mut Connection, schema: &SchemaCatalog) -> Result<(), SqliteError> {
     let transaction = connection.transaction().map_err(SqliteError::database)?;
     create_schema_registry(&transaction)?;
-    ensure_relationship_registry_column(&transaction)?;
+    ensure_field_registry_columns(&transaction)?;
     for object in schema.objects() {
         migrate_object(&transaction, object)?;
     }
@@ -399,13 +412,15 @@ fn create_schema_registry(transaction: &Transaction<'_>) -> Result<(), SqliteErr
                 nullable INTEGER NOT NULL,
                 target_object TEXT,
                 relationship_name TEXT,
+                controlling_field TEXT,
+                computed_definition TEXT,
                 PRIMARY KEY (object_name, api_name)
              );",
         )
         .map_err(SqliteError::database)
 }
 
-fn ensure_relationship_registry_column(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
+fn ensure_field_registry_columns(transaction: &Transaction<'_>) -> Result<(), SqliteError> {
     let mut statement = transaction
         .prepare("PRAGMA table_info('_apex_fields')")
         .map_err(SqliteError::database)?;
@@ -414,16 +429,19 @@ fn ensure_relationship_registry_column(transaction: &Transaction<'_>) -> Result<
         .map_err(SqliteError::database)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(SqliteError::database)?;
-    if !columns
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("relationship_name"))
-    {
-        transaction
-            .execute(
-                "ALTER TABLE _apex_fields ADD COLUMN relationship_name TEXT",
-                [],
-            )
-            .map_err(SqliteError::database)?;
+    for column in [
+        "relationship_name",
+        "controlling_field",
+        "computed_definition",
+    ] {
+        if !columns.iter().any(|name| name.eq_ignore_ascii_case(column)) {
+            transaction
+                .execute(
+                    &format!("ALTER TABLE _apex_fields ADD COLUMN {column} TEXT"),
+                    [],
+                )
+                .map_err(SqliteError::database)?;
+        }
     }
     Ok(())
 }
@@ -487,7 +505,9 @@ fn migrate_field(
     let existing = transaction
         .query_row(
             "SELECT field_type, nullable, COALESCE(target_object, ''),
-                    COALESCE(relationship_name, '')
+                    COALESCE(relationship_name, ''),
+                    COALESCE(controlling_field, ''),
+                    COALESCE(computed_definition, '')
              FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
             params![object.api_name(), field.api_name()],
             |row| {
@@ -496,6 +516,8 @@ fn migrate_field(
                     row.get::<_, bool>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
@@ -512,7 +534,7 @@ fn migrate_field(
         }
         return Ok(());
     }
-    if !is_id(field) {
+    if is_stored_field(field) {
         transaction
             .execute(
                 &format!(
@@ -528,15 +550,19 @@ fn migrate_field(
     transaction
         .execute(
             "INSERT INTO _apex_fields
-             (object_name, api_name, field_type, nullable, target_object, relationship_name)
-             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''))",
+             (object_name, api_name, field_type, nullable, target_object,
+              relationship_name, controlling_field, computed_definition)
+             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), NULLIF(?6, ''),
+                     NULLIF(?7, ''), NULLIF(?8, ''))",
             params![
                 object.api_name(),
                 field.api_name(),
                 spec.0,
                 spec.1,
                 spec.2,
-                spec.3
+                spec.3,
+                spec.4,
+                spec.5
             ],
         )
         .map_err(SqliteError::database)?;
@@ -548,22 +574,7 @@ fn validate_data_value(
     field: &FieldSchema,
     value: &DataValue,
 ) -> Result<(), SqliteError> {
-    let compatible = match (field.data_type(), value) {
-        (_, DataValue::Null)
-        | (FieldType::Boolean, DataValue::Boolean(_))
-        | (FieldType::Integer, DataValue::Integer(_))
-        | (FieldType::String, DataValue::String(_))
-        | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
-        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_)) => true,
-        (FieldType::Date, DataValue::Date(value)) => NaiveDate::from_ymd_opt(1970, 1, 1)
-            .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(*value))))
-            .is_some(),
-        (FieldType::Datetime, DataValue::Datetime(value)) => {
-            Utc.timestamp_millis_opt(*value).single().is_some()
-        }
-        _ => false,
-    };
-    if compatible {
+    if data_value_compatible(field.data_type(), value) {
         Ok(())
     } else {
         Err(SqliteError::InvalidFieldValue {
@@ -572,6 +583,28 @@ fn validate_data_value(
             expected: field.data_type().clone(),
             actual: value_name(value),
         })
+    }
+}
+
+fn data_value_compatible(expected: &FieldType, value: &DataValue) -> bool {
+    match (expected, value) {
+        (_, DataValue::Null)
+        | (FieldType::Boolean, DataValue::Boolean(_))
+        | (FieldType::Integer, DataValue::Integer(_))
+        | (FieldType::String, DataValue::String(_))
+        | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
+        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_))
+        | (FieldType::MetadataRelationship { .. }, DataValue::String(_)) => true,
+        (FieldType::Summary { result_type, .. }, value) => {
+            data_value_compatible(result_type, value)
+        }
+        (FieldType::Date, DataValue::Date(value)) => NaiveDate::from_ymd_opt(1970, 1, 1)
+            .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(*value))))
+            .is_some(),
+        (FieldType::Datetime, DataValue::Datetime(value)) => {
+            Utc.timestamp_millis_opt(*value).single().is_some()
+        }
+        _ => false,
     }
 }
 
@@ -588,13 +621,27 @@ fn encode_value(value: &DataValue) -> SqlValue {
 }
 
 fn decode_value(field: &FieldSchema, value: ValueRef<'_>) -> rusqlite::Result<DataValue> {
-    match (field.data_type(), value) {
+    decode_field_type(field.api_name(), field.data_type(), value)
+}
+
+fn decode_field_type(
+    field_name: &str,
+    field_type: &FieldType,
+    value: ValueRef<'_>,
+) -> rusqlite::Result<DataValue> {
+    match (field_type, value) {
         (_, ValueRef::Null) => Ok(DataValue::Null),
         (FieldType::Boolean, ValueRef::Integer(value)) => Ok(DataValue::Boolean(value != 0)),
         (FieldType::Integer, ValueRef::Integer(value)) => Ok(DataValue::Integer(value)),
         (FieldType::String, ValueRef::Text(value)) => Ok(DataValue::String(
             String::from_utf8_lossy(value).into_owned(),
         )),
+        (FieldType::MetadataRelationship { .. }, ValueRef::Text(value)) => Ok(DataValue::String(
+            String::from_utf8_lossy(value).into_owned(),
+        )),
+        (FieldType::Summary { result_type, .. }, value) => {
+            decode_field_type(field_name, result_type, value)
+        }
         (FieldType::Date, ValueRef::Integer(value)) => i32::try_from(value)
             .map(DataValue::Date)
             .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value)),
@@ -604,37 +651,146 @@ fn decode_value(field: &FieldSchema, value: ValueRef<'_>) -> rusqlite::Result<Da
         )),
         _ => Err(rusqlite::Error::InvalidColumnType(
             0,
-            field.api_name().to_owned(),
+            field_name.to_owned(),
             value.data_type(),
         )),
     }
 }
 
-fn field_spec(field: &FieldSchema) -> (String, bool, String, String) {
+fn field_spec(field: &FieldSchema) -> (String, bool, String, String, String, String) {
     let relationship_name = field.relationship_name().unwrap_or_default().to_owned();
-    let (field_type, nullable, target_object) = match field.data_type() {
-        FieldType::Boolean => ("Boolean".to_owned(), field.is_nullable(), String::new()),
-        FieldType::Integer => ("Integer".to_owned(), field.is_nullable(), String::new()),
-        FieldType::String => ("String".to_owned(), field.is_nullable(), String::new()),
-        FieldType::Date => ("Date".to_owned(), field.is_nullable(), String::new()),
-        FieldType::Datetime => ("Datetime".to_owned(), field.is_nullable(), String::new()),
-        FieldType::Id => ("Id".to_owned(), field.is_nullable(), String::new()),
-        FieldType::Reference { target_object } => (
-            "Reference".to_owned(),
-            field.is_nullable(),
-            target_object.clone(),
-        ),
-    };
-    (field_type, nullable, target_object, relationship_name)
+    let (field_type, nullable, target_object, controlling_field, computed_definition) =
+        match field.data_type() {
+            FieldType::Boolean => (
+                "Boolean".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::Integer => (
+                "Integer".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::String => (
+                "String".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::Date => (
+                "Date".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::Datetime => (
+                "Datetime".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::Id => (
+                "Id".to_owned(),
+                field.is_nullable(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::Reference { target_object } => (
+                "Reference".to_owned(),
+                field.is_nullable(),
+                target_object.clone(),
+                String::new(),
+                String::new(),
+            ),
+            FieldType::MetadataRelationship {
+                target_metadata,
+                controlling_field,
+            } => (
+                "MetadataRelationship".to_owned(),
+                field.is_nullable(),
+                target_metadata.clone(),
+                controlling_field.clone().unwrap_or_default(),
+                String::new(),
+            ),
+            FieldType::Summary {
+                result_type,
+                definition,
+            } => (
+                "Summary".to_owned(),
+                field.is_nullable(),
+                definition.child_object.clone(),
+                String::new(),
+                summary_definition_spec(result_type, definition),
+            ),
+        };
+    (
+        field_type,
+        nullable,
+        target_object,
+        relationship_name,
+        controlling_field,
+        computed_definition,
+    )
 }
 
-fn format_field_spec(spec: &(String, bool, String, String)) -> String {
-    if spec.2.is_empty() && spec.3.is_empty() {
+fn summary_definition_spec(result_type: &FieldType, definition: &SummaryDefinition) -> String {
+    let filters = definition
+        .filters
+        .iter()
+        .map(|filter| {
+            serde_json::json!({
+                "field": filter.field,
+                "operator": match filter.operator {
+                    SummaryFilterOperator::Equal => "Equal",
+                },
+                "value": filter.value,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "resultType": field_type_registry_name(result_type),
+        "operation": match definition.operation {
+            SummaryOperation::Count => "Count",
+            SummaryOperation::Sum => "Sum",
+            SummaryOperation::Min => "Min",
+            SummaryOperation::Max => "Max",
+        },
+        "foreignKeyField": definition.foreign_key_field,
+        "summarizedField": definition.summarized_field,
+        "filters": filters,
+    })
+    .to_string()
+}
+
+fn field_type_registry_name(field_type: &FieldType) -> &'static str {
+    match field_type {
+        FieldType::Boolean => "Boolean",
+        FieldType::Integer => "Integer",
+        FieldType::String => "String",
+        FieldType::Date => "Date",
+        FieldType::Datetime => "Datetime",
+        FieldType::Id => "Id",
+        FieldType::Reference { .. } => "Reference",
+        FieldType::MetadataRelationship { .. } => "MetadataRelationship",
+        FieldType::Summary { .. } => "Summary",
+    }
+}
+
+fn format_field_spec(spec: &(String, bool, String, String, String, String)) -> String {
+    if spec.2.is_empty() && spec.3.is_empty() && spec.4.is_empty() && spec.5.is_empty() {
         format!("{} nullable={}", spec.0, spec.1)
     } else {
         format!(
-            "{}({}) relationship={} nullable={}",
-            spec.0, spec.2, spec.3, spec.1
+            "{}({}) relationship={} controlling={} definition={} nullable={}",
+            spec.0, spec.2, spec.3, spec.4, spec.5, spec.1
         )
     }
 }
@@ -644,12 +800,20 @@ fn sqlite_type(field_type: &FieldType) -> &'static str {
         FieldType::Boolean | FieldType::Integer | FieldType::Date | FieldType::Datetime => {
             "INTEGER"
         }
-        FieldType::String | FieldType::Id | FieldType::Reference { .. } => "TEXT",
+        FieldType::String
+        | FieldType::Id
+        | FieldType::Reference { .. }
+        | FieldType::MetadataRelationship { .. } => "TEXT",
+        FieldType::Summary { result_type, .. } => sqlite_type(result_type),
     }
 }
 
 fn is_id(field: &FieldSchema) -> bool {
     field.api_name().eq_ignore_ascii_case("Id")
+}
+
+fn is_stored_field(field: &FieldSchema) -> bool {
+    !is_id(field) && !matches!(field.data_type(), FieldType::Summary { .. })
 }
 
 fn value_name(value: &DataValue) -> &'static str {
@@ -683,7 +847,7 @@ fn quote(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::{FieldSchema, ObjectSchema};
+    use crate::platform::{FieldSchema, ObjectSchema, SummaryFilter};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn schema(include_note: bool) -> SchemaCatalog {
@@ -710,6 +874,68 @@ mod tests {
         record.set_field("Name", name);
         record.set_field("Active__c", true);
         record
+    }
+
+    fn metadata_relationship_schema(controlling_field: &str) -> SchemaCatalog {
+        let mut mapping = ObjectSchema::new("Mapping__mdt");
+        mapping
+            .insert_field(FieldSchema::new("Id", FieldType::Id, false))
+            .unwrap();
+        mapping
+            .insert_field(
+                FieldSchema::new(
+                    "TargetField__c",
+                    FieldType::MetadataRelationship {
+                        target_metadata: "FieldDefinition".to_owned(),
+                        controlling_field: Some(controlling_field.to_owned()),
+                    },
+                    false,
+                )
+                .with_relationship_name("TargetField"),
+            )
+            .unwrap();
+        SchemaCatalog::from_objects([mapping]).unwrap()
+    }
+
+    fn summary_schema(filter_value: &str) -> SchemaCatalog {
+        let mut invoice = ObjectSchema::with_key_prefix("Invoice__c", "a10").unwrap();
+        invoice
+            .insert_field(FieldSchema::new("Id", FieldType::Id, false))
+            .unwrap();
+        invoice
+            .insert_field(FieldSchema::new(
+                "PaidLines__c",
+                FieldType::Summary {
+                    result_type: Box::new(FieldType::Integer),
+                    definition: SummaryDefinition {
+                        child_object: "InvoiceLine__c".to_owned(),
+                        foreign_key_field: "Invoice__c".to_owned(),
+                        operation: SummaryOperation::Count,
+                        summarized_field: None,
+                        filters: vec![SummaryFilter {
+                            field: "Paid__c".to_owned(),
+                            operator: SummaryFilterOperator::Equal,
+                            value: filter_value.to_owned(),
+                        }],
+                    },
+                },
+                false,
+            ))
+            .unwrap();
+        let mut line = ObjectSchema::with_key_prefix("InvoiceLine__c", "a11").unwrap();
+        line.insert_field(FieldSchema::new("Id", FieldType::Id, false))
+            .unwrap();
+        line.insert_field(FieldSchema::new(
+            "Invoice__c",
+            FieldType::Reference {
+                target_object: "Invoice__c".to_owned(),
+            },
+            false,
+        ))
+        .unwrap();
+        line.insert_field(FieldSchema::new("Paid__c", FieldType::Boolean, false))
+            .unwrap();
+        SchemaCatalog::from_objects([invoice, line]).unwrap()
     }
 
     #[test]
@@ -821,6 +1047,135 @@ mod tests {
             .migrate(SchemaCatalog::from_objects([incompatible]).unwrap())
             .unwrap_err();
         assert!(error.to_string().contains("cannot migrate `Account.Name`"));
+    }
+
+    #[test]
+    fn metadata_relationship_registry_and_values_round_trip_without_coercion() {
+        let mut storage =
+            SqliteStorage::in_memory(metadata_relationship_schema("Mapping__mdt.TargetType__c"))
+                .unwrap();
+        let registry = storage
+            .connection()
+            .query_row(
+                "SELECT field_type, target_object, relationship_name, controlling_field
+                 FROM _apex_fields
+                 WHERE object_name = 'Mapping__mdt' AND api_name = 'TargetField__c'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            registry,
+            (
+                "MetadataRelationship".to_owned(),
+                "FieldDefinition".to_owned(),
+                "TargetField".to_owned(),
+                "Mapping__mdt.TargetType__c".to_owned(),
+            )
+        );
+
+        let prefix = storage
+            .schema()
+            .object("Mapping__mdt")
+            .unwrap()
+            .key_prefix()
+            .to_owned();
+        let id = RecordId::generate(&prefix, 1).unwrap();
+        let mut record = Record::new("Mapping__mdt", id.clone());
+        record.set_field("TargetField__c", "Account.Name");
+        let mut transaction = storage.begin_transaction().unwrap();
+        transaction.write(record).unwrap();
+        assert_eq!(
+            transaction
+                .read("Mapping__mdt", &id)
+                .unwrap()
+                .unwrap()
+                .field("TargetField__c"),
+            Some(&DataValue::String("Account.Name".to_owned()))
+        );
+        transaction.commit().unwrap();
+
+        let error = storage
+            .migrate(metadata_relationship_schema(
+                "Mapping__mdt.DifferentType__c",
+            ))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot migrate `Mapping__mdt.TargetField__c`")
+        );
+    }
+
+    #[test]
+    fn summary_registry_is_lossless_non_physical_and_read_only() {
+        let mut storage = SqliteStorage::in_memory(summary_schema("true")).unwrap();
+        let (field_type, target_object, definition) = storage
+            .connection()
+            .query_row(
+                "SELECT field_type, target_object, computed_definition
+                 FROM _apex_fields
+                 WHERE object_name = 'Invoice__c' AND api_name = 'PaidLines__c'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(field_type, "Summary");
+        assert_eq!(target_object, "InvoiceLine__c");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&definition).unwrap(),
+            serde_json::json!({
+                "resultType": "Integer",
+                "operation": "Count",
+                "foreignKeyField": "Invoice__c",
+                "summarizedField": null,
+                "filters": [{
+                    "field": "Paid__c",
+                    "operator": "Equal",
+                    "value": "true"
+                }]
+            })
+        );
+        let physical_columns = storage
+            .connection()
+            .prepare("PRAGMA table_info(\"Invoice__c\")")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(physical_columns, ["Id"]);
+
+        let id = RecordId::generate("a10", 1).unwrap();
+        let mut invalid = Record::new("Invoice__c", id);
+        invalid.set_field("PaidLines__c", 2_i64);
+        let mut transaction = storage.begin_transaction().unwrap();
+        assert!(matches!(
+            transaction.write(invalid).unwrap_err(),
+            SqliteError::ReadOnlyField { object, field }
+                if object == "Invoice__c" && field == "PaidLines__c"
+        ));
+        transaction.rollback().unwrap();
+
+        let error = storage.migrate(summary_schema("false")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot migrate `Invoice__c.PaidLines__c`")
+        );
     }
 
     #[test]

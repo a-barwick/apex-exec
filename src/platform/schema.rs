@@ -25,7 +25,46 @@ pub enum FieldType {
     Date,
     Datetime,
     Id,
-    Reference { target_object: String },
+    Reference {
+        target_object: String,
+    },
+    MetadataRelationship {
+        target_metadata: String,
+        controlling_field: Option<String>,
+    },
+    Summary {
+        result_type: Box<FieldType>,
+        definition: SummaryDefinition,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummaryOperation {
+    Count,
+    Sum,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummaryFilterOperator {
+    Equal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryFilter {
+    pub field: String,
+    pub operator: SummaryFilterOperator,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryDefinition {
+    pub child_object: String,
+    pub foreign_key_field: String,
+    pub operation: SummaryOperation,
+    pub summarized_field: Option<String>,
+    pub filters: Vec<SummaryFilter>,
 }
 
 /// A normalized SObject field definition.

@@ -309,10 +309,17 @@ pub fn walk_variable_declarator<'ast, V: Visitor<'ast> + ?Sized>(
 }
 
 pub fn walk_switch_arm<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, arm: &'ast SwitchArm) {
-    if let SwitchLabels::Expressions(labels) = &arm.labels {
-        for label in labels {
-            visitor.visit_expression(label);
+    match &arm.labels {
+        SwitchLabels::Expressions(labels) => {
+            for label in labels {
+                visitor.visit_expression(label);
+            }
         }
+        SwitchLabels::TypePattern { ty, binding, .. } => {
+            visitor.visit_type_name(ty);
+            visitor.visit_identifier(binding);
+        }
+        SwitchLabels::Else(_) => {}
     }
     visitor.visit_statement(&arm.body);
 }

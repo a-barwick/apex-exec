@@ -2,7 +2,7 @@ use crate::{
     ast::{
         AccessorKind, AssignmentOperator, AssignmentTarget, BinaryOperator, CatchClause,
         ClassMember, CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator,
-        ReturnType, Statement, TypeName, UnaryOperator,
+        ReturnType, Statement, SwitchArm, SwitchLabels, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
@@ -880,10 +880,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Flow::Normal)
             }
-            Statement::Switch { span, .. } => Err(Diagnostic::new(
-                "unsupported switch statement escaped semantic validation",
-                *span,
-            )),
+            Statement::Switch { value, arms, .. } => self.execute_sobject_type_switch(value, arms),
             Statement::For {
                 initializer,
                 condition,
@@ -1118,6 +1115,51 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         })();
         self.scopes.pop();
         result
+    }
+
+    fn execute_sobject_type_switch(
+        &mut self,
+        expression: &Expression,
+        arms: &[SwitchArm],
+    ) -> Result<Flow, Diagnostic> {
+        let value = self.evaluate(expression)?;
+        for arm in arms {
+            match &arm.labels {
+                SwitchLabels::TypePattern {
+                    ty,
+                    binding,
+                    span: pattern_span,
+                } => {
+                    let Some(expected_object) = self.program().switch_pattern(*pattern_span) else {
+                        return Err(Diagnostic::new(
+                            "SObject switch pattern is missing its checked target",
+                            *pattern_span,
+                        ));
+                    };
+                    let matched = matches!(
+                        &value,
+                        Value::SObject(id)
+                            if self.store.sobject(*id).object_id == expected_object.index()
+                    );
+                    self.record_branch(*pattern_span, matched);
+                    if matched {
+                        self.scopes.push(HashMap::new());
+                        self.bind_local(binding, ty, typed_value(value.clone(), ty));
+                        let result = self.execute_statement(&arm.body);
+                        self.scopes.pop();
+                        return result;
+                    }
+                }
+                SwitchLabels::Else(_) => return self.execute_statement(&arm.body),
+                SwitchLabels::Expressions(_) => {
+                    return Err(Diagnostic::new(
+                        "unsupported scalar switch arm escaped semantic validation",
+                        arm.span,
+                    ));
+                }
+            }
+        }
+        Ok(Flow::Normal)
     }
 
     fn execute_for(
@@ -2326,6 +2368,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .object_at(object_id)
             .and_then(|object| object.field_at(field_id))
             .expect("checked SObject field index is valid");
+        if matches!(field.data_type(), FieldType::Summary { .. })
+            || field.api_name().eq_ignore_ascii_case("IsDeleted")
+        {
+            return Err(runtime_exception(
+                "SObjectException",
+                format!("field `{}` is read-only", field.api_name()),
+                span,
+            ));
+        }
         let field_type = apex_field_type(field.data_type());
         if !self.value_has_type(&value, &field_type) {
             return Err(runtime_exception(
@@ -3826,6 +3877,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             BinaryOperator::NotEqual => {
                 Ok(Value::Boolean(!self.operator_values_equal(&left, &right)))
             }
+            BinaryOperator::ExactEqual => Ok(Value::Boolean(
+                self.operator_values_identical(&left, &right),
+            )),
+            BinaryOperator::ExactNotEqual => Ok(Value::Boolean(
+                !self.operator_values_identical(&left, &right),
+            )),
             BinaryOperator::Add
             | BinaryOperator::Subtract
             | BinaryOperator::Multiply
@@ -4048,7 +4105,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .object_at(self.store.sobject(*id).object_id)
                     .expect("runtime SObject schema index is valid");
                 target.canonical == "sobject"
-                    || actual.api_name().eq_ignore_ascii_case(&target.spelling)
+                    || actual
+                        .api_name()
+                        .eq_ignore_ascii_case(crate::hir::schema_api_name(target))
             }
             Value::AggregateResult(_) => matches!(target, TypeName::AggregateResult),
             Value::Exception(exception) => self.exception_matches(exception, target),
@@ -4235,7 +4294,11 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
     match field_type {
         FieldType::Boolean => TypeName::Boolean,
         FieldType::Integer => TypeName::Integer,
-        FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+        FieldType::String
+        | FieldType::Id
+        | FieldType::Reference { .. }
+        | FieldType::MetadataRelationship { .. } => TypeName::String,
+        FieldType::Summary { result_type, .. } => apex_field_type(result_type),
         FieldType::Date => TypeName::Date,
         FieldType::Datetime => TypeName::Datetime,
     }

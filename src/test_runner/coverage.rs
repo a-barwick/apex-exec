@@ -1,7 +1,7 @@
 use super::{CoverageReport, FileCoverage};
 use crate::{
     ast::{
-        ClassMember, Expression, Statement,
+        ClassMember, Expression, Statement, SwitchLabels,
         visit::{self, Visitor},
     },
     project::Compilation,
@@ -178,6 +178,9 @@ fn visit_statement(
         }
         Statement::Switch { arms, .. } => {
             for arm in arms {
+                if let SwitchLabels::TypePattern { span, .. } = &arm.labels {
+                    branches.insert(*span);
+                }
                 visit_statement(&arm.body, statements, branches);
             }
         }

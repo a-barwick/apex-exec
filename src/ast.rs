@@ -203,9 +203,14 @@ pub struct AnnotationArgument {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnnotationKind {
-    IsTest { see_all_data: Option<bool> },
+    IsTest {
+        see_all_data: Option<bool>,
+        is_parallel: Option<bool>,
+    },
     TestSetup,
     Future,
+    SuppressWarnings,
+    TestVisible,
     Other,
 }
 
@@ -220,6 +225,13 @@ impl AnnotationKind {
 
     pub fn is_future(self) -> bool {
         matches!(self, Self::Future)
+    }
+
+    pub fn test_parallelism(self) -> Option<bool> {
+        match self {
+            Self::IsTest { is_parallel, .. } => is_parallel,
+            _ => None,
+        }
     }
 }
 
@@ -270,6 +282,11 @@ pub struct SwitchArm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SwitchLabels {
     Expressions(Vec<Expression>),
+    TypePattern {
+        ty: TypeName,
+        binding: Identifier,
+        span: Span,
+    },
     Else(Span),
 }
 
@@ -536,6 +553,7 @@ pub struct SoqlQuery {
     pub order_by: Vec<SoqlOrderBy>,
     pub limit: Option<SoqlValue>,
     pub offset: Option<SoqlValue>,
+    pub all_rows: bool,
     pub span: Span,
 }
 
@@ -805,6 +823,8 @@ pub enum BinaryOperator {
     GreaterEqual,
     Equal,
     NotEqual,
+    ExactEqual,
+    ExactNotEqual,
     BitwiseAnd,
     BitwiseOr,
     BitwiseXor,
