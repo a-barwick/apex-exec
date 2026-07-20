@@ -703,6 +703,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::HttpResponse
         | TypeName::HttpCalloutMock
         | TypeName::Callable
+        | TypeName::Queueable
         | TypeName::QueueableContext
         | TypeName::BatchableContext
         | TypeName::FinalizerContext

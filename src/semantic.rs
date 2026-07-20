@@ -2226,6 +2226,9 @@ impl Checker {
 
     fn class_implements_platform_contract(&self, class_id: usize, expected: &TypeName) -> bool {
         match expected {
+            TypeName::Queueable => {
+                self.class_implements_platform_interface(class_id, is_queueable_interface)
+            }
             TypeName::BatchableContext => self.batchable_context_contracts.contains_key(&class_id),
             TypeName::FinalizerContext => self.finalizer_context_contracts.contains_key(&class_id),
             TypeName::QueueableContext => self.queueable_context_contracts.contains_key(&class_id),

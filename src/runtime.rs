@@ -4711,6 +4711,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 if matches!(target, TypeName::Callable) {
                     return self.program().callable_contract(class_id).is_some();
                 }
+                if matches!(target, TypeName::Queueable) {
+                    return self
+                        .program()
+                        .async_contract(class_id)
+                        .is_some_and(|contract| contract.queueable.is_some());
+                }
                 let TypeName::Custom(target) = target else {
                     return false;
                 };

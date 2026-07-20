@@ -460,6 +460,32 @@ public class IdStringWideningDemo {
 }
 
 #[test]
+fn queueable_implementations_are_assignable_to_the_platform_interface_type() {
+    let source = r#"
+public class QueueableParameterDemo {
+    public class Work implements System.Queueable {
+        public void execute(System.QueueableContext context) {}
+    }
+
+    public static Boolean accepts(System.Queueable work) {
+        return work != null;
+    }
+
+    public static void run() {
+        System.debug(accepts(new Work()));
+    }
+}
+"#;
+    let root = test_project("QueueableParameterDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("QueueableParameterDemo.run").unwrap(),
+        ["true"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {
