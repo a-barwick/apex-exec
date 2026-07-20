@@ -3733,6 +3733,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             _ => {}
         }
+        if let Some(result) = self.cast_list_value(&value, target, span) {
+            return result;
+        }
         if self.value_has_type(&value, target) || matches!(target, TypeName::Object) {
             return Ok(value);
         }
@@ -3746,6 +3749,49 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ),
             span,
         ))
+    }
+
+    fn cast_list_value(
+        &mut self,
+        value: &Value,
+        target: &TypeName,
+        span: Span,
+    ) -> Option<Result<Value, Diagnostic>> {
+        let (Value::Collection(collection), TypeName::List(target_element)) = (value, target)
+        else {
+            return None;
+        };
+        let invalid_index = match self.collection(*collection) {
+            Collection::List { elements, .. } => elements.iter().position(|element| {
+                !matches!(element, Value::Null(_)) && !self.value_has_type(element, target_element)
+            }),
+            _ => {
+                return Some(Err(runtime_exception(
+                    "TypeException",
+                    format!(
+                        "invalid conversion from runtime type {} to {}",
+                        self.collection_type(*collection).apex_name(),
+                        target.apex_name()
+                    ),
+                    span,
+                )));
+            }
+        };
+        if let Some(index) = invalid_index {
+            return Some(Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "List element at index {index} is not compatible with {}",
+                    target_element.apex_name()
+                ),
+                span,
+            )));
+        }
+        let Collection::List { element_type, .. } = self.collection_mut(*collection) else {
+            unreachable!("List collection was checked above")
+        };
+        *element_type = (**target_element).clone();
+        Some(Ok(value.clone()))
     }
 
     fn evaluate_assignment(

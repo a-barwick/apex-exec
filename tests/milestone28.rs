@@ -264,6 +264,47 @@ public class NestedTypeIdentityDemo {
 }
 
 #[test]
+fn list_casts_follow_covariant_sobject_identity_with_bounded_validation() {
+    let source = r#"
+public class SObjectListCastDemo {
+    public static void run() {
+        List<SObject> generic = new List<SObject>{new M28Alpha__c()};
+        List<M28Alpha__c> narrowed = (List<M28Alpha__c>) generic;
+        System.debug(narrowed.size());
+
+        List<M28Alpha__c> concrete =
+            new List<M28Alpha__c>{new M28Alpha__c()};
+        List<SObject> widened = concrete;
+        System.debug(((List<M28Alpha__c>) widened).size());
+
+        List<SObject> mixed = new List<SObject>{
+            new M28Alpha__c(),
+            new M28Beta__c(),
+            new M28Alpha__c()
+        };
+        try {
+            List<M28Alpha__c> invalid = (List<M28Alpha__c>) mixed;
+            System.debug(invalid.size());
+        } catch (TypeException error) {
+            System.debug(error.getMessage());
+        }
+    }
+}
+"#;
+    let root = test_project("SObjectListCastDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("SObjectListCastDemo.run").unwrap(),
+        [
+            "1",
+            "1",
+            "List element at index 1 is not compatible with M28Alpha__c",
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dynamic_sobject_exposes_only_the_typed_id_pseudo_field() {
     let source = r#"
 public class DynamicSObjectIdDemo {

@@ -2139,6 +2139,11 @@ impl Checker {
         if self.same_type_identity(actual, expected) || *expected == TypeName::Object {
             return true;
         }
+        if let (TypeName::List(actual), TypeName::List(expected)) = (actual, expected)
+            && self.is_subtype(actual, expected)
+        {
+            return true;
+        }
         if (*actual == TypeName::Integer
             && matches!(
                 expected,
