@@ -395,7 +395,7 @@ Every discovered Apex class and trigger has one exact effective profile. A
 well-formed matching `*-meta.xml` sidecar takes precedence over the required
 project `sourceApiVersion`; missing sidecars inherit the project default.
 Profile identity is preserved in HIR/runtime context, CI/cache results, oracle
-snapshots/reports, and schema-3 hybrid validation evidence.
+snapshots/reports, and current schema-4 hybrid validation evidence.
 
 The closed modeled catalog is API 31.0 and API 60.0 through 66.0. API 31.0
 reproduces the reviewed historical behavior where null `instanceof` returns
@@ -601,10 +601,12 @@ and fields, common object children, permission sets, profiles, settings, flows,
 layouts, labels, custom metadata, roles, groups, queues, tabs, applications,
 workflows, named credentials, and remote-site settings.
 
-The classifier has 28 static metadata-type mappings. Unrecognized unchanged
-paths do not enter inventory or drift accounting, and multi-part Custom
-Metadata filenames are currently truncated at the first dot. M26 replaces this
-curated classifier with explicit, API-versioned file accounting.
+M26 uses a 548-type API-profiled catalog rather than the former 28 static
+mappings. Every package-root file is recognized or receives an explicit
+intentional/unsupported disposition. Parent/child, bundle, mixed-content,
+folder, decomposed, sidecar, namespace, and multipart full-name conventions
+are preserved. Reports keep catalog, file, component, transport, drift, and
+local-semantics denominators separate.
 
 With `--target-org`, Apex Exec verifies an existing authenticated alias,
 retrieves the scoped org metadata into isolated project-local `.apex-exec`
@@ -620,14 +622,14 @@ extra observations do not expand the bound request. Auth inspection does not
 request verbose output or persist access tokens/auth URLs. The tool does not
 create, authenticate, reset, or delete orgs.
 
-Version-1 validation snapshots are rejected. M25 schema-version-3 snapshots
+Version-1 validation snapshots are rejected. M26 schema-version-4 snapshots
 bind the provider-neutral inventory and validation observations to the exact
 serialized M14 manifest, cache key, CI-result digest, changed paths, affected
 component selectors/digests, selected tests, test level, target alias and org
 ID, project API version, canonical effective per-source profiles, Apex
 Exec/Salesforce CLI versions, capture time, exact age policy, and full snapshot
 digest. Authenticated capture requires two identical normalized retrieval
-digests before check-only deployment. Schema-2 M17 bundles remain historical
+digests before check-only deployment. Schema-2 M17 and schema-3 M25 bundles remain historical
 review records and are deliberately rejected by current replay.
 
 `--validation-snapshot` replay is credential-free but requires the exact M14
@@ -706,8 +708,8 @@ are not a runtime or general Salesforce compatibility percentage.
 | Enterprise CI | Implemented (hermetic manifests/replay, content cache, impacted tests, shards, standard reports, provider templates, and policy gates) | M14 |
 | Hybrid deployment confidence | Implemented (affected components/tests, optional validation org, drift, test differential, readiness reports, and snapshot replay) | M15 |
 | Governor limits | Deferred | Post-core compatibility profile |
-| Candidate-bound live validation evidence | Implemented (schema v3 with effective profiles, exact replay, repeated retrieval, and reviewed clean/blocked live bundle) | M17/M25 |
-| Broad metadata accounting and org-only drift | Planned | M26 |
+| Candidate-bound live validation evidence | Implemented (schema v4 with effective profiles, metadata accounting, exact replay, repeated retrieval, and reviewed clean/blocked live bundles) | M17/M25/M26 |
+| Broad metadata accounting and org-only drift | Implemented (548 catalog types, complete file dispositions, separate metrics, type-wide org discovery) | M26 |
 | Sharing/security behavior | Planned (profile-scoped) | M27 |
 | API-version differences | Implemented (API 31.0 and current API 60.0–66.0 family; strict rejection outside modeled versions) | M25 |
 | Runtime isolation for untrusted code | Out of scope | None |

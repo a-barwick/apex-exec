@@ -450,13 +450,24 @@ acceptance criteria, branch rules, and the coordinator prompt live under
   byte-identically. Verification passes 432 tests with no failures or ignored
   tests; coverage is **84.92%** overall (28,904/34,035) and **84.65%** across
   16 changed production modules (14,288/16,879).
+- M26 replaces the 28-path classifier with a generated 548-type catalog,
+  complete package-file dispositions, lossless component naming, type-wide
+  org-only discovery, and schema-4 hybrid evidence. The unchanged M22 root is
+  1,055/1,055 files and 876/876 components accounted with zero unsupported or
+  unclassified files. API 65.0 separately reports 253/548 retrieve/deploy,
+  548/548 inventory/drift, and 4/548 local-semantics support. Two final guarded
+  clean inventories have zero project drift; controlled addition, removal,
+  and mutation produce the expected org-only, missing, and mismatch findings.
+  Verification passes 439 tests with no failures or ignored tests; LLVM
+  source-line coverage is **85.10%** overall (29,348/34,485) and **83.18%**
+  across the three changed production Rust modules (2,869/3,449).
 
 ## Immediate target
 
-M25 API-version compatibility profiles are complete. M26 complete metadata
-accounting and org-configuration breadth is the next planned milestone. The package
-tracker is in `docs/STABILIZATION.md`; the complete Phase 2 sequence and its
-evidence baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+M26 metadata accounting and org-configuration breadth is complete. M27 sharing
+and security profiles is the next planned milestone. The package tracker is in
+`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
+baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
 
 ## North Star indicators
 
@@ -483,13 +494,11 @@ comment-aware construct counts are recorded in
   passing methods, and measures an initial strict numerator of 0/1,159. This is
   the project-specific baseline that M28 must raise to at least 60%; it is not a
   general Salesforce compatibility percentage.
-- The M15 path classifier recognizes 28 static metadata types. Unknown
-  unchanged metadata is omitted from drift accounting, and multi-part Custom
-  Metadata full names are currently truncated.
-- Version-1 validation snapshots remain rejected. Schema-version-2 evidence
-  binds candidate, request, org, API/tool versions, capture age, inventory, and
-  the complete snapshot; altered, expired, or mismatched evidence fails before
-  readiness evaluation.
+- M26 replaces the historical M15 28-type classifier with the 548-type catalog,
+  complete package-file accounting, and lossless multipart names.
+- Version-1 through version-3 validation snapshots remain historical. Current
+  schema-version-4 evidence additionally seals catalog capabilities, file
+  dispositions, component accounting, and separate denominators.
 
 ## Known limitations
 
@@ -653,15 +662,11 @@ comment-aware construct counts are recorded in
 - Content-addressed artifacts cache normalized compile/test/report observations,
   not serialized AST/HIR. A cache miss still performs project-wide semantic
   linking after parsing reuse; persistent lowered-IR caching remains M29 work.
-- M15 inventories 28 curated common SFDX metadata types rather than the entire
-  Metadata API. Unknown changed paths conservatively validate the complete
-  project, while unknown unchanged metadata is outside drift accounting.
-  Multi-part Custom Metadata filenames are currently reduced to their first
-  dot-separated segment.
 - Drift compares project-owned schema/configuration content retrieved for the
   release and excludes directly changed components as intended payload. It
-  does not discover org configuration that has no corresponding local
-  component.
+  discovers org-only configuration for project-owned types through type-wide
+  retrieval, but arbitrary types absent from the project remain represented as
+  profile capability findings rather than exhaustively retrieved components.
 - Version-1 M15 snapshots are rejected. Version-2 evidence detects candidate,
   request, org, API/tool, age-policy, inventory, and snapshot mismatches, but
   its SHA-256 seal is an integrity check rather than a digital signature.
