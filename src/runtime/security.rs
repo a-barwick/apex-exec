@@ -13,6 +13,26 @@ struct DmlEnforcement {
     owner_was_defaulted: bool,
 }
 
+enum DmlAuthorizationError {
+    Permission(SecurityError),
+    Sharing(SecurityError),
+}
+
+impl DmlAuthorizationError {
+    fn status(&self) -> DmlStatus {
+        match self {
+            Self::Permission(_) => DmlStatus::CannotInsertUpdateActivateEntity,
+            Self::Sharing(_) => DmlStatus::InsufficientAccessOrReadonly,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::Permission(error) | Self::Sharing(error) => error.to_string(),
+        }
+    }
+}
+
 pub(super) fn secure_soql_request(
     policy: &SecurityPolicy,
     schema: &SchemaCatalog,
@@ -28,9 +48,8 @@ pub(super) fn secure_soql_request(
         authorize_query_permissions(policy, schema, request)
             .map_err(|error| DatabaseError::new(error.to_string()))?;
     }
-    let enforce_sharing = request.access == QueryAccessMode::UserMode
-        || (request.access != QueryAccessMode::SystemMode
-            && request.sharing == SharingMode::WithSharing);
+    let enforce_sharing =
+        request.access == QueryAccessMode::UserMode || request.sharing == SharingMode::WithSharing;
     if enforce_sharing {
         let object = schema
             .object(&request.object)
@@ -66,8 +85,35 @@ pub(super) fn secure_dml_request(
         ));
     }
     let mut secured = request.clone();
-    let mut defaulted_owner_rows = BTreeSet::new();
-    for row in &mut secured.rows {
+    let defaulted_owner_rows = default_record_owners(schema, &mut secured)?;
+    let enforce_permissions = request.access == AccessLevel::UserMode;
+    let enforce_sharing = enforce_permissions || request.sharing == SharingMode::WithSharing;
+    if !enforce_permissions && !enforce_sharing {
+        return Ok((secured, Vec::new()));
+    }
+
+    let records = security_records(database, &secured)?;
+    let enforcement = DmlEnforcement {
+        permissions: enforce_permissions,
+        sharing: enforce_sharing,
+        owner_was_defaulted: false,
+    };
+    partition_dml_rows(
+        policy,
+        schema,
+        &records,
+        secured,
+        &defaulted_owner_rows,
+        enforcement,
+    )
+}
+
+fn default_record_owners(
+    schema: &SchemaCatalog,
+    request: &mut DmlRequest,
+) -> Result<BTreeSet<usize>, DatabaseError> {
+    let mut defaulted = BTreeSet::new();
+    for row in &mut request.rows {
         let can_default_owner = matches!(request.operation, DmlOperation::Insert)
             || (request.operation == DmlOperation::Upsert && row.record.id().is_none());
         if can_default_owner
@@ -87,18 +133,21 @@ pub(super) fn secure_dml_request(
                     DataValue::String(request.user_id.clone()),
                 )
                 .map_err(|error| DatabaseError::new(error.to_string()))?;
-            defaulted_owner_rows.insert(row.input_index);
+            defaulted.insert(row.input_index);
         }
     }
+    Ok(defaulted)
+}
 
-    let enforce_permissions = request.access == AccessLevel::UserMode;
-    let enforce_sharing = enforce_permissions || request.sharing == SharingMode::WithSharing;
-    if !enforce_permissions && !enforce_sharing {
-        return Ok((secured, Vec::new()));
-    }
-
+fn security_records(
+    database: &mut LocalDatabase,
+    request: &DmlRequest,
+) -> Result<
+    BTreeMap<String, BTreeMap<crate::platform::RecordId, crate::platform::Record>>,
+    DatabaseError,
+> {
     let mut records = BTreeMap::new();
-    for object in secured
+    for object in request
         .rows
         .iter()
         .map(|row| row.record.object_api_name())
@@ -113,37 +162,36 @@ pub(super) fn secure_dml_request(
                 .collect::<BTreeMap<_, _>>(),
         );
     }
+    Ok(records)
+}
 
+fn partition_dml_rows(
+    policy: &SecurityPolicy,
+    schema: &SchemaCatalog,
+    records: &BTreeMap<String, BTreeMap<crate::platform::RecordId, crate::platform::Record>>,
+    mut request: DmlRequest,
+    defaulted_owner_rows: &BTreeSet<usize>,
+    enforcement: DmlEnforcement,
+) -> Result<(DmlRequest, Vec<PreparedDmlOutcome>), DatabaseError> {
     let mut allowed = Vec::new();
     let mut denied = Vec::new();
-    let rows = std::mem::take(&mut secured.rows);
+    let rows = std::mem::take(&mut request.rows);
     for row in rows {
-        let result = authorize_dml_row(
-            policy,
-            schema,
-            &records,
-            &secured,
-            &row,
-            DmlEnforcement {
-                permissions: enforce_permissions,
-                sharing: enforce_sharing,
-                owner_was_defaulted: defaulted_owner_rows.contains(&row.input_index),
-            },
-        );
+        let row_enforcement = DmlEnforcement {
+            owner_was_defaulted: defaulted_owner_rows.contains(&row.input_index),
+            ..enforcement
+        };
+        let result = authorize_dml_row(policy, schema, records, &request, &row, row_enforcement);
         match result {
             Ok(()) => allowed.push(row),
             Err(error) => denied.push(PreparedDmlOutcome::Failed {
                 input_index: row.input_index,
-                errors: vec![DmlError::new(
-                    DmlStatus::InsufficientAccessOrReadonly,
-                    error.to_string(),
-                    [],
-                )],
+                errors: vec![DmlError::new(error.status(), error.message(), [])],
             }),
         }
     }
-    secured.rows = allowed;
-    Ok((secured, denied))
+    request.rows = allowed;
+    Ok((request, denied))
 }
 
 fn authorize_dml_row(
@@ -153,10 +201,12 @@ fn authorize_dml_row(
     request: &DmlRequest,
     row: &DmlRow,
     enforcement: DmlEnforcement,
-) -> Result<(), SecurityError> {
+) -> Result<(), DmlAuthorizationError> {
     let object = schema
         .object(row.record.object_api_name())
-        .map_err(|error| SecurityError::AccessDenied(error.to_string()))?;
+        .map_err(|error| {
+            DmlAuthorizationError::Permission(SecurityError::AccessDenied(error.to_string()))
+        })?;
     let existing = row.record.id().and_then(|id| {
         records
             .get(&object.api_name().to_ascii_lowercase())
@@ -169,54 +219,75 @@ fn authorize_dml_row(
         DmlOperation::Delete | DmlOperation::Undelete => AccessType::Updatable,
     };
     if enforcement.permissions {
-        let permissions = policy.object_permissions(&request.user_id, object.api_name())?;
-        let object_allowed = match request.operation {
-            DmlOperation::Delete | DmlOperation::Undelete => permissions.deletable,
-            _ => permissions.permits(access),
-        };
-        if !object_allowed {
+        authorize_dml_permissions(policy, object, request, row, access, enforcement)
+            .map_err(DmlAuthorizationError::Permission)?;
+    }
+    if enforcement.sharing
+        && let Some(existing) = existing
+        && !policy
+            .can_access_record(object, existing, &request.user_id, RecordAccess::Edit)
+            .map_err(DmlAuthorizationError::Sharing)?
+    {
+        return Err(DmlAuthorizationError::Sharing(SecurityError::AccessDenied(
+            format!(
+                "record access denied for `{}:{}`",
+                object.api_name(),
+                existing.id()
+            ),
+        )));
+    }
+    Ok(())
+}
+
+fn authorize_dml_permissions(
+    policy: &SecurityPolicy,
+    object: &crate::platform::ObjectSchema,
+    request: &DmlRequest,
+    row: &DmlRow,
+    access: AccessType,
+    enforcement: DmlEnforcement,
+) -> Result<(), SecurityError> {
+    let permissions = policy.object_permissions(&request.user_id, object.api_name())?;
+    let object_allowed = match request.operation {
+        DmlOperation::Delete | DmlOperation::Undelete => permissions.deletable,
+        _ => permissions.permits(access),
+    };
+    if !object_allowed {
+        return Err(SecurityError::AccessDenied(format!(
+            "{} access denied for object `{}`",
+            access.apex_name(),
+            object.api_name()
+        )));
+    }
+    if !matches!(
+        request.operation,
+        DmlOperation::Insert | DmlOperation::Update | DmlOperation::Upsert
+    ) {
+        return Ok(());
+    }
+    for (field, _) in row.record.fields() {
+        if is_implicit_dml_field(field, enforcement.owner_was_defaulted) {
+            continue;
+        }
+        if !policy
+            .field_permissions(&request.user_id, object.api_name(), field)?
+            .permits(access)
+        {
             return Err(SecurityError::AccessDenied(format!(
-                "{} access denied for object `{}`",
+                "{} access denied for field `{}.{field}`",
                 access.apex_name(),
                 object.api_name()
             )));
         }
-        if matches!(
-            request.operation,
-            DmlOperation::Insert | DmlOperation::Update | DmlOperation::Upsert
-        ) {
-            for (field, _) in row.record.fields() {
-                if field.eq_ignore_ascii_case("Id")
-                    || field.eq_ignore_ascii_case("CreatedDate")
-                    || field.eq_ignore_ascii_case("LastModifiedDate")
-                    || (enforcement.owner_was_defaulted && field.eq_ignore_ascii_case("OwnerId"))
-                {
-                    continue;
-                }
-                if !policy
-                    .field_permissions(&request.user_id, object.api_name(), field)?
-                    .permits(access)
-                {
-                    return Err(SecurityError::AccessDenied(format!(
-                        "{} access denied for field `{}.{field}`",
-                        access.apex_name(),
-                        object.api_name()
-                    )));
-                }
-            }
-        }
-    }
-    if enforcement.sharing
-        && let Some(existing) = existing
-        && !policy.can_access_record(object, existing, &request.user_id, RecordAccess::Edit)?
-    {
-        return Err(SecurityError::AccessDenied(format!(
-            "record access denied for `{}:{}`",
-            object.api_name(),
-            existing.id()
-        )));
     }
     Ok(())
+}
+
+fn is_implicit_dml_field(field: &str, owner_was_defaulted: bool) -> bool {
+    field.eq_ignore_ascii_case("Id")
+        || field.eq_ignore_ascii_case("CreatedDate")
+        || field.eq_ignore_ascii_case("LastModifiedDate")
+        || (owner_was_defaulted && field.eq_ignore_ascii_case("OwnerId"))
 }
 
 fn authorize_query_permissions(

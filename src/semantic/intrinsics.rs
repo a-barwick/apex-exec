@@ -825,6 +825,9 @@ impl Checker {
         arguments: &[Expression],
     ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
         use PlatformIntrinsic as P;
+        if let Some(result) = self.user_and_security_static_method_type(owner, method, arguments) {
+            return result;
+        }
         let canonical_owner = owner.to_ascii_lowercase();
         let intrinsic = match (canonical_owner.as_str(), method.canonical.as_str()) {
             ("date", "newinstance") => P::DateNewInstance,
@@ -854,12 +857,8 @@ impl Checker {
             ("limits", "getlimitdmlstatements") => P::LimitsGetLimitDmlStatements,
             ("limits", "getcallouts") => P::LimitsGetCallouts,
             ("limits", "getlimitcallouts") => P::LimitsGetLimitCallouts,
-            ("userinfo", "getuserid") => P::UserInfoGetUserId,
-            ("userinfo", "getusername") => P::UserInfoGetUserName,
-            ("userinfo", "getprofileid") => P::UserInfoGetProfileId,
             ("encodingutil", "base64encode") => P::EncodingBase64Encode,
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
-            ("security", "stripinaccessible") => P::SecurityStripInaccessible,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
             ("eventbus", "publish") => P::EventBusPublish,
             _ => return Err(self.unsupported_platform_api(owner, method)),
@@ -1006,14 +1005,6 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Integer
             }
-            P::UserInfoGetUserId | P::UserInfoGetProfileId => {
-                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
-                TypeName::Id
-            }
-            P::UserInfoGetUserName => {
-                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
-                TypeName::String
-            }
             P::EncodingBase64Encode => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_named_argument(
@@ -1036,36 +1027,11 @@ impl Checker {
                 )?;
                 TypeName::Blob
             }
-            P::SecurityStripInaccessible => {
-                require_static_arity(owner, method, arguments.len(), &[2, 3], arguments)?;
-                self.require_named_argument(
-                    owner,
-                    &method.spelling,
-                    0,
-                    &arguments[0],
-                    &TypeName::AccessType,
-                )?;
-                match self.expression_type(&arguments[1])? {
-                    ExpressionType::Value(TypeName::List(element))
-                        if self.is_sobject_type(&element)
-                            || self.is_dynamic_sobject_type(&element) => {}
-                    _ => {
-                        return Err(Diagnostic::new(
-                            "Security.stripInaccessible argument 2 must be a List of SObjects",
-                            arguments[1].span(),
-                        ));
-                    }
-                }
-                if let Some(enforce_root_object_crud) = arguments.get(2) {
-                    self.require_named_argument(
-                        owner,
-                        &method.spelling,
-                        2,
-                        enforce_root_object_crud,
-                        &TypeName::Boolean,
-                    )?;
-                }
-                TypeName::SObjectAccessDecision
+            P::UserInfoGetUserId
+            | P::UserInfoGetUserName
+            | P::UserInfoGetProfileId
+            | P::SecurityStripInaccessible => {
+                unreachable!("UserInfo and Security intrinsics were handled above")
             }
             P::DatabaseExecuteBatch => {
                 require_static_arity(owner, method, arguments.len(), &[1, 2], arguments)?;
@@ -1092,6 +1058,81 @@ impl Checker {
             IntrinsicId::Platform(intrinsic),
             ExpressionType::Value(result),
         ))
+    }
+
+    fn user_and_security_static_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Option<Result<(IntrinsicId, ExpressionType), Diagnostic>> {
+        use PlatformIntrinsic as P;
+        let intrinsic = match (
+            owner.to_ascii_lowercase().as_str(),
+            method.canonical.as_str(),
+        ) {
+            ("userinfo", "getuserid") => P::UserInfoGetUserId,
+            ("userinfo", "getusername") => P::UserInfoGetUserName,
+            ("userinfo", "getprofileid") => P::UserInfoGetProfileId,
+            ("security", "stripinaccessible") => P::SecurityStripInaccessible,
+            _ => return None,
+        };
+        Some((|| {
+            let result = match intrinsic {
+                P::UserInfoGetUserId | P::UserInfoGetProfileId => {
+                    require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                    TypeName::Id
+                }
+                P::UserInfoGetUserName => {
+                    require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                    TypeName::String
+                }
+                P::SecurityStripInaccessible => {
+                    self.security_strip_inaccessible_type(owner, method, arguments)?
+                }
+                _ => unreachable!("only UserInfo and Security intrinsics use this helper"),
+            };
+            Ok((
+                IntrinsicId::Platform(intrinsic),
+                ExpressionType::Value(result),
+            ))
+        })())
+    }
+
+    fn security_strip_inaccessible_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<TypeName, Diagnostic> {
+        require_static_arity(owner, method, arguments.len(), &[2, 3], arguments)?;
+        self.require_named_argument(
+            owner,
+            &method.spelling,
+            0,
+            &arguments[0],
+            &TypeName::AccessType,
+        )?;
+        match self.expression_type(&arguments[1])? {
+            ExpressionType::Value(TypeName::List(element))
+                if self.is_sobject_type(&element) || self.is_dynamic_sobject_type(&element) => {}
+            _ => {
+                return Err(Diagnostic::new(
+                    "Security.stripInaccessible argument 2 must be a List of SObjects",
+                    arguments[1].span(),
+                ));
+            }
+        }
+        if let Some(enforce_root_object_crud) = arguments.get(2) {
+            self.require_named_argument(
+                owner,
+                &method.spelling,
+                2,
+                enforce_root_object_crud,
+                &TypeName::Boolean,
+            )?;
+        }
+        Ok(TypeName::SObjectAccessDecision)
     }
 
     fn unsupported_instance_platform_api(

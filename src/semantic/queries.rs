@@ -26,6 +26,14 @@ struct DatabaseDmlOptions {
     access_level_argument: Option<usize>,
 }
 
+fn empty_database_dml_options() -> DatabaseDmlOptions {
+    DatabaseDmlOptions {
+        external_id: None,
+        all_or_none_argument: None,
+        access_level_argument: None,
+    }
+}
+
 impl Checker {
     pub(super) fn sobject_relationship_target(
         &self,
@@ -814,94 +822,126 @@ impl Checker {
                 method.span,
             ));
         }
-        let empty = || DatabaseDmlOptions {
-            external_id: None,
-            all_or_none_argument: None,
-            access_level_argument: None,
-        };
         match arguments.len() {
-            1 => Ok(empty()),
-            2 => match self.expression_type(&arguments[1]) {
-                Ok(ExpressionType::Value(TypeName::Boolean)) => Ok(DatabaseDmlOptions {
-                    all_or_none_argument: Some(1),
-                    ..empty()
-                }),
-                Ok(ExpressionType::Value(TypeName::AccessLevel)) => Ok(DatabaseDmlOptions {
-                    access_level_argument: Some(1),
-                    ..empty()
-                }),
-                _ if operation == crate::ast::DmlOperation::Upsert => Ok(DatabaseDmlOptions {
-                    external_id: Some(self.resolve_external_id_token(shape, &arguments[1])?),
-                    ..empty()
-                }),
-                Err(error) => Err(error),
-                _ => Err(Diagnostic::new(
-                    format!(
-                        "Database.{} second argument must be allOrNone Boolean or AccessLevel",
-                        method.spelling
-                    ),
-                    arguments[1].span(),
-                )),
-            },
-            3 => {
-                let second = self.expression_type(&arguments[1]);
-                let third = self.expression_type(&arguments[2])?;
-                if second == Ok(ExpressionType::Value(TypeName::Boolean))
-                    && third == ExpressionType::Value(TypeName::AccessLevel)
-                {
-                    return Ok(DatabaseDmlOptions {
-                        all_or_none_argument: Some(1),
-                        access_level_argument: Some(2),
-                        ..empty()
-                    });
-                }
-                if operation == crate::ast::DmlOperation::Upsert {
-                    let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
-                    return match third {
-                        ExpressionType::Value(TypeName::Boolean) => Ok(DatabaseDmlOptions {
-                            external_id: Some(external_id),
-                            all_or_none_argument: Some(2),
-                            access_level_argument: None,
-                        }),
-                        ExpressionType::Value(TypeName::AccessLevel) => Ok(DatabaseDmlOptions {
-                            external_id: Some(external_id),
-                            all_or_none_argument: None,
-                            access_level_argument: Some(2),
-                        }),
-                        _ => Err(Diagnostic::new(
-                            "Database.upsert third argument must be allOrNone Boolean or AccessLevel",
-                            arguments[2].span(),
-                        )),
-                    };
-                }
-                second?;
-                Err(Diagnostic::new(
-                    format!(
-                        "Database.{} three-argument form requires allOrNone and AccessLevel",
-                        method.spelling
-                    ),
-                    method.span,
-                ))
-            }
-            4 if operation == crate::ast::DmlOperation::Upsert => {
-                let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
-                self.require_operand(&arguments[2], &TypeName::Boolean, arguments[2].span())?;
-                self.require_operand(&arguments[3], &TypeName::AccessLevel, arguments[3].span())?;
-                Ok(DatabaseDmlOptions {
-                    external_id: Some(external_id),
-                    all_or_none_argument: Some(2),
-                    access_level_argument: Some(3),
-                })
-            }
-            4 => Err(Diagnostic::new(
+            1 => Ok(empty_database_dml_options()),
+            2 => self.database_dml_two_options(operation, shape, arguments, method),
+            3 => self.database_dml_three_options(operation, shape, arguments, method),
+            4 => self.database_dml_four_options(operation, shape, arguments, method),
+            _ => unreachable!("DML argument count was checked"),
+        }
+    }
+
+    fn database_dml_two_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        match self.expression_type(&arguments[1]) {
+            Ok(ExpressionType::Value(TypeName::Boolean)) => Ok(DatabaseDmlOptions {
+                all_or_none_argument: Some(1),
+                ..empty_database_dml_options()
+            }),
+            Ok(ExpressionType::Value(TypeName::AccessLevel)) => Ok(DatabaseDmlOptions {
+                access_level_argument: Some(1),
+                ..empty_database_dml_options()
+            }),
+            _ if operation == crate::ast::DmlOperation::Upsert => Ok(DatabaseDmlOptions {
+                external_id: Some(self.resolve_external_id_token(shape, &arguments[1])?),
+                ..empty_database_dml_options()
+            }),
+            Err(error) => Err(error),
+            _ => Err(Diagnostic::new(
+                format!(
+                    "Database.{} second argument must be allOrNone Boolean or AccessLevel",
+                    method.spelling
+                ),
+                arguments[1].span(),
+            )),
+        }
+    }
+
+    fn database_dml_three_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        let second = self.expression_type(&arguments[1]);
+        let third = self.expression_type(&arguments[2])?;
+        if second == Ok(ExpressionType::Value(TypeName::Boolean))
+            && third == ExpressionType::Value(TypeName::AccessLevel)
+        {
+            return Ok(DatabaseDmlOptions {
+                all_or_none_argument: Some(1),
+                access_level_argument: Some(2),
+                ..empty_database_dml_options()
+            });
+        }
+        if operation == crate::ast::DmlOperation::Upsert {
+            return self.database_upsert_three_options(shape, arguments, third);
+        }
+        second?;
+        Err(Diagnostic::new(
+            format!(
+                "Database.{} three-argument form requires allOrNone and AccessLevel",
+                method.spelling
+            ),
+            method.span,
+        ))
+    }
+
+    fn database_upsert_three_options(
+        &mut self,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        third: ExpressionType,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
+        match third {
+            ExpressionType::Value(TypeName::Boolean) => Ok(DatabaseDmlOptions {
+                external_id: Some(external_id),
+                all_or_none_argument: Some(2),
+                access_level_argument: None,
+            }),
+            ExpressionType::Value(TypeName::AccessLevel) => Ok(DatabaseDmlOptions {
+                external_id: Some(external_id),
+                all_or_none_argument: None,
+                access_level_argument: Some(2),
+            }),
+            _ => Err(Diagnostic::new(
+                "Database.upsert third argument must be allOrNone Boolean or AccessLevel",
+                arguments[2].span(),
+            )),
+        }
+    }
+
+    fn database_dml_four_options(
+        &mut self,
+        operation: crate::ast::DmlOperation,
+        shape: &DmlValueShape,
+        arguments: &[Expression],
+        method: &Identifier,
+    ) -> Result<DatabaseDmlOptions, Diagnostic> {
+        if operation != crate::ast::DmlOperation::Upsert {
+            return Err(Diagnostic::new(
                 format!(
                     "Database.{} does not support four arguments",
                     method.spelling
                 ),
                 method.span,
-            )),
-            _ => unreachable!("DML argument count was checked"),
+            ));
         }
+        let external_id = self.resolve_external_id_token(shape, &arguments[1])?;
+        self.require_operand(&arguments[2], &TypeName::Boolean, arguments[2].span())?;
+        self.require_operand(&arguments[3], &TypeName::AccessLevel, arguments[3].span())?;
+        Ok(DatabaseDmlOptions {
+            external_id: Some(external_id),
+            all_or_none_argument: Some(2),
+            access_level_argument: Some(3),
+        })
     }
 
     pub(super) fn resolve_external_id_name(

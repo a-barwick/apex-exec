@@ -33,6 +33,7 @@ public class M27SharingDemo {
         insert new List<M27Row__c>{owned, other};
 
         System.debug(M27WithReader.directCount());
+        System.debug(M27WithReader.systemCount());
         System.debug(M27WithReader.inheritedCount());
         System.debug(M27WithoutReader.directCount());
         System.debug(M27WithoutReader.inheritedCount());
@@ -47,6 +48,9 @@ public class M27SharingDemo {
 public with sharing class M27WithReader {
     public static Integer directCount() {
         return [SELECT COUNT() FROM M27Row__c];
+    }
+    public static Integer systemCount() {
+        return [SELECT COUNT() FROM M27Row__c WITH SYSTEM_MODE];
     }
     public static Integer inheritedCount() {
         return M27InheritedReader.countRows();
@@ -90,7 +94,7 @@ public inherited sharing class M27InheritedReader {
     let compilation = project::compile(&root).unwrap();
     assert_eq!(
         compilation.invoke("M27SharingDemo.run").unwrap(),
-        ["1", "1", "2", "2", "2"]
+        ["1", "1", "1", "2", "2", "2"]
     );
     assert_eq!(
         compilation.invoke("M27InheritedReader.entryCount").unwrap(),
@@ -342,7 +346,7 @@ public without sharing class M27SecurityDemo {
             "1",
             "1",
             "false",
-            "INSUFFICIENT_ACCESS_OR_READONLY",
+            "CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY",
             "true",
             "true",
             "false",
@@ -359,6 +363,44 @@ public without sharing class M27SecurityDemo {
             "NoAccessException",
         ]
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn user_mode_record_sharing_denials_keep_their_distinct_status() {
+    let root = test_project(&[(
+        "M27RecordDenial",
+        r#"
+public without sharing class M27RecordDenial {
+    public static void run() {
+        M27Row__c row = new M27Row__c();
+        row.Name = 'Other owner';
+        row.OwnerId = '005000000000002AAA';
+        row.Public__c = 'before';
+        insert row;
+        row.Public__c = 'after';
+        Database.SaveResult result =
+            Database.update(row, false, AccessLevel.USER_MODE);
+        System.debug(result.isSuccess());
+        System.debug(String.valueOf(result.getErrors()[0].getStatusCode()));
+    }
+}
+"#,
+    )]);
+    let compilation = project::compile(&root).unwrap();
+    let user = "005000000000001AAA";
+    let mut policy = SecurityPolicy::new();
+    policy.add_user(SecurityUser::new(user));
+    policy.set_object_permissions(user, "M27Row__c", ObjectPermissions::all());
+    for field in ["Id", "Name", "OwnerId", "Public__c", "Secret__c"] {
+        policy.set_field_permissions(user, "M27Row__c", field, FieldPermissions::all());
+    }
+    let mut host = RecordingHost::default();
+    host.set_security_policy(policy);
+    let output = Interpreter::with_host(&mut host)
+        .invoke_static(&compilation.program, "M27RecordDenial", "run")
+        .unwrap();
+    assert_eq!(output, ["false", "INSUFFICIENT_ACCESS_OR_READONLY"]);
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1,5 +1,5 @@
 @IsTest
-private class M27SecurityOracleTest {
+private with sharing class M27SecurityOracleTest {
     @IsTest
     static void securityProfilesMatchSalesforce() {
         Profile standard = [
@@ -55,7 +55,7 @@ private class M27SecurityOracleTest {
                 FROM M27SecureRow__c
                 WITH SYSTEM_MODE
             ];
-            System.assertEquals(2, systemRows.size());
+            System.assertEquals(1, systemRows.size());
 
             M27SecureRow__c deniedInsert = new M27SecureRow__c();
             deniedInsert.Name = 'Denied';
@@ -66,7 +66,7 @@ private class M27SecurityOracleTest {
             );
             System.assert(!deniedResult.isSuccess());
             System.assertEquals(
-                StatusCode.INSUFFICIENT_ACCESS_OR_READONLY,
+                StatusCode.CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY,
                 deniedResult.getErrors()[0].getStatusCode()
             );
 
@@ -92,7 +92,7 @@ private class M27SecurityOracleTest {
                 systemRows,
                 false
             );
-            System.assertEquals(2, decision.getRecords().size());
+            System.assertEquals(1, decision.getRecords().size());
             System.assert(
                 decision
                     .getRemovedFields()

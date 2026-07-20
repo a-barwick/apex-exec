@@ -139,7 +139,10 @@ pub(super) fn load(root: &Path) -> Result<LoadedSecurityFixture, String> {
             SECURITY_FIXTURE_SCHEMA_VERSION
         ));
     }
+    materialize(fixture)
+}
 
+fn materialize(fixture: SecurityFixtureFile) -> Result<LoadedSecurityFixture, String> {
     let mut policy = SecurityPolicy::new();
     for user in fixture.users {
         let mut value = SecurityUser::new(user.id);
@@ -182,7 +185,16 @@ pub(super) fn load(root: &Path) -> Result<LoadedSecurityFixture, String> {
             },
         );
     }
-    for grant in fixture.record_grants {
+    materialize_grants(&mut policy, fixture.record_grants)?;
+    let records = materialize_records(fixture.records)?;
+    Ok(LoadedSecurityFixture { policy, records })
+}
+
+fn materialize_grants(
+    policy: &mut SecurityPolicy,
+    grants: Vec<RecordGrantFixture>,
+) -> Result<(), String> {
+    for grant in grants {
         policy.grant_record(RecordGrant {
             object: grant.object,
             record_id: RecordId::parse(grant.record_id)
@@ -198,8 +210,12 @@ pub(super) fn load(root: &Path) -> Result<LoadedSecurityFixture, String> {
             },
         });
     }
-    let mut records = Vec::with_capacity(fixture.records.len());
-    for source in fixture.records {
+    Ok(())
+}
+
+fn materialize_records(sources: Vec<RecordFixture>) -> Result<Vec<Record>, String> {
+    let mut records = Vec::with_capacity(sources.len());
+    for source in sources {
         let mut record = Record::new(
             source.object,
             RecordId::parse(source.id)
@@ -210,7 +226,7 @@ pub(super) fn load(root: &Path) -> Result<LoadedSecurityFixture, String> {
         }
         records.push(record);
     }
-    Ok(LoadedSecurityFixture { policy, records })
+    Ok(records)
 }
 
 fn fixture_value(value: serde_json::Value) -> Result<DataValue, String> {

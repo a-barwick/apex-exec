@@ -1604,34 +1604,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Some(CallTarget::SObjectPut) => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
             }
-            Some(CallTarget::DatabaseDml(target)) => {
-                self.evaluate_database_dml_call(target, arguments, span)
-            }
-            Some(CallTarget::DatabaseQuery {
-                kind,
-                expected_object_id,
-                access_level_argument,
-            }) => self.evaluate_database_query_call(
-                kind,
-                expected_object_id,
-                access_level_argument,
+            Some(
+                target @ (CallTarget::DatabaseDml(_)
+                | CallTarget::DatabaseQuery { .. }
+                | CallTarget::AggregateResultGet
+                | CallTarget::DmlResultMethod(_)
+                | CallTarget::DmlErrorMethod(_)
+                | CallTarget::SecurityDecisionMethod(_)),
+            ) => self.evaluate_data_method_target(
+                target,
+                receiver,
+                evaluated_receiver,
                 arguments,
                 span,
             ),
-            Some(CallTarget::AggregateResultGet) => {
-                self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
-            }
-            Some(target @ (CallTarget::DmlResultMethod(_) | CallTarget::DmlErrorMethod(_))) => {
-                self.evaluate_dml_support_call(target, receiver, evaluated_receiver, span)
-            }
-            Some(CallTarget::SecurityDecisionMethod(target)) => self
-                .evaluate_security_decision_method(
-                    target,
-                    receiver,
-                    evaluated_receiver,
-                    arguments,
-                    span,
-                ),
             Some(target @ CallTarget::EnumMethod { .. }) => self.evaluate_checked_enum_call(
                 target,
                 receiver,
@@ -1650,6 +1636,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 "unresolved method call escaped semantic validation",
                 method.span,
             ),
+        }
+    }
+
+    fn evaluate_data_method_target(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            CallTarget::DatabaseDml(target) => {
+                self.evaluate_database_dml_call(target, arguments, span)
+            }
+            CallTarget::DatabaseQuery {
+                kind,
+                expected_object_id,
+                access_level_argument,
+            } => self.evaluate_database_query_call(
+                kind,
+                expected_object_id,
+                access_level_argument,
+                arguments,
+                span,
+            ),
+            CallTarget::AggregateResultGet => {
+                self.evaluate_aggregate_result_get(receiver, evaluated_receiver, arguments, span)
+            }
+            target @ (CallTarget::DmlResultMethod(_) | CallTarget::DmlErrorMethod(_)) => {
+                self.evaluate_dml_support_call(target, receiver, evaluated_receiver, span)
+            }
+            CallTarget::SecurityDecisionMethod(target) => self.evaluate_security_decision_method(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            _ => unreachable!("only data method targets use this helper"),
         }
     }
 
@@ -1980,24 +2006,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ),
             MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
-            MemberTarget::DmlStatus(status) => Ok(self.dml_status_value(status)),
-            MemberTarget::AccessLevel(access) => Ok(self
+            target @ (MemberTarget::DmlStatus(_)
+            | MemberTarget::AccessLevel(_)
+            | MemberTarget::AccessType(_)
+            | MemberTarget::EnumConstant { .. }
+            | MemberTarget::TypeReference { .. }) => self.evaluate_constant_member(target, span),
+        }
+    }
+
+    fn evaluate_constant_member(
+        &mut self,
+        target: MemberTarget,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        Ok(match target {
+            MemberTarget::DmlStatus(status) => self.dml_status_value(status),
+            MemberTarget::AccessLevel(access) => self
                 .store
-                .allocate_platform(PlatformValue::AccessLevel(access))),
-            MemberTarget::AccessType(access) => Ok(self
+                .allocate_platform(PlatformValue::AccessLevel(access)),
+            MemberTarget::AccessType(access) => self
                 .store
-                .allocate_platform(PlatformValue::AccessType(access))),
-            MemberTarget::EnumConstant { class_id, ordinal } => Ok(enum_value(class_id, ordinal)),
-            MemberTarget::TypeReference { class_id } => Ok(Value::TypeLiteral(TypeName::Custom(
-                crate::ast::NamedType::new(
+                .allocate_platform(PlatformValue::AccessType(access)),
+            MemberTarget::EnumConstant { class_id, ordinal } => enum_value(class_id, ordinal),
+            MemberTarget::TypeReference { class_id } => {
+                Value::TypeLiteral(TypeName::Custom(crate::ast::NamedType::new(
                     self.classes()[class_id.index()]
                         .qualified_name
                         .spelling
                         .clone(),
                     span,
-                ),
-            ))),
-        }
+                )))
+            }
+            _ => unreachable!("only constant members use this helper"),
+        })
     }
 
     fn evaluate_optional_safe_receiver(

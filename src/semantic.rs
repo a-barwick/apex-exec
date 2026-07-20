@@ -4231,7 +4231,8 @@ impl Checker {
                 _ => Err(unknown_method(receiver_type, method)),
             };
         }
-        if let Some(result) = self.dml_instance_method_type(receiver_type, method, arguments, span)
+        if let Some(result) =
+            self.special_result_instance_method_type(receiver_type, method, arguments, span)
         {
             return result;
         }
@@ -4284,35 +4285,7 @@ impl Checker {
             | TypeName::DatabaseError => {
                 unreachable!("DML result and error receivers were handled above")
             }
-            TypeName::SObjectAccessDecision => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[0],
-                    arguments,
-                )?;
-                let (target, result) = match method.canonical.as_str() {
-                    "getrecords" => (
-                        crate::hir::SecurityDecisionMethod::GetRecords,
-                        TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
-                            "SObject".to_owned(),
-                            method.span,
-                        )))),
-                    ),
-                    "getremovedfields" => (
-                        crate::hir::SecurityDecisionMethod::GetRemovedFields,
-                        TypeName::Map(
-                            Box::new(TypeName::String),
-                            Box::new(TypeName::Set(Box::new(TypeName::String))),
-                        ),
-                    ),
-                    _ => return Err(unknown_method(receiver_type, method)),
-                };
-                self.calls
-                    .insert(span, CallTarget::SecurityDecisionMethod(target));
-                return Ok(ExpressionType::Value(result));
-            }
+            TypeName::SObjectAccessDecision => unreachable!("security decision handled above"),
             ty if self.is_exception_type(ty) => {
                 self.exception_instance_method_type(receiver_type, method, arguments)?
             }
@@ -4325,13 +4298,57 @@ impl Checker {
         Ok(result)
     }
 
-    fn dml_instance_method_type(
+    fn security_decision_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[0],
+            arguments,
+        )?;
+        let (target, result) = match method.canonical.as_str() {
+            "getrecords" => (
+                crate::hir::SecurityDecisionMethod::GetRecords,
+                TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+                    "SObject".to_owned(),
+                    method.span,
+                )))),
+            ),
+            "getremovedfields" => (
+                crate::hir::SecurityDecisionMethod::GetRemovedFields,
+                TypeName::Map(
+                    Box::new(TypeName::String),
+                    Box::new(TypeName::Set(Box::new(TypeName::String))),
+                ),
+            ),
+            _ => return Err(unknown_method(receiver_type, method)),
+        };
+        self.calls
+            .insert(span, CallTarget::SecurityDecisionMethod(target));
+        Ok(ExpressionType::Value(result))
+    }
+
+    fn special_result_instance_method_type(
         &mut self,
         receiver_type: &TypeName,
         method: &Identifier,
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if receiver_type == &TypeName::SObjectAccessDecision {
+            return Some(self.security_decision_method_type(
+                receiver_type,
+                method,
+                arguments,
+                span,
+            ));
+        }
         let is_result = matches!(
             receiver_type,
             TypeName::SaveResult

@@ -381,14 +381,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             operation,
             all_or_none,
             access,
-            sharing: if (target.access_level_argument.is_some()
-                || target.statement_access.is_some())
-                && access == crate::platform::AccessLevel::SystemMode
-            {
-                crate::platform::SharingMode::WithoutSharing
-            } else {
-                self.execution_context.sharing_mode()
-            },
+            sharing: self.execution_context.sharing_mode(),
             user_id: self.current_user_context().user_id,
             external_id: self.dml_external_id(target, &schema),
             rows: std::mem::take(&mut collected.rows),
@@ -413,7 +406,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
         }
         let result = self.finish_transaction(result, span);
-        let (successful_records, failed_records, succeeded) = match &result {
+        self.record_dml_completion(operation, objects, record_count, &result);
+        result
+    }
+
+    fn record_dml_completion(
+        &mut self,
+        operation: DmlOperation,
+        objects: Vec<String>,
+        record_count: usize,
+        result: &Result<Vec<DmlRowOutcome>, Diagnostic>,
+    ) {
+        let (successful_records, failed_records, succeeded) = match result {
             Ok(outcomes) => {
                 let successful = outcomes
                     .iter()
@@ -435,7 +439,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             failed_records,
             succeeded,
         });
-        result
     }
 
     pub(super) fn dml_outcomes_value(
@@ -855,32 +858,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 succeeded: None,
             });
 
-            let caller_scopes =
-                std::mem::replace(&mut self.scopes, vec![std::collections::HashMap::new()]);
-            let saved_receiver = self.current_receiver.take();
-            let saved_declaring = self.current_declaring_class.take();
-            let saved_execution_context = self.execution_context;
-            self.execution_context = self.execution_context.for_trigger();
-            self.call_stack.push(ActiveCall {
-                method: trigger.name.spelling.clone(),
-                call_span: span,
-            });
-            let result = match self.execute_statement(&trigger.body) {
-                Ok(Flow::Normal | Flow::Return(None)) => Ok(()),
-                Ok(Flow::Return(Some(_)) | Flow::Break | Flow::Continue) => Err(Diagnostic::new(
-                    "invalid control flow escaped trigger validation",
-                    trigger.span,
-                )),
-                Err(mut error) => {
-                    self.attach_stack_if_missing(&mut error);
-                    Err(error)
-                }
-            };
-            self.call_stack.pop();
-            self.scopes = caller_scopes;
-            self.current_receiver = saved_receiver;
-            self.current_declaring_class = saved_declaring;
-            self.execution_context = saved_execution_context;
+            let result = self.execute_trigger_body(&trigger, span);
 
             self.host.trigger(RuntimeTriggerEvent {
                 trigger: trigger.name.spelling.clone(),
@@ -898,6 +876,40 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             result?;
         }
         Ok(())
+    }
+
+    fn execute_trigger_body(
+        &mut self,
+        trigger: &crate::ast::TriggerDeclaration,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let caller_scopes =
+            std::mem::replace(&mut self.scopes, vec![std::collections::HashMap::new()]);
+        let saved_receiver = self.current_receiver.take();
+        let saved_declaring = self.current_declaring_class.take();
+        let saved_execution_context = self.execution_context;
+        self.execution_context = self.execution_context.for_trigger();
+        self.call_stack.push(ActiveCall {
+            method: trigger.name.spelling.clone(),
+            call_span: span,
+        });
+        let result = match self.execute_statement(&trigger.body) {
+            Ok(Flow::Normal | Flow::Return(None)) => Ok(()),
+            Ok(Flow::Return(Some(_)) | Flow::Break | Flow::Continue) => Err(Diagnostic::new(
+                "invalid control flow escaped trigger validation",
+                trigger.span,
+            )),
+            Err(mut error) => {
+                self.attach_stack_if_missing(&mut error);
+                Err(error)
+            }
+        };
+        self.call_stack.pop();
+        self.scopes = caller_scopes;
+        self.current_receiver = saved_receiver;
+        self.current_declaring_class = saved_declaring;
+        self.execution_context = saved_execution_context;
+        result
     }
 
     fn build_trigger_context(

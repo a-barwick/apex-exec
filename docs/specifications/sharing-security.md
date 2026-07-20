@@ -49,7 +49,8 @@ For the modeled API 60.0–66.0 family, an operation with no explicit access
 level retains the legacy system CRUD/FLS default. Class sharing still controls
 record visibility. `WITH USER_MODE` and user-mode DML override the class mode
 and enforce record sharing, object permissions, and field permissions.
-`WITH SYSTEM_MODE` and explicitly system-mode DML bypass those checks.
+`WITH SYSTEM_MODE` and explicitly system-mode DML bypass CRUD/FLS checks but
+retain the effective class sharing mode.
 
 `WITH SECURITY_ENFORCED` checks object permission and selected fields. It does
 not check condition, grouping, having, or ordering fields. User-mode queries
@@ -57,7 +58,8 @@ check those supporting fields as well. Permission failures are catchable
 `QueryException` values.
 
 User-mode Database DML preserves scalar/list result shapes and partial-save
-ordering. Denied rows carry `INSUFFICIENT_ACCESS_OR_READONLY`; an atomic
+ordering. CRUD/FLS-denied rows carry `CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY`;
+record-sharing denials carry `INSUFFICIENT_ACCESS_OR_READONLY`; an atomic
 operation raises `DmlException`. An owner assigned automatically by insert is
 not treated as a caller-written `OwnerId` for FLS, while an explicitly supplied
 owner remains permission checked. User-mode external-ID upsert is rejected
