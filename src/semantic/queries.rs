@@ -631,7 +631,16 @@ impl Checker {
         let expected = super::apex_field_type(field_type);
         let compatible = match &actual {
             ExpressionType::Value(TypeName::List(element))
-            | ExpressionType::Value(TypeName::Set(element)) => self.is_subtype(element, &expected),
+            | ExpressionType::Value(TypeName::Set(element)) => {
+                self.is_subtype(element, &expected)
+                    || (matches!(
+                        field_type,
+                        FieldType::Id
+                            | FieldType::Reference { .. }
+                            | FieldType::MetadataRelationship { .. }
+                    ) && (self.is_sobject_type(element)
+                        || self.is_dynamic_sobject_type(element)))
+            }
             _ => false,
         };
         if !compatible {

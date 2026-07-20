@@ -390,6 +390,55 @@ public class NamedSObjectConstructorDemo {
 }
 
 #[test]
+fn id_in_binds_extract_ids_from_typed_sobject_collections() {
+    let source = r#"
+public class SObjectIdBindDemo {
+    public static void run() {
+        M28Alpha__c first = new M28Alpha__c(Name = 'first');
+        M28Alpha__c second = new M28Alpha__c(Name = 'second');
+        insert new List<M28Alpha__c>{first, second};
+
+        Map<String, M28Alpha__c> selected = new Map<String, M28Alpha__c>{
+            'first' => first
+        };
+        List<M28Alpha__c> rows = [
+            SELECT Id, Name
+            FROM M28Alpha__c
+            WHERE Id IN :selected.values()
+        ];
+        System.debug(rows.size() + ':' + rows[0].Name);
+    }
+}
+"#;
+    let root = test_project("SObjectIdBindDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("SObjectIdBindDemo.run").unwrap(),
+        ["1:first"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let root = test_project(
+        "InvalidSObjectBindDemo",
+        "public class InvalidSObjectBindDemo {
+            public static void run() {
+                List<M28Alpha__c> rows = new List<M28Alpha__c>();
+                List<M28Alpha__c> matches = [
+                    SELECT Id FROM M28Alpha__c WHERE Name IN :rows
+                ];
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("SOQL `IN` bind requires List or Set of String"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dml_options_are_nullable_mutable_and_drive_database_all_or_none() {
     let source = r#"
 public class DmlOptionsDemo {
