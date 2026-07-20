@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted for M27 implementation review. Final milestone completion remains
-gated on guarded Salesforce differential capture.
+Accepted. Guarded API 66.0 Salesforce evidence matches 2/2 selected dimensions,
+with byte-identical credential-free replay.
 
 ## Context
 

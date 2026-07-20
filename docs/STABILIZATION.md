@@ -10,13 +10,11 @@ on prior conversation context.
 - **Program status:** Active
 - **Baseline:** `main` at `c70a528`
 - **Completed gate:** S0 — process safety and correctness
-- **Completed feature milestone:** M26 — complete metadata accounting on
-  `codex/milestone-26-metadata-accounting`
-- **Active feature milestone:** M27 — sharing and security profiles
-- **Feature policy:** M18 through M26 are complete. M27 implementation is in
-  review and remains gated on guarded Salesforce differential evidence. Its
-  local verification is green except that the pinned Lizard tool download is
-  blocked by unavailable approved network access.
+- **Completed feature milestone:** M27 — sharing and security profiles on
+  `codex/milestone-27-sharing-security`
+- **Active feature milestone:** None; M28 is planned
+- **Feature policy:** M18 through M27 are complete. M28 remains gated on its
+  roadmap decisions and measured enterprise-compatibility scope.
 - **Integration policy:** Task branches merge into `codex/stabilization`. Only
   the integration owner writes directly to that branch. It merges into `main`
   only after the complete S0 gate passes.
