@@ -5043,16 +5043,8 @@ impl Checker {
                 require_arity(ty, "constructor", arguments.len(), &[0, 1], arguments)?;
                 if let Some(argument) = arguments.first() {
                     let actual = self.expression_type(argument)?;
-                    let sobject_list_constructor = matches!(
-                        &actual,
-                        ExpressionType::Value(TypeName::List(element_type))
-                            if matches!(key_type.as_ref(), TypeName::Id | TypeName::String)
-                                && (self.is_sobject_type(value_type)
-                                    || self.is_dynamic_sobject_type(value_type))
-                                && (self.is_sobject_type(element_type)
-                                    || self.is_dynamic_sobject_type(element_type))
-                                && self.is_subtype(element_type, value_type)
-                    );
+                    let sobject_list_constructor =
+                        self.is_sobject_list_map_source(key_type, value_type, &actual);
                     if !self.is_assignable(ty, &actual) && !sobject_list_constructor {
                         self.require_argument(ty, "constructor", 0, argument, ty)?;
                     }
@@ -5064,6 +5056,24 @@ impl Checker {
                 arguments.first().map_or(Span::new(0, 0), Expression::span),
             )),
         }
+    }
+
+    fn is_sobject_list_map_source(
+        &self,
+        key_type: &TypeName,
+        value_type: &TypeName,
+        source_type: &ExpressionType,
+    ) -> bool {
+        matches!(
+            source_type,
+            ExpressionType::Value(TypeName::List(element_type))
+                if matches!(key_type, TypeName::Id | TypeName::String)
+                    && (self.is_sobject_type(value_type)
+                        || self.is_dynamic_sobject_type(value_type))
+                    && (self.is_sobject_type(element_type)
+                        || self.is_dynamic_sobject_type(element_type))
+                    && self.is_subtype(element_type, value_type)
+        )
     }
 
     fn assignment_target_type(

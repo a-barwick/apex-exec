@@ -1214,10 +1214,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     return Err(invalid_call_arguments(span));
                 };
                 let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_entries = match self.collection(source_id) {
-                    Collection::Map { entries, .. } => entries.clone(),
-                    _ => return Err(invalid_runtime_operands(source.span)),
-                };
                 let (key_type, value_type) = match self.collection(id) {
                     Collection::Map {
                         key_type,
@@ -1227,6 +1223,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => unreachable!(),
                 };
                 self.ensure_collection_mutable(id, span)?;
+                let source_entries = match self.collection(source_id) {
+                    Collection::Map { entries, .. } => entries.clone(),
+                    Collection::List { elements, .. } => {
+                        let elements = elements.clone();
+                        self.sobject_map_entries(&key_type, elements, source.span)?
+                    }
+                    Collection::Set { .. } => return Err(invalid_runtime_operands(source.span)),
+                };
                 for (key, value) in source_entries {
                     let key = typed_value(key, &key_type, source.span)?;
                     let value = typed_value(value, &value_type, source.span)?;

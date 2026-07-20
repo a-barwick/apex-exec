@@ -409,6 +409,23 @@ public class SObjectListMapConstructorDemo {
         System.debug(byId.size() + ':' + byId.get(first.Id).Name);
         System.debug(byText.containsKey(String.valueOf(second.Id)));
 
+        M28Alpha__c previous = new M28Alpha__c(
+            Id = 'a00000000000001AAA',
+            Name = 'Previous'
+        );
+        Map<Id, M28Alpha__c> merged = new Map<Id, M28Alpha__c>(
+            new List<M28Alpha__c>{previous}
+        );
+        merged.putAll(rows);
+        System.debug(merged.size() + ':' + merged.get(first.Id).Name);
+
+        try {
+            merged.putAll(new List<M28Alpha__c>{second, second});
+        } catch (Exception error) {
+            System.debug(error.getTypeName() + ':' + error.getMessage());
+        }
+        System.debug(merged.size());
+
         try {
             Map<Id, M28Alpha__c> duplicate = new Map<Id, M28Alpha__c>(
                 new List<M28Alpha__c>{first, first}
@@ -444,6 +461,9 @@ public class SObjectListMapConstructorDemo {
         [
             "2:First",
             "true",
+            "2:First",
+            "ListException:Row with duplicate Id at index: 1",
+            "2",
             "ListException:Row with duplicate Id at index: 1",
             "ListException:Row with null Id at index: 1",
             "ListException:Null row at index: 1",

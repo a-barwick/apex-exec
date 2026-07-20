@@ -4268,7 +4268,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Collection::List { elements, .. } => {
                     let elements = elements.clone();
-                    self.construct_sobject_map(key_type, value_type, elements, source.span)
+                    let entries = self.sobject_map_entries(key_type, elements, source.span)?;
+                    Ok(self.allocate(Collection::Map {
+                        key_type: (**key_type).clone(),
+                        value_type: (**value_type).clone(),
+                        entries,
+                    }))
                 }
                 Collection::Set { .. } => Err(invalid_runtime_operands(source.span)),
             },
@@ -4381,13 +4386,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }))
     }
 
-    fn construct_sobject_map(
-        &mut self,
+    fn sobject_map_entries(
+        &self,
         key_type: &TypeName,
-        value_type: &TypeName,
         elements: Vec<Value>,
         span: Span,
-    ) -> Result<Value, Diagnostic> {
+    ) -> Result<Vec<(Value, Value)>, Diagnostic> {
         let mut entries = Vec::new();
         entries.try_reserve_exact(elements.len()).map_err(|_| {
             runtime_exception("ListException", "collection size is too large", span)
@@ -4425,11 +4429,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             let key = typed_value(Value::Id(record_id), key_type, span)?;
             entries.push((key, Value::SObject(sobject_id)));
         }
-        Ok(self.allocate(Collection::Map {
-            key_type: key_type.clone(),
-            value_type: value_type.clone(),
-            entries,
-        }))
+        Ok(entries)
     }
 
     fn evaluate_index(

@@ -451,13 +451,18 @@ impl Checker {
                     &[1],
                     arguments,
                 )?;
-                self.require_argument(
-                    receiver_type,
-                    &method.spelling,
-                    0,
-                    &arguments[0],
-                    receiver_type,
-                )?;
+                let actual = self.expression_type(&arguments[0])?;
+                if !self.is_assignable(receiver_type, &actual)
+                    && !self.is_sobject_list_map_source(key, value, &actual)
+                {
+                    self.require_argument(
+                        receiver_type,
+                        &method.spelling,
+                        0,
+                        &arguments[0],
+                        receiver_type,
+                    )?;
+                }
                 Ok(ExpressionType::Void)
             }
             MapIntrinsic::Remove => {
