@@ -18,15 +18,9 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<ExitCode, String> {
-    let mut args = env::args().skip(1);
-    let command = args.next().ok_or_else(usage)?;
-    if command == "--help" || command == "-h" {
-        println!("{}", usage());
-        return Ok(ExitCode::SUCCESS);
-    }
-    if !matches!(
-        command.as_str(),
+fn supported_command(command: &str) -> bool {
+    matches!(
+        command,
         "run"
             | "tokens"
             | "ast"
@@ -39,8 +33,19 @@ fn run() -> Result<ExitCode, String> {
             | "oracle"
             | "ci"
             | "hybrid"
+            | "metadata"
             | "enterprise"
-    ) {
+    )
+}
+
+fn run() -> Result<ExitCode, String> {
+    let mut args = env::args().skip(1);
+    let command = args.next().ok_or_else(usage)?;
+    if command == "--help" || command == "-h" {
+        println!("{}", usage());
+        return Ok(ExitCode::SUCCESS);
+    }
+    if !supported_command(command.as_str()) {
         return Err(format!("unknown command `{command}`\n\n{}", usage()));
     }
 
@@ -78,6 +83,7 @@ fn run() -> Result<ExitCode, String> {
         "oracle" => return run_oracle(args),
         "ci" => return run_ci(args),
         "hybrid" => return run_hybrid(args),
+        "metadata" => return run_metadata(args),
         "enterprise" => return run_enterprise(args),
         _ => {}
     }
@@ -157,6 +163,108 @@ fn run() -> Result<ExitCode, String> {
     result
         .map(|_| ExitCode::SUCCESS)
         .map_err(|diagnostic| diagnostic.render(&path, &source))
+}
+
+struct MetadataOptions {
+    root: PathBuf,
+    target: String,
+    output: Option<PathBuf>,
+    api_version: Option<String>,
+}
+
+fn parse_metadata_options(
+    mut args: impl Iterator<Item = String>,
+) -> Result<MetadataOptions, String> {
+    if args.next().as_deref() != Some("inventory") {
+        return Err(usage());
+    }
+    let root = PathBuf::from(args.next().ok_or_else(usage)?);
+    let mut target = "local".to_owned();
+    let mut output = None;
+    let mut api_version = None;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--target" => {
+                target = args
+                    .next()
+                    .ok_or_else(|| "`--target` requires a label".to_owned())?;
+            }
+            "--output" => {
+                output = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "`--output` requires a path".to_owned())?,
+                ));
+            }
+            "--api-version" => {
+                api_version = Some(
+                    args.next()
+                        .ok_or_else(|| "`--api-version` requires a version".to_owned())?,
+                );
+            }
+            _ => return Err(format!("unknown metadata inventory option `{argument}`")),
+        }
+    }
+    Ok(MetadataOptions {
+        root,
+        target,
+        output,
+        api_version,
+    })
+}
+
+fn run_metadata(args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
+    let options = parse_metadata_options(args)?;
+    let inventory = if let Some(version) = options.api_version {
+        let profile =
+            apex_exec::compatibility::CompatibilityProfile::for_api_version(version.parse()?)?;
+        apex_exec::hybrid::OrgInventory::capture_with_profile(
+            &options.root,
+            options.target,
+            profile,
+        )?
+    } else {
+        apex_exec::hybrid::OrgInventory::capture(&options.root, options.target)?
+    };
+    if let Some(path) = options.output {
+        write_metadata_inventory(&path, &inventory)?;
+    }
+    println!(
+        "Metadata inventory: {}/{} files accounted, {}/{} components accounted, {} catalog types, {} unsupported files, {} unclassified files",
+        inventory.accounting.package_files.supported,
+        inventory.accounting.package_files.total,
+        inventory.accounting.components.supported,
+        inventory.accounting.components.total,
+        inventory.accounting.catalog_types.total,
+        inventory.accounting.unsupported_metadata_files,
+        inventory.accounting.unclassified_files,
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn write_metadata_inventory(
+    path: &Path,
+    inventory: &apex_exec::hybrid::OrgInventory,
+) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create metadata report directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let mut json = serde_json::to_string_pretty(inventory)
+        .map_err(|error| format!("failed to serialize metadata inventory: {error}"))?;
+    json.push('\n');
+    fs::write(path, json).map_err(|error| {
+        format!(
+            "failed to write metadata inventory `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 fn run_oracle(mut args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
@@ -962,6 +1070,6 @@ fn parse_test_options(
 }
 
 fn usage() -> String {
-    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec enterprise run <manifest.json> --salesforce <snapshot.json> --output <report.json>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
+    "Usage:\n  apex-exec <run|tokens|ast|check> <script.apex>\n  apex-exec check <sfdx-project-or-package-directory>\n  apex-exec invoke <sfdx-project-or-package-directory> <Class.method>\n  apex-exec test <sfdx-project-or-package-directory> [Class[.method]|glob] [--filter <pattern>] [--jobs <count>] [--junit <path>]\n  apex-exec oracle <manifest.json> (--target-org <alias> | --salesforce-snapshot <path>) [--record-salesforce <path>] [--report <path>]\n  apex-exec ci manifest <project> --output <manifest.json> [--changed <relative-path> | --changed-list <path>] [--shards <count>] [--jobs <count>] [--junit <path>] [--sarif <path>] [--coverage <path>] [--min-line-coverage <percent>] [--min-branch-coverage <percent>] [--max-duration-ms <ms>] [--compatibility-report <path> --min-compatibility <percent>]\n  apex-exec ci run <manifest.json> [--changed-list <path>] [--cache-dir <path>] [--shard <index>/<total>] [--replay | --no-cache]\n  apex-exec ci integrations <manifest.json> <output-directory>\n  apex-exec hybrid <ci-manifest.json> --target-org <alias> [--record-validation <path>] [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec hybrid <ci-manifest.json> --validation-snapshot <path> --expected-target-org <alias> --expected-org-id <00D...> --replay [--report <path>] [--cache-dir <path>] [--max-evidence-age-hours <hours>]\n  apex-exec metadata inventory <project-or-package-root> [--api-version <version>] [--target <label>] [--output <inventory.json>]\n  apex-exec enterprise manifest <project> --name <name> --repository <https-url> --commit <sha> --tag <tag> --api-version <version> --package-root <path> --test-root <path> --output <manifest.json>\n  apex-exec enterprise capture <manifest.json> --target-org <alias> --output <snapshot.json> [--sf <path>] [--wait <minutes>]\n  apex-exec enterprise run <manifest.json> --salesforce <snapshot.json> --output <report.json>\n  apex-exec repl\n  apex-exec lsp [sfdx-project-or-package-directory]\n  apex-exec dap"
         .to_owned()
 }

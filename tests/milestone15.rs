@@ -211,7 +211,7 @@ fn validation_snapshots_are_portable_and_strictly_versioned() {
     assert!(snapshot.authenticated);
     assert_eq!(snapshot.evidence.target, TARGET);
     let mut json = serde_json::to_value(snapshot).unwrap();
-    json["schemaVersion"] = serde_json::json!(4);
+    json["schemaVersion"] = serde_json::json!(5);
     fs::write(&fixture.snapshot, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
     assert!(
         ValidationSnapshot::load(&fixture.snapshot)
@@ -266,6 +266,7 @@ fn authenticated_adapter_uses_non_secret_auth_repeated_retrieve_and_check_only_d
     assert_eq!(commands.matches("project retrieve start").count(), 2);
     assert!(commands.contains("--api-version 65.0"));
     assert!(commands.contains("--metadata CustomField:Invoice__c.Amount__c"));
+    assert!(commands.contains("--metadata PermissionSet"));
     assert!(commands.contains("project deploy start --dry-run"));
     assert!(commands.contains("--test-level RunSpecifiedTests"));
     assert!(commands.contains("--tests ReleaseServiceTest"));

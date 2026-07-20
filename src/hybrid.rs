@@ -5,6 +5,13 @@
 //! local-versus-org test comparison remain provider-neutral so a reviewed org
 //! snapshot can be replayed without credentials.
 
+mod metadata;
+
+pub use metadata::{
+    AccountingMetric, CapabilityState, FileDisposition, FileDispositionKind, MetadataAccounting,
+    MetadataCatalog, TypeCapability,
+};
+
 use crate::{
     ci::{self, CiManifest, CiRunOptions, SelectionMode},
     compatibility::{CompatibilityProfile, EffectiveProfile},
@@ -24,7 +31,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-pub const HYBRID_SCHEMA_VERSION: u32 = 3;
+pub const HYBRID_SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_MAX_EVIDENCE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const REQUIRED_RETRIEVALS: usize = 2;
 const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
@@ -67,16 +74,37 @@ pub struct OrgInventory {
     pub schema_version: u32,
     pub target: String,
     pub components: Vec<MetadataComponent>,
+    pub accounting: MetadataAccounting,
 }
 
 impl OrgInventory {
     pub fn capture(root: impl AsRef<Path>, target: impl Into<String>) -> Result<Self, String> {
+        let root = root.as_ref();
+        let profile = project_api_version(root)
+            .ok()
+            .and_then(|version| version.parse().ok())
+            .and_then(|version| CompatibilityProfile::for_api_version(version).ok())
+            .unwrap_or_default();
+        Self::capture_with_profile(root, target, profile)
+    }
+
+    pub fn capture_with_profile(
+        root: impl AsRef<Path>,
+        target: impl Into<String>,
+        profile: CompatibilityProfile,
+    ) -> Result<Self, String> {
         let root = canonical(root.as_ref())?;
+        let catalog = MetadataCatalog::bundled()?;
         let mut files = Vec::new();
-        collect_files(&root, &root, &mut files)?;
+        for package_root in inventory_roots(&root)? {
+            collect_files(&root, &package_root, &mut files)?;
+        }
         let mut grouped = BTreeMap::<ComponentKey, ComponentBuilder>::new();
+        let mut dispositions = Vec::with_capacity(files.len());
         for relative in files {
-            let Some(classified) = classify_component_path(&relative) else {
+            let classified = catalog.classify(&relative);
+            dispositions.push(metadata::disposition(relative.clone(), classified.as_ref()));
+            let Some(classified) = classified else {
                 continue;
             };
             let absolute = root.join(&relative);
@@ -87,7 +115,10 @@ impl OrgInventory {
                 )
             })?;
             let builder = grouped
-                .entry(classified.key)
+                .entry(ComponentKey {
+                    metadata_type: classified.metadata_type,
+                    full_name: classified.full_name,
+                })
                 .or_insert_with(|| ComponentBuilder {
                     category: classified.category,
                     parts: Vec::new(),
@@ -128,10 +159,13 @@ impl OrgInventory {
             });
         }
         components.sort_by(component_order);
+        dispositions.sort_by(|left, right| left.path.cmp(&right.path));
+        let accounting = catalog.accounting(profile, dispositions, components.len());
         Ok(Self {
             schema_version: HYBRID_SCHEMA_VERSION,
             target: target.into(),
             components,
+            accounting,
         })
     }
 
@@ -144,6 +178,11 @@ impl OrgInventory {
         }
         if self.target.trim().is_empty() {
             return Err("org inventory target cannot be empty".to_owned());
+        }
+        if self.accounting.unclassified_files != 0
+            || self.accounting.package_files.total != self.accounting.dispositions.len()
+        {
+            return Err("org inventory file accounting is incomplete".to_owned());
         }
         let mut keys = BTreeSet::new();
         for component in &self.components {
@@ -521,6 +560,14 @@ pub struct DriftFinding {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct OrgOnlyFinding {
+    pub component: String,
+    pub category: ComponentCategory,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct TestDifferential {
     pub name: String,
     pub local_outcome: String,
@@ -553,7 +600,9 @@ pub struct ReleaseReadinessReport {
     pub affected_tests: Vec<String>,
     pub local: LocalReadiness,
     pub org_validation: DeploymentValidation,
+    pub metadata_accounting: MetadataAccounting,
     pub drift: Vec<DriftFinding>,
+    pub org_only: Vec<OrgOnlyFinding>,
     pub test_differential: Vec<TestDifferential>,
     pub differential_percentage: f64,
     pub blockers: Vec<String>,
@@ -608,6 +657,15 @@ impl ReleaseReadinessReport {
                 }
             ),
             format!(
+                "Metadata accounting: {}/{} package files, {}/{} components; {}/{} catalog types retrievable",
+                self.metadata_accounting.package_files.supported,
+                self.metadata_accounting.package_files.total,
+                self.metadata_accounting.components.supported,
+                self.metadata_accounting.components.total,
+                self.metadata_accounting.retrieve.supported,
+                self.metadata_accounting.retrieve.total,
+            ),
+            format!(
                 "Differential: {}/{} tests matched ({:.2}%)",
                 self.test_differential
                     .iter()
@@ -617,6 +675,10 @@ impl ReleaseReadinessReport {
                 self.differential_percentage
             ),
             format!("Schema/configuration drift: {} findings", self.drift.len()),
+            format!(
+                "Org-only metadata: {} explicitly accounted findings",
+                self.org_only.len()
+            ),
         ];
         for blocker in &self.blockers {
             lines.push(format!("BLOCKER: {blocker}"));
@@ -760,6 +822,7 @@ pub fn run_with_cli_at(
         &validation_snapshot.inventory,
         &affected.directly_changed,
     );
+    let org_only = detect_org_only(&local_inventory, &validation_snapshot.inventory);
     let test_differential = compare_tests(&ci_result, &validation_snapshot.validation);
     let differential_percentage = percentage(
         test_differential
@@ -820,7 +883,9 @@ pub fn run_with_cli_at(
             affected_tests,
             local,
             org_validation: validation_snapshot.validation.clone(),
+            metadata_accounting: local_inventory.accounting.clone(),
             drift,
+            org_only,
             test_differential,
             differential_percentage,
             blockers,
@@ -1184,17 +1249,24 @@ pub fn detect_drift(
                 local_sha256: Some(local.sha256.clone()),
                 org_sha256: None,
             }),
-            (None, Some(org)) => findings.push(DriftFinding {
-                component: key.selector(),
-                category: org.category,
-                kind: DriftKind::UnexpectedInOrg,
-                local_sha256: None,
-                org_sha256: Some(org.sha256.clone()),
-            }),
             _ => {}
         }
     }
     findings
+}
+
+pub fn detect_org_only(local: &OrgInventory, org: &OrgInventory) -> Vec<OrgOnlyFinding> {
+    let local = drift_components(local);
+    drift_components(org)
+        .into_iter()
+        .filter(|(key, _)| !local.contains_key(key))
+        .map(|(key, component)| OrgOnlyFinding {
+            component: key.selector(),
+            category: component.category,
+            reason: "component was discovered by a type-wide org inventory but has no package-root component"
+                .to_owned(),
+        })
+        .collect()
 }
 
 fn drift_components(inventory: &OrgInventory) -> BTreeMap<ComponentKey, &MetadataComponent> {
@@ -1297,29 +1369,11 @@ impl SalesforceValidationCli {
             return Err("Salesforce validation org cannot be empty".to_owned());
         }
         validate_api_version(api_version)?;
-        let auth = self.command_json(
-            project_root,
-            &[
-                OsString::from("org"),
-                OsString::from("display"),
-                OsString::from("--target-org"),
-                OsString::from(target_org),
-                OsString::from("--json"),
-            ],
-        )?;
-        if !response_success(&auth) {
-            return Err(format!(
-                "Salesforce validation-org authentication failed: {}",
-                response_message(&auth)
-            ));
-        }
-        let org_id = find_string(&auth, &["orgId", "id"])
-            .ok_or_else(|| {
-                "Salesforce validation-org response did not include an org ID".to_owned()
-            })?
-            .to_owned();
-        validate_org_id(&org_id)?;
+        let org_id = self.validation_org_id(project_root, target_org)?;
         let retrieve_components = retrieval_scope(local_inventory, affected);
+        let profile = CompatibilityProfile::for_api_version(
+            api_version.parse::<crate::compatibility::ApiVersion>()?,
+        )?;
         let mut inventories = Vec::with_capacity(REQUIRED_RETRIEVALS);
         for _ in 0..REQUIRED_RETRIEVALS {
             let temp = temporary_directory(project_root)?;
@@ -1345,9 +1399,9 @@ impl SalesforceValidationCli {
                     OsString::from(self.wait_minutes.to_string()),
                     OsString::from("--json"),
                 ];
-                for component in &retrieve_components {
+                for selector in &retrieve_components {
                     retrieve_args.push(OsString::from("--metadata"));
-                    retrieve_args.push(OsString::from(component.selector()));
+                    retrieve_args.push(OsString::from(selector));
                 }
                 let retrieve = self.command_json(project_root, &retrieve_args)?;
                 if !response_success(&retrieve) {
@@ -1356,7 +1410,7 @@ impl SalesforceValidationCli {
                         response_message(&retrieve)
                     ));
                 }
-                OrgInventory::capture(&temp, target_org)
+                OrgInventory::capture_with_profile(&temp, target_org, profile)
             })();
             let _ = fs::remove_dir_all(&temp);
             inventories.push(inventory?);
@@ -1411,6 +1465,32 @@ impl SalesforceValidationCli {
         })
     }
 
+    fn validation_org_id(&self, project_root: &Path, target_org: &str) -> Result<String, String> {
+        let auth = self.command_json(
+            project_root,
+            &[
+                OsString::from("org"),
+                OsString::from("display"),
+                OsString::from("--target-org"),
+                OsString::from(target_org),
+                OsString::from("--json"),
+            ],
+        )?;
+        if !response_success(&auth) {
+            return Err(format!(
+                "Salesforce validation-org authentication failed: {}",
+                response_message(&auth)
+            ));
+        }
+        let org_id = find_string(&auth, &["orgId", "id"])
+            .ok_or_else(|| {
+                "Salesforce validation-org response did not include an org ID".to_owned()
+            })?
+            .to_owned();
+        validate_org_id(&org_id)?;
+        Ok(org_id)
+    }
+
     fn version(&self, current_dir: &Path) -> Result<String, String> {
         let output = self.command_output(current_dir, &[OsString::from("--version")])?;
         if !output.status.success() {
@@ -1457,20 +1537,21 @@ impl SalesforceValidationCli {
     }
 }
 
-fn retrieval_scope<'a>(
-    local: &'a OrgInventory,
-    affected: &'a ComponentSelection,
-) -> Vec<&'a MetadataComponent> {
-    let mut selected = BTreeMap::<ComponentKey, &MetadataComponent>::new();
+fn retrieval_scope(local: &OrgInventory, affected: &ComponentSelection) -> Vec<String> {
+    let mut selected = BTreeSet::new();
     for component in &local.components {
         if component.category != ComponentCategory::Code {
-            selected.insert(component.key(), component);
+            selected.insert(if component.category == ComponentCategory::Configuration {
+                component.metadata_type.clone()
+            } else {
+                component.selector()
+            });
         }
     }
     for component in &affected.components {
-        selected.insert(component.key(), component);
+        selected.insert(component.selector());
     }
-    selected.into_values().collect()
+    selected.into_iter().collect()
 }
 
 fn parse_deployment_validation(response: &Value) -> DeploymentValidation {
@@ -1812,140 +1893,6 @@ struct ComponentPart {
     contents: Vec<u8>,
 }
 
-struct ClassifiedPath {
-    key: ComponentKey,
-    category: ComponentCategory,
-    role: String,
-}
-
-fn classify_component_path(path: &Path) -> Option<ClassifiedPath> {
-    let parts = path
-        .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => value.to_str(),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let file = *parts.last()?;
-    if let Some(index) = parts.iter().position(|part| *part == "classes") {
-        if index + 1 == parts.len() - 1
-            && (file.ends_with(".cls") || file.ends_with(".cls-meta.xml"))
-        {
-            let name = file
-                .strip_suffix(".cls-meta.xml")
-                .or_else(|| file.strip_suffix(".cls"))?;
-            return Some(classified("ApexClass", name, ComponentCategory::Code, file));
-        }
-    }
-    if let Some(index) = parts.iter().position(|part| *part == "triggers") {
-        if index + 1 == parts.len() - 1
-            && (file.ends_with(".trigger") || file.ends_with(".trigger-meta.xml"))
-        {
-            let name = file
-                .strip_suffix(".trigger-meta.xml")
-                .or_else(|| file.strip_suffix(".trigger"))?;
-            return Some(classified(
-                "ApexTrigger",
-                name,
-                ComponentCategory::Code,
-                file,
-            ));
-        }
-    }
-    if let Some(index) = parts.iter().position(|part| *part == "objects") {
-        let object = *parts.get(index + 1)?;
-        if index + 2 == parts.len() - 1
-            && (file.ends_with(".object-meta.xml") || file.ends_with(".object"))
-        {
-            return Some(classified(
-                "CustomObject",
-                object,
-                ComponentCategory::Schema,
-                file,
-            ));
-        }
-        let subfolder = *parts.get(index + 2)?;
-        if index + 3 == parts.len() - 1 {
-            let member = metadata_member_name(file)?;
-            let (metadata_type, category) = match subfolder {
-                "fields" => ("CustomField", ComponentCategory::Schema),
-                "indexes" => ("Index", ComponentCategory::Schema),
-                "recordTypes" => ("RecordType", ComponentCategory::Configuration),
-                "validationRules" => ("ValidationRule", ComponentCategory::Configuration),
-                "businessProcesses" => ("BusinessProcess", ComponentCategory::Configuration),
-                "compactLayouts" => ("CompactLayout", ComponentCategory::Configuration),
-                "fieldSets" => ("FieldSet", ComponentCategory::Configuration),
-                "listViews" => ("ListView", ComponentCategory::Configuration),
-                "sharingReasons" => ("SharingReason", ComponentCategory::Configuration),
-                "webLinks" => ("WebLink", ComponentCategory::Configuration),
-                _ => return None,
-            };
-            return Some(classified(
-                metadata_type,
-                &format!("{object}.{member}"),
-                category,
-                file,
-            ));
-        }
-    }
-    let folder_index = parts.iter().enumerate().find_map(|(index, part)| {
-        generic_metadata_type(part).map(|metadata_type| (index, metadata_type))
-    });
-    let (index, metadata_type) = folder_index?;
-    if index + 1 != parts.len() - 1 {
-        return None;
-    }
-    let name = metadata_member_name(file)?;
-    let category = if metadata_type == "CustomObject" || metadata_type == "CustomField" {
-        ComponentCategory::Schema
-    } else {
-        ComponentCategory::Configuration
-    };
-    Some(classified(metadata_type, name, category, file))
-}
-
-fn classified(
-    metadata_type: &str,
-    full_name: &str,
-    category: ComponentCategory,
-    role: &str,
-) -> ClassifiedPath {
-    ClassifiedPath {
-        key: ComponentKey {
-            metadata_type: metadata_type.to_owned(),
-            full_name: full_name.to_owned(),
-        },
-        category,
-        role: role.to_owned(),
-    }
-}
-
-fn generic_metadata_type(folder: &str) -> Option<&'static str> {
-    Some(match folder {
-        "applications" => "CustomApplication",
-        "customMetadata" => "CustomMetadata",
-        "flows" => "Flow",
-        "groups" => "Group",
-        "labels" => "CustomLabels",
-        "layouts" => "Layout",
-        "namedCredentials" => "NamedCredential",
-        "permissionsets" => "PermissionSet",
-        "profiles" => "Profile",
-        "queues" => "Queue",
-        "remoteSiteSettings" => "RemoteSiteSetting",
-        "roles" => "Role",
-        "settings" => "Settings",
-        "tabs" => "CustomTab",
-        "workflows" => "Workflow",
-        _ => return None,
-    })
-}
-
-fn metadata_member_name(file: &str) -> Option<&str> {
-    let source = file.strip_suffix("-meta.xml").unwrap_or(file);
-    source.split('.').next()
-}
-
 fn normalize_contents(path: &Path, bytes: &[u8]) -> Vec<u8> {
     if path.extension().is_some_and(|extension| extension == "xml") {
         let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
@@ -2008,6 +1955,46 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Res
         }
     }
     Ok(())
+}
+
+fn inventory_roots(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let project_file = root.join("sfdx-project.json");
+    if !project_file.is_file() {
+        return Ok(vec![root.to_owned()]);
+    }
+    let source = fs::read_to_string(&project_file).map_err(|error| {
+        format!(
+            "failed to read metadata inventory project `{}`: {error}",
+            project_file.display()
+        )
+    })?;
+    let document = serde_json::from_str::<Value>(&source).map_err(|error| {
+        format!(
+            "invalid metadata inventory project `{}`: {error}",
+            project_file.display()
+        )
+    })?;
+    let directories = document
+        .get("packageDirectories")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "metadata inventory project requires `packageDirectories`".to_owned())?;
+    let mut roots = Vec::with_capacity(directories.len());
+    for directory in directories {
+        let relative = directory
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| "metadata inventory package directory requires `path`".to_owned())?;
+        let package_root = canonical(&root.join(relative))?;
+        if !package_root.starts_with(root) {
+            return Err(format!(
+                "metadata inventory package root `{}` escapes the project",
+                package_root.display()
+            ));
+        }
+        roots.push(package_root);
+    }
+    Ok(roots)
 }
 
 fn validate_component(component: &MetadataComponent) -> Result<(), String> {
@@ -2236,6 +2223,11 @@ mod tests {
                     "c",
                 ),
             ],
+            accounting: MetadataCatalog::bundled().unwrap().accounting(
+                CompatibilityProfile::default(),
+                Vec::new(),
+                3,
+            ),
         };
         let mut org = local.clone();
         org.target = "staging".to_owned();
@@ -2250,6 +2242,44 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].component, "PermissionSet:Billing");
         assert_eq!(findings[0].kind, DriftKind::MissingInOrg);
+    }
+
+    #[test]
+    fn drift_reports_org_only_addition_removal_and_mutation_separately() {
+        let root = fixture_root("drift-triplet");
+        write(
+            &root.join("permissionsets/Removed.permissionset-meta.xml"),
+            "<PermissionSet><label>Removed</label></PermissionSet>",
+        );
+        write(
+            &root.join("permissionsets/Mutated.permissionset-meta.xml"),
+            "<PermissionSet><label>Local</label></PermissionSet>",
+        );
+        let local = OrgInventory::capture(&root, "local").unwrap();
+
+        fs::remove_file(root.join("permissionsets/Removed.permissionset-meta.xml")).unwrap();
+        write(
+            &root.join("permissionsets/Mutated.permissionset-meta.xml"),
+            "<PermissionSet><label>Org</label></PermissionSet>",
+        );
+        write(
+            &root.join("permissionsets/Added.permissionset-meta.xml"),
+            "<PermissionSet><label>Added</label></PermissionSet>",
+        );
+        let org = OrgInventory::capture(&root, "org").unwrap();
+        let findings = detect_drift(&local, &org, &[]);
+        let org_only = detect_org_only(&local, &org);
+
+        assert_eq!(findings.len(), 2);
+        assert_eq!(org_only.len(), 1);
+        assert_eq!(org_only[0].component, "PermissionSet:Added");
+        assert!(findings.iter().any(|finding| {
+            finding.component == "PermissionSet:Removed" && finding.kind == DriftKind::MissingInOrg
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.component == "PermissionSet:Mutated"
+                && finding.kind == DriftKind::ContentMismatch
+        }));
     }
 
     #[test]
@@ -2566,6 +2596,11 @@ mod tests {
             schema_version: HYBRID_SCHEMA_VERSION,
             target: "staging".to_owned(),
             components: Vec::new(),
+            accounting: MetadataCatalog::bundled().unwrap().accounting(
+                CompatibilityProfile::default(),
+                Vec::new(),
+                0,
+            ),
         };
         let request = ValidationRequest {
             changed_paths: Vec::new(),
