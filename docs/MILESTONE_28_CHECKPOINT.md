@@ -22,6 +22,11 @@ deliberately after the already-open
 The newly exposed blocker families listed below were not started. This branch
 must not be merged to `main` as a completed milestone.
 
+A subsequent read-only integrated review found ordinary-suite, Clippy, and
+maintainability regressions that must be corrected before another compatibility
+slice. The evidence, bounded recovery queue, and first-package prompt are in
+[`MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`](MILESTONE_28_REVIEW_AND_RESUME_PLAN.md).
+
 The pre-milestone North Star baseline was lexer 7/7, parser 7/7, total 14/14.
 Those counts are syntax indicators, not runtime or Salesforce compatibility
 percentages.
@@ -168,6 +173,8 @@ cargo +1.88.0 run --release --locked -- enterprise run \
 Before implementing anything, confirm the two SHA-256 values, denominator,
 funnel, and three blocker entries above. The next dominant family is
 `Id.getSObjectType`; it has not been claimed or designed in this checkpoint.
+The later review requires completing the quality-recovery packages before
+claiming that feature slice.
 
 M28 can be marked complete only after at least 696/1,159 tests satisfy the
 strict numerator, three clean runs reproduce the result, all repository gates

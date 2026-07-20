@@ -491,13 +491,16 @@ metadata relationships, roll-up summaries, exact equality, `ALL ROWS` and
 undelete behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable
 sorting, and `Database.Stateful`.
 
-The last completed frozen enterprise replay parses 1,159/1,159 tests and checks
-0/1,159, with `System.Comparable` as its first blocker. Comparable and Stateful
-were implemented and passed focused tests afterward, but a new full replay was
-not completed. The strict numerator therefore remains 0/1,159 in published
-evidence, the 60% exit criterion is unmet, and M28 must not merge as complete.
-The exact handoff, commands, evidence, and limitations are in
-`docs/MILESTONE_28_CHECKPOINT.md`.
+The latest frozen enterprise replay parses 1,159/1,159 tests and checks
+0/1,159. The current first blockers are `Id.getSObjectType` for 1,126 tests,
+`Flow.Interview` for 18, and
+`System.FeatureManagement.checkPermission` for 15. A subsequent integrated
+review found eight ordinary test failures, 28 warning-denied Clippy
+diagnostics, and 44 maintainability-ratchet regressions. The strict numerator
+therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
+merge as complete. The frozen handoff is in
+`docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
+prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.
 
 ## North Star indicators
 

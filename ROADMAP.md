@@ -816,7 +816,10 @@ profile catalog.
 **Checkpoint:** In progress; see
 [`docs/MILESTONE_28_CHECKPOINT.md`](docs/MILESTONE_28_CHECKPOINT.md). The last
 completed full replay parses 1,159/1,159 tests but remains 0/1,159 in the strict
-numerator. The exit criterion has not been met.
+numerator. A later integrated review recorded the required quality recovery and
+bounded resume sequence in
+[`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`](docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md).
+The exit criterion has not been met.
 
 #### Scope
 
