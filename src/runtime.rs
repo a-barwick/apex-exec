@@ -1680,6 +1680,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ReferenceTarget::StaticPropertyStorage(target) => {
                 self.read_property_storage(target, None, identifier.span)
             }
+            ReferenceTarget::PlatformEnum(value) => Ok(self
+                .store
+                .allocate_platform(PlatformValue::PlatformEnum(value))),
             ReferenceTarget::EnumConstant { class_id, ordinal } => {
                 Ok(enum_value(class_id, ordinal))
             }
@@ -4658,6 +4661,14 @@ fn compare_values(
     comparison: impl FnOnce(Ordering) -> bool,
 ) -> Result<Value, Diagnostic> {
     let ordering = match (&left, &right) {
+        (Value::String(left), Value::String(right)) => {
+            left.to_lowercase().cmp(&right.to_lowercase())
+        }
+        (Value::String(_), Value::Null(Some(TypeName::String))) => Ordering::Greater,
+        (Value::Null(Some(TypeName::String)), Value::String(_)) => Ordering::Less,
+        (Value::Null(Some(TypeName::String)), Value::Null(Some(TypeName::String))) => {
+            Ordering::Equal
+        }
         (
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),

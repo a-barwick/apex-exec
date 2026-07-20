@@ -2011,6 +2011,7 @@ impl Checker {
             receiver_type,
             TypeName::ParentJobResult
                 | TypeName::Quiddity
+                | TypeName::TriggerOperation
                 | TypeName::LoggingLevel
                 | TypeName::CacheVisibility
                 | TypeName::SoapType
@@ -2021,7 +2022,9 @@ impl Checker {
         Some((|| {
             let (intrinsic, result) = match (receiver_type, method.canonical.as_str()) {
                 (_, "name") => (P::PlatformEnumName, TypeName::String),
-                (TypeName::LoggingLevel, "ordinal") => (P::PlatformEnumOrdinal, TypeName::Integer),
+                (TypeName::LoggingLevel | TypeName::TriggerOperation, "ordinal") => {
+                    (P::PlatformEnumOrdinal, TypeName::Integer)
+                }
                 _ => return Err(self.unsupported_instance_platform_api(receiver_type, method)),
             };
             require_arity(

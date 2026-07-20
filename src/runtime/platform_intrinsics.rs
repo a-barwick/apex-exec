@@ -912,12 +912,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let Some(Value::Platform(id)) = receiver else {
                     return Err(invalid_runtime_operands(span));
                 };
-                let PlatformValue::PlatformEnum(crate::platform::PlatformEnum::LoggingLevel(value)) =
-                    self.store.platform(id)
-                else {
+                let PlatformValue::PlatformEnum(value) = self.store.platform(id) else {
                     return Err(invalid_runtime_operands(span));
                 };
-                Ok(Value::Integer(value.ordinal()))
+                value
+                    .ordinal()
+                    .map(Value::Integer)
+                    .ok_or_else(|| invalid_runtime_operands(span))
             }
             _ => unreachable!("only LoggingLevel intrinsics use this helper"),
         }

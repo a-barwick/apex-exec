@@ -23,7 +23,9 @@ mod standard_schema;
 pub mod storage;
 
 pub use cache::CacheVisibility;
-pub use context::{ParentJobResult, PlatformEnum, PlatformEnumDescriptor, Quiddity};
+pub use context::{
+    ParentJobResult, PlatformEnum, PlatformEnumDescriptor, Quiddity, TriggerOperation,
+};
 pub use database::{
     AggregateFunction, DatabaseError, DatabaseSnapshot, DmlError, DmlExternalId, DmlOperation,
     DmlRequest, DmlRow, DmlRowOutcome, DmlStatus, LocalDatabase, NullOrder, PreparedDmlOutcome,

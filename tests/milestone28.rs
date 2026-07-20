@@ -253,6 +253,10 @@ public class EnterpriseStringDemo {
         System.debug(String.format('{0}:{1}', new List<Object>{'value', 42}));
         System.debug(String.escapeSingleQuotes('O\'Brien'));
         System.debug(System.JSON.serialize(new Map<String, Object>{'key' => 'value'}));
+        System.debug('a' < 'B');
+        System.debug('A' < 'a');
+        System.debug('a' > (String) null);
+        System.debug((String) null > 'a');
 
         try {
             'value'.split('[');
@@ -279,6 +283,10 @@ public class EnterpriseStringDemo {
             "value:42",
             "O\\'Brien",
             "{\"key\":\"value\"}",
+            "true",
+            "false",
+            "true",
+            "false",
         ]
     );
     fs::remove_dir_all(root).unwrap();
@@ -724,6 +732,43 @@ try {
     .unwrap_err();
     assert!(
         invalid.message.contains("constants are read-only"),
+        "{invalid}"
+    );
+}
+
+#[test]
+fn trigger_operation_is_typed_ordered_and_switchable() {
+    let output = execute(
+        r#"
+System.TriggerOperation operation = System.TriggerOperation.AFTER_UPDATE;
+switch on operation {
+    when BEFORE_INSERT, BEFORE_UPDATE {
+        System.debug('before');
+    }
+    when AFTER_UPDATE {
+        System.debug(operation.name());
+        System.debug(operation.ordinal());
+    }
+    when else {
+        System.debug('else');
+    }
+}
+System.debug(operation == System.TriggerOperation.AFTER_UPDATE);
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["AFTER_UPDATE", "3", "true"]);
+
+    let invalid = check(
+        "System.TriggerOperation operation = System.TriggerOperation.BEFORE_INSERT;
+        switch on operation {
+            when BEFORE_INSERT {}
+            when System.TriggerOperation.BEFORE_INSERT {}
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        invalid.message.contains("duplicate scalar switch label"),
         "{invalid}"
     );
 }

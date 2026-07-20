@@ -708,6 +708,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::FinalizerContext
         | TypeName::ParentJobResult
         | TypeName::Quiddity
+        | TypeName::TriggerOperation
         | TypeName::LoggingLevel
         | TypeName::CacheVisibility
         | TypeName::CachePartition

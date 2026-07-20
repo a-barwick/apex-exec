@@ -1,5 +1,5 @@
 /// Checked values for the Apex `Schema.SoapType` enum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SoapType {
     Base64Binary,
     Boolean,
@@ -53,7 +53,7 @@ impl SoapType {
 }
 
 /// Checked values for the Apex `Schema.DisplayType` enum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DisplayType {
     Address,
     AnyType,

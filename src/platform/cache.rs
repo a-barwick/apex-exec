@@ -1,5 +1,5 @@
 /// Checked values for the Apex `Cache.Visibility` platform enum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CacheVisibility {
     All,
     Namespace,

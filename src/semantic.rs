@@ -198,6 +198,7 @@ enum ScalarSwitchKey {
     String(String),
     Integer(i128),
     Enum { class_id: usize, ordinal: usize },
+    PlatformEnum(crate::platform::PlatformEnum),
     Null,
 }
 
@@ -2849,10 +2850,12 @@ impl Checker {
                 .filter(|class_id| self.classes[*class_id].kind == ClassKind::Enum),
             _ => None,
         };
+        let platform_enum = crate::platform::PlatformEnumDescriptor::from_type(&value_type);
         if !matches!(
             value_type,
             TypeName::String | TypeName::Integer | TypeName::Long
         ) && enum_class.is_none()
+            && platform_enum.is_none()
         {
             return Err(Diagnostic::new(
                 format!(
@@ -2869,7 +2872,12 @@ impl Checker {
             match &arm.labels {
                 SwitchLabels::Expressions(labels) => {
                     for label in labels {
-                        let key = self.check_scalar_switch_label(&value_type, enum_class, label)?;
+                        let key = self.check_scalar_switch_label(
+                            &value_type,
+                            enum_class,
+                            platform_enum,
+                            label,
+                        )?;
                         if !seen.insert(key) {
                             return Err(Diagnostic::new(
                                 "duplicate scalar switch label",
@@ -2902,6 +2910,7 @@ impl Checker {
         &mut self,
         value_type: &TypeName,
         enum_class: Option<usize>,
+        platform_enum: Option<crate::platform::PlatformEnumDescriptor>,
         label: &Expression,
     ) -> Result<ScalarSwitchKey, Diagnostic> {
         if let Some(class_id) = enum_class
@@ -2931,6 +2940,25 @@ impl Checker {
             self.expression_types
                 .insert(label.span(), ExpressionType::Value(value_type.clone()));
             return Ok(ScalarSwitchKey::Enum { class_id, ordinal });
+        }
+        if let Some(descriptor) = platform_enum
+            && let Expression::Variable(identifier) = label
+        {
+            let value = descriptor.parse(&identifier.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown {} constant `{}`",
+                        descriptor.apex_name(),
+                        identifier.spelling
+                    ),
+                    identifier.span,
+                )
+            })?;
+            self.references
+                .insert(identifier.span, ReferenceTarget::PlatformEnum(value));
+            self.expression_types
+                .insert(label.span(), ExpressionType::Value(value_type.clone()));
+            return Ok(ScalarSwitchKey::PlatformEnum(value));
         }
 
         let actual = self.expression_type(label)?;
@@ -2971,6 +2999,15 @@ impl Checker {
                     class_id: class_id.index(),
                     ordinal: *ordinal,
                 })
+            }
+            Expression::MemberAccess { span, .. } if platform_enum.is_some() => {
+                let Some(MemberTarget::PlatformEnum(value)) = self.members.get(span) else {
+                    return Err(Diagnostic::new(
+                        "platform enum switch label must name an enum constant",
+                        label.span(),
+                    ));
+                };
+                Ok(ScalarSwitchKey::PlatformEnum(*value))
             }
             _ => Err(Diagnostic::new(
                 "switch labels must be literals or enum constants",
@@ -5414,6 +5451,7 @@ impl Checker {
             | TypeName::FinalizerContext
             | TypeName::ParentJobResult
             | TypeName::Quiddity
+            | TypeName::TriggerOperation
             | TypeName::LoggingLevel
             | TypeName::CacheVisibility
             | TypeName::CachePartition
@@ -6004,6 +6042,12 @@ impl Checker {
             return Ok(ExpressionType::Value(numeric_type(kind)));
         }
         if is_ordering_operator(operator) && same_temporal_type(&left_type, &right_type) {
+            return Ok(ExpressionType::Value(TypeName::Boolean));
+        }
+        if is_ordering_operator(operator)
+            && left_type == ExpressionType::Value(TypeName::String)
+            && right_type == ExpressionType::Value(TypeName::String)
+        {
             return Ok(ExpressionType::Value(TypeName::Boolean));
         }
         Err(invalid_binary_operands(

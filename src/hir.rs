@@ -634,6 +634,7 @@ pub enum ReferenceTarget {
     StaticMember(ClassMemberId),
     InstancePropertyStorage(ClassMemberId),
     StaticPropertyStorage(ClassMemberId),
+    PlatformEnum(crate::platform::PlatformEnum),
     EnumConstant { class_id: ClassId, ordinal: usize },
 }
 
