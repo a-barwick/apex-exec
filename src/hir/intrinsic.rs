@@ -59,6 +59,51 @@ pub enum PlatformConstructor {
     VisualEditorDynamicPickListRows,
 }
 
+/// Governor values exposed through the static `System.Limits` surface.
+///
+/// Keeping the resource identity separate from `PlatformIntrinsic` lets the
+/// checker and runtime share one closed, exhaustively matched limits table
+/// instead of extending the platform dispatch tree for every getter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LimitIntrinsic {
+    AggregateQueries,
+    ApexCursorFetchCalls,
+    ApexCursorRows,
+    AsyncCalls,
+    Callouts,
+    CpuTime,
+    DmlRows,
+    DmlStatements,
+    EmailInvocations,
+    FutureCalls,
+    HeapSize,
+    MobilePushApexCalls,
+    PublishImmediateDml,
+    Queries,
+    QueryLocatorRows,
+    QueryRows,
+    QueueableJobs,
+    SoslQueries,
+    LimitAggregateQueries,
+    LimitApexCursorFetchCalls,
+    LimitApexCursorRows,
+    LimitAsyncCalls,
+    LimitCallouts,
+    LimitCpuTime,
+    LimitDmlRows,
+    LimitDmlStatements,
+    LimitEmailInvocations,
+    LimitFutureCalls,
+    LimitHeapSize,
+    LimitMobilePushApexCalls,
+    LimitPublishImmediateDml,
+    LimitQueries,
+    LimitQueryLocatorRows,
+    LimitQueryRows,
+    LimitQueueableJobs,
+    LimitSoslQueries,
+}
+
 /// Curated M10 platform calls. This remains a closed checker-selected set so
 /// unsupported APIs cannot fall through to name-based runtime behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -199,12 +244,11 @@ pub enum PlatformIntrinsic {
     TypeForName,
     TypeGetName,
     TypeNewInstance,
-    LimitsGetQueries,
-    LimitsGetLimitQueries,
-    LimitsGetDmlStatements,
-    LimitsGetLimitDmlStatements,
-    LimitsGetCallouts,
-    LimitsGetLimitCallouts,
+    Limits(LimitIntrinsic),
+    NetworkGetNetworkId,
+    NetworkGetLoginUrl,
+    NetworkGetLogoutUrl,
+    NetworkGetSelfRegUrl,
     UserInfoGetUserId,
     UserInfoGetUserName,
     UserInfoGetProfileId,
@@ -279,12 +323,11 @@ impl PlatformIntrinsic {
                 | Self::TypeForName
                 | Self::LoggingLevelValues
                 | Self::LoggingLevelValueOf
-                | Self::LimitsGetQueries
-                | Self::LimitsGetLimitQueries
-                | Self::LimitsGetDmlStatements
-                | Self::LimitsGetLimitDmlStatements
-                | Self::LimitsGetCallouts
-                | Self::LimitsGetLimitCallouts
+                | Self::Limits(_)
+                | Self::NetworkGetNetworkId
+                | Self::NetworkGetLoginUrl
+                | Self::NetworkGetLogoutUrl
+                | Self::NetworkGetSelfRegUrl
                 | Self::UserInfoGetUserId
                 | Self::UserInfoGetUserName
                 | Self::UserInfoGetProfileId

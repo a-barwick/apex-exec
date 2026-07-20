@@ -3,9 +3,9 @@ use crate::{
     ast::{Expression, Identifier, TypeName},
     diagnostic::Diagnostic,
     hir::{
-        ExceptionIntrinsic, ExpressionType, IntrinsicId, ListIntrinsic, MapIntrinsic,
-        MathIntrinsic, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
-        SystemIntrinsic,
+        ExceptionIntrinsic, ExpressionType, IntrinsicId, LimitIntrinsic, ListIntrinsic,
+        MapIntrinsic, MathIntrinsic, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic,
+        StringIntrinsic, SystemIntrinsic,
     },
     span::Span,
 };
@@ -982,6 +982,12 @@ impl Checker {
             return result;
         }
         let canonical_owner = normalized_owner.to_ascii_lowercase();
+        if canonical_owner == "limits" {
+            return self.limits_static_method_type(owner, method, arguments);
+        }
+        if canonical_owner == "network" {
+            return self.network_static_method_type(owner, method, arguments);
+        }
         let intrinsic = match (canonical_owner.as_str(), method.canonical.as_str()) {
             ("date", "newinstance") => P::DateNewInstance,
             ("date", "valueof") => P::DateValueOf,
@@ -1008,12 +1014,6 @@ impl Checker {
             ("test", "stoptest") => P::TestStopTest,
             ("test", "isrunningtest") => P::TestIsRunningTest,
             ("test" | "system.test", "setmock") => P::TestSetMock,
-            ("limits", "getqueries") => P::LimitsGetQueries,
-            ("limits", "getlimitqueries") => P::LimitsGetLimitQueries,
-            ("limits", "getdmlstatements") => P::LimitsGetDmlStatements,
-            ("limits", "getlimitdmlstatements") => P::LimitsGetLimitDmlStatements,
-            ("limits", "getcallouts") => P::LimitsGetCallouts,
-            ("limits", "getlimitcallouts") => P::LimitsGetLimitCallouts,
             ("encodingutil", "base64encode") => P::EncodingBase64Encode,
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
@@ -1233,15 +1233,6 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Boolean
             }
-            P::LimitsGetQueries
-            | P::LimitsGetLimitQueries
-            | P::LimitsGetDmlStatements
-            | P::LimitsGetLimitDmlStatements
-            | P::LimitsGetCallouts
-            | P::LimitsGetLimitCallouts => {
-                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
-                TypeName::Integer
-            }
             P::EncodingBase64Encode => {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_named_argument(
@@ -1316,6 +1307,59 @@ impl Checker {
                 TypeName::Type
             }
             _ => unreachable!("instance intrinsic selected as static"),
+        };
+        Ok((
+            IntrinsicId::Platform(intrinsic),
+            ExpressionType::Value(result),
+        ))
+    }
+
+    fn limits_static_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let Some(intrinsic) = limit_intrinsic(&method.canonical) else {
+            return Err(self.unsupported_platform_api(owner, method));
+        };
+        require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+        Ok((
+            IntrinsicId::Platform(PlatformIntrinsic::Limits(intrinsic)),
+            ExpressionType::Value(TypeName::Integer),
+        ))
+    }
+
+    fn network_static_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        use PlatformIntrinsic as P;
+        let (intrinsic, result) = match method.canonical.as_str() {
+            "getnetworkid" => {
+                require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+                (P::NetworkGetNetworkId, TypeName::Id)
+            }
+            "getloginurl" | "getlogouturl" | "getselfregurl" => {
+                require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::Id,
+                )?;
+                let intrinsic = match method.canonical.as_str() {
+                    "getloginurl" => P::NetworkGetLoginUrl,
+                    "getlogouturl" => P::NetworkGetLogoutUrl,
+                    "getselfregurl" => P::NetworkGetSelfRegUrl,
+                    _ => unreachable!(),
+                };
+                (intrinsic, TypeName::String)
+            }
+            _ => return Err(self.unsupported_platform_api(owner, method)),
         };
         Ok((
             IntrinsicId::Platform(intrinsic),
@@ -2428,6 +2472,49 @@ impl Checker {
                     .is_some_and(|class_id| self.comparable_contracts.contains_key(class_id))
         )
     }
+}
+
+fn limit_intrinsic(method: &str) -> Option<LimitIntrinsic> {
+    use LimitIntrinsic as L;
+    Some(match method {
+        "getaggregatequeries" => L::AggregateQueries,
+        "getfetchcallsonapexcursor" => L::ApexCursorFetchCalls,
+        "getapexcursorrows" => L::ApexCursorRows,
+        "getasynccalls" => L::AsyncCalls,
+        "getcallouts" => L::Callouts,
+        "getcputime" => L::CpuTime,
+        "getdmlrows" => L::DmlRows,
+        "getdmlstatements" => L::DmlStatements,
+        "getemailinvocations" => L::EmailInvocations,
+        "getfuturecalls" => L::FutureCalls,
+        "getheapsize" => L::HeapSize,
+        "getmobilepushapexcalls" => L::MobilePushApexCalls,
+        "getpublishimmediatedml" => L::PublishImmediateDml,
+        "getqueries" => L::Queries,
+        "getquerylocatorrows" => L::QueryLocatorRows,
+        "getqueryrows" => L::QueryRows,
+        "getqueueablejobs" => L::QueueableJobs,
+        "getsoslqueries" => L::SoslQueries,
+        "getlimitaggregatequeries" => L::LimitAggregateQueries,
+        "getlimitfetchcallsonapexcursor" => L::LimitApexCursorFetchCalls,
+        "getlimitapexcursorrows" => L::LimitApexCursorRows,
+        "getlimitasynccalls" => L::LimitAsyncCalls,
+        "getlimitcallouts" => L::LimitCallouts,
+        "getlimitcputime" => L::LimitCpuTime,
+        "getlimitdmlrows" => L::LimitDmlRows,
+        "getlimitdmlstatements" => L::LimitDmlStatements,
+        "getlimitemailinvocations" => L::LimitEmailInvocations,
+        "getlimitfuturecalls" => L::LimitFutureCalls,
+        "getlimitheapsize" => L::LimitHeapSize,
+        "getlimitmobilepushapexcalls" => L::LimitMobilePushApexCalls,
+        "getlimitpublishimmediatedml" => L::LimitPublishImmediateDml,
+        "getlimitqueries" => L::LimitQueries,
+        "getlimitquerylocatorrows" => L::LimitQueryLocatorRows,
+        "getlimitqueryrows" => L::LimitQueryRows,
+        "getlimitqueueablejobs" => L::LimitQueueableJobs,
+        "getlimitsoslqueries" => L::LimitSoslQueries,
+        _ => return None,
+    })
 }
 
 pub(super) fn unknown_method(receiver_type: &TypeName, method: &Identifier) -> Diagnostic {

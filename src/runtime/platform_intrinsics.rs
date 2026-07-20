@@ -7,7 +7,7 @@ use super::{
 use crate::{
     ast::TypeName,
     diagnostic::Diagnostic,
-    hir::PlatformIntrinsic,
+    hir::{LimitIntrinsic, PlatformIntrinsic},
     platform::{LoggingLevel, ObjectSchema, RecordId},
     span::Span,
 };
@@ -82,6 +82,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::LoggingLevelValues | P::LoggingLevelValueOf | P::PlatformEnumOrdinal
         ) {
             return self.call_logging_level(intrinsic, receiver, arguments, span);
+        }
+        if let P::Limits(limit) = intrinsic {
+            return self.call_limit(limit, arguments, span);
+        }
+        if matches!(
+            intrinsic,
+            P::NetworkGetNetworkId
+                | P::NetworkGetLoginUrl
+                | P::NetworkGetLogoutUrl
+                | P::NetworkGetSelfRegUrl
+        ) {
+            return self.call_network(intrinsic, arguments, span);
         }
         match intrinsic {
             P::DateNewInstance => {
@@ -765,23 +777,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             | P::PicklistEntryGetValue => {
                 unreachable!("schema intrinsics are dispatched before the platform match")
             }
-            P::LimitsGetQueries
-            | P::LimitsGetLimitQueries
-            | P::LimitsGetDmlStatements
-            | P::LimitsGetLimitDmlStatements
-            | P::LimitsGetCallouts
-            | P::LimitsGetLimitCallouts => {
-                expect_no_arguments(arguments, span)?;
-                let usage = self.host.limit_usage();
-                Ok(Value::Integer(match intrinsic {
-                    P::LimitsGetQueries => usage.queries,
-                    P::LimitsGetLimitQueries => 100,
-                    P::LimitsGetDmlStatements => usage.dml_statements,
-                    P::LimitsGetLimitDmlStatements => 150,
-                    P::LimitsGetCallouts => usage.callouts,
-                    P::LimitsGetLimitCallouts => 100,
-                    _ => unreachable!(),
-                }))
+            P::Limits(_)
+            | P::NetworkGetNetworkId
+            | P::NetworkGetLoginUrl
+            | P::NetworkGetLogoutUrl
+            | P::NetworkGetSelfRegUrl => {
+                unreachable!(
+                    "limits and network intrinsics are dispatched before the platform match"
+                )
             }
             P::UserInfoGetUserId | P::UserInfoGetUserName | P::UserInfoGetProfileId => {
                 expect_no_arguments(arguments, span)?;
@@ -881,6 +884,105 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
         }
+    }
+
+    fn call_limit(
+        &mut self,
+        intrinsic: LimitIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use LimitIntrinsic as L;
+        expect_no_arguments(arguments, span)?;
+        let usage = self.host.limit_usage();
+        let value = match intrinsic {
+            L::AggregateQueries => usage.aggregate_queries,
+            L::ApexCursorFetchCalls => usage.apex_cursor_fetch_calls,
+            L::ApexCursorRows => usage.apex_cursor_rows,
+            L::AsyncCalls => usage.async_calls,
+            L::Callouts => usage.callouts,
+            L::CpuTime => usage.cpu_time_millis,
+            L::DmlRows => usage.dml_rows,
+            L::DmlStatements => usage.dml_statements,
+            L::EmailInvocations => usage.email_invocations,
+            L::FutureCalls => usage.future_calls,
+            L::HeapSize => usage.heap_size_bytes,
+            L::MobilePushApexCalls => usage.mobile_push_apex_calls,
+            L::PublishImmediateDml => usage.publish_immediate_dml,
+            L::Queries => usage.queries,
+            L::QueryLocatorRows => usage.query_locator_rows,
+            L::QueryRows => usage.query_rows,
+            L::QueueableJobs => usage.queueable_jobs,
+            L::SoslQueries => usage.sosl_queries,
+            L::LimitAggregateQueries => 300,
+            L::LimitApexCursorFetchCalls => 100,
+            L::LimitApexCursorRows => 50_000_000,
+            L::LimitAsyncCalls => 200,
+            L::LimitCallouts => 100,
+            L::LimitCpuTime => 10_000,
+            L::LimitDmlRows => 10_000,
+            L::LimitDmlStatements => 150,
+            L::LimitEmailInvocations => 10,
+            L::LimitFutureCalls => 50,
+            L::LimitHeapSize => 6_000_000,
+            L::LimitMobilePushApexCalls => 10,
+            L::LimitPublishImmediateDml => 150,
+            L::LimitQueries => 100,
+            L::LimitQueryLocatorRows => 10_000,
+            L::LimitQueryRows => 50_000,
+            L::LimitQueueableJobs => 50,
+            L::LimitSoslQueries => 20,
+        };
+        Ok(Value::Integer(value))
+    }
+
+    fn call_network(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        if intrinsic == P::NetworkGetNetworkId {
+            expect_no_arguments(arguments, span)?;
+            return self.host.network_context().map_or_else(
+                || Ok(Value::Null(Some(TypeName::Id))),
+                |network| validate_id(&network.network_id, span).map(Value::Id),
+            );
+        }
+
+        let [network_id] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let network_span = network_id.span;
+        let network_id = match &network_id.value {
+            Value::Id(value) | Value::String(value) => validate_id(value, network_span)?,
+            Value::Null(_) => return Ok(Value::Null(Some(TypeName::String))),
+            _ => return Err(invalid_runtime_operands(network_span)),
+        };
+        let context = self.host.network_context().ok_or_else(|| {
+            runtime_exception(
+                "TypeException",
+                "System.Network URL lookup requires a configured network context",
+                network_span,
+            )
+        })?;
+        let configured_id = validate_id(&context.network_id, network_span)?;
+        if !same_record_id(&network_id, &configured_id) {
+            return Err(runtime_exception(
+                "TypeException",
+                format!("network `{network_id}` is not present in the configured network context"),
+                network_span,
+            ));
+        }
+        let value = match intrinsic {
+            P::NetworkGetLoginUrl => context.login_url,
+            P::NetworkGetLogoutUrl => context.logout_url,
+            P::NetworkGetSelfRegUrl => context.self_registration_url,
+            P::NetworkGetNetworkId => unreachable!(),
+            _ => return Err(invalid_runtime_operands(span)),
+        };
+        Ok(value.map_or_else(|| Value::Null(Some(TypeName::String)), Value::String))
     }
 
     fn call_logging_level(
@@ -3012,6 +3114,10 @@ fn validate_id(value: &str, span: Span) -> Result<String, Diagnostic> {
     RecordId::parse(value.to_owned())
         .map(|id| id.as_str().to_owned())
         .map_err(|error| platform_error(error.to_string(), span))
+}
+
+fn same_record_id(left: &str, right: &str) -> bool {
+    left.as_bytes().get(..15) == right.as_bytes().get(..15)
 }
 
 fn id_to_18(value: &str) -> String {

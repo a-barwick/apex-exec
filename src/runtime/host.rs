@@ -2,8 +2,8 @@ use crate::{
     compatibility::CompatibilityProfile,
     platform::{
         AccessType, DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow,
-        DmlRowOutcome, LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog,
-        SecurityError, SecurityPolicy, SoqlRequest, SoslRequest,
+        DmlRowOutcome, LocalDatabase, PreparedDmlOutcome, QueryOutcome, QueryRecord, QuerySelect,
+        SchemaCatalog, SecurityError, SecurityPolicy, SoqlRequest, SoslRequest,
     },
     runtime::security::{secure_dml_request, secure_soql_request},
 };
@@ -24,6 +24,19 @@ impl Default for UserContext {
             username: "local@example.invalid".to_owned(),
         }
     }
+}
+
+/// Host-provided Experience Cloud network identity and URLs.
+///
+/// Apex Exec has no ambient Salesforce site, so callers must configure this
+/// context explicitly when code needs more than the Salesforce-compatible
+/// default of a null current network ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkContext {
+    pub network_id: String,
+    pub login_url: Option<String>,
+    pub logout_url: Option<String>,
+    pub self_registration_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,9 +81,50 @@ impl Default for HttpResponseData {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LimitUsage {
+    pub aggregate_queries: i64,
+    pub apex_cursor_fetch_calls: i64,
+    pub apex_cursor_rows: i64,
+    pub async_calls: i64,
     pub queries: i64,
+    pub query_locator_rows: i64,
+    pub query_rows: i64,
+    pub sosl_queries: i64,
     pub dml_statements: i64,
+    pub dml_rows: i64,
+    pub email_invocations: i64,
+    pub future_calls: i64,
+    pub cpu_time_millis: i64,
+    pub heap_size_bytes: i64,
+    pub mobile_push_apex_calls: i64,
+    pub publish_immediate_dml: i64,
+    pub queueable_jobs: i64,
     pub callouts: i64,
+}
+
+impl LimitUsage {
+    fn since(self, baseline: Self) -> Self {
+        Self {
+            aggregate_queries: self.aggregate_queries - baseline.aggregate_queries,
+            apex_cursor_fetch_calls: self.apex_cursor_fetch_calls
+                - baseline.apex_cursor_fetch_calls,
+            apex_cursor_rows: self.apex_cursor_rows - baseline.apex_cursor_rows,
+            async_calls: self.async_calls - baseline.async_calls,
+            queries: self.queries - baseline.queries,
+            query_locator_rows: self.query_locator_rows - baseline.query_locator_rows,
+            query_rows: self.query_rows - baseline.query_rows,
+            sosl_queries: self.sosl_queries - baseline.sosl_queries,
+            dml_statements: self.dml_statements - baseline.dml_statements,
+            dml_rows: self.dml_rows - baseline.dml_rows,
+            email_invocations: self.email_invocations - baseline.email_invocations,
+            future_calls: self.future_calls - baseline.future_calls,
+            cpu_time_millis: self.cpu_time_millis - baseline.cpu_time_millis,
+            heap_size_bytes: self.heap_size_bytes - baseline.heap_size_bytes,
+            mobile_push_apex_calls: self.mobile_push_apex_calls - baseline.mobile_push_apex_calls,
+            publish_immediate_dml: self.publish_immediate_dml - baseline.publish_immediate_dml,
+            queueable_jobs: self.queueable_jobs - baseline.queueable_jobs,
+            callouts: self.callouts - baseline.callouts,
+        }
+    }
 }
 
 /// A structured debug event emitted by the Apex `System.debug` intrinsic.
@@ -249,6 +303,10 @@ pub trait PlatformHost {
         UserContext::default()
     }
 
+    fn network_context(&self) -> Option<NetworkContext> {
+        None
+    }
+
     fn security_object_access(
         &self,
         _user_id: &str,
@@ -382,6 +440,10 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).user_context()
     }
 
+    fn network_context(&self) -> Option<NetworkContext> {
+        (**self).network_context()
+    }
+
     fn security_object_access(
         &self,
         user_id: &str,
@@ -428,8 +490,12 @@ pub struct RecordingHost {
     database: Option<LocalDatabase>,
     queries: Vec<QueryEvent>,
     query_statements: usize,
+    aggregate_queries: i64,
+    query_rows: i64,
+    sosl_queries: i64,
     dml: Vec<DmlEvent>,
     dml_statements: usize,
+    dml_rows: i64,
     triggers: Vec<TriggerEvent>,
     async_events: Vec<AsyncEvent>,
     timeline: Vec<TransactionEvent>,
@@ -437,12 +503,16 @@ pub struct RecordingHost {
     now_millis: i64,
     random_state: u64,
     user: UserContext,
+    network: Option<NetworkContext>,
     security: SecurityPolicy,
     database_fixtures: Vec<crate::platform::Record>,
     http_responses: VecDeque<HttpResponseData>,
     callout_requests: Vec<HttpRequestData>,
     callouts: i64,
-    dml_retry_limit_baselines: Vec<(usize, i64)>,
+    dml_retry_limit_baselines: Vec<(usize, i64, i64, i64)>,
+    future_calls: i64,
+    publish_immediate_dml: i64,
+    queueable_jobs: i64,
     test_window_baseline: Option<LimitUsage>,
 }
 
@@ -453,6 +523,10 @@ impl RecordingHost {
 
     pub fn set_user_context(&mut self, user: UserContext) {
         self.user = user;
+    }
+
+    pub fn set_network_context(&mut self, network: Option<NetworkContext>) {
+        self.network = network;
     }
 
     pub fn set_security_policy(&mut self, security: SecurityPolicy) {
@@ -524,8 +598,12 @@ impl Default for RecordingHost {
             database: None,
             queries: Vec::new(),
             query_statements: 0,
+            aggregate_queries: 0,
+            query_rows: 0,
+            sosl_queries: 0,
             dml: Vec::new(),
             dml_statements: 0,
+            dml_rows: 0,
             triggers: Vec::new(),
             async_events: Vec::new(),
             timeline: Vec::new(),
@@ -533,12 +611,16 @@ impl Default for RecordingHost {
             now_millis: 1_735_689_600_000,
             random_state: 0x4d59_5df4_d0f3_3173,
             user: UserContext::default(),
+            network: None,
             security: SecurityPolicy::default(),
             database_fixtures: Vec::new(),
             http_responses: VecDeque::new(),
             callout_requests: Vec::new(),
             callouts: 0,
             dml_retry_limit_baselines: Vec::new(),
+            future_calls: 0,
+            publish_immediate_dml: 0,
+            queueable_jobs: 0,
             test_window_baseline: None,
         }
     }
@@ -565,6 +647,8 @@ impl PlatformHost for RecordingHost {
         let result = database.execute_soql(&secured);
         let object_scans = database.last_query_object_scans();
         let rows = result.as_ref().map_or(0, outcome_rows);
+        self.aggregate_queries += relationship_query_count(request);
+        self.query_rows += result.as_ref().map_or(0, query_outcome_rows);
         self.queries.push(QueryEvent {
             kind: QueryKind::Soql,
             objects: vec![request.object.clone()],
@@ -580,7 +664,7 @@ impl PlatformHost for RecordingHost {
         schema: &SchemaCatalog,
         request: &SoslRequest,
     ) -> Result<QueryOutcome, DatabaseError> {
-        self.query_statements += 1;
+        self.sosl_queries += 1;
         let result = self.database(schema)?.execute_sosl(request);
         let rows = result.as_ref().map_or(0, outcome_rows);
         self.queries.push(QueryEvent {
@@ -675,18 +759,27 @@ impl PlatformHost for RecordingHost {
         Ok(prepared)
     }
 
-    fn record_dml(&mut self, _event: DmlEvent) {
+    fn record_dml(&mut self, event: DmlEvent) {
         self.dml_statements += 1;
+        self.dml_rows += i64::try_from(event.records).unwrap_or(i64::MAX);
     }
 
     fn begin_dml_retry_scope(&mut self) {
-        self.dml_retry_limit_baselines
-            .push((self.query_statements, self.callouts));
+        self.dml_retry_limit_baselines.push((
+            self.query_statements,
+            self.aggregate_queries,
+            self.query_rows,
+            self.callouts,
+        ));
     }
 
     fn reset_dml_retry_limits(&mut self) {
-        if let Some((queries, callouts)) = self.dml_retry_limit_baselines.last().copied() {
+        if let Some((queries, aggregate_queries, query_rows, callouts)) =
+            self.dml_retry_limit_baselines.last().copied()
+        {
             self.query_statements = queries;
+            self.aggregate_queries = aggregate_queries;
+            self.query_rows = query_rows;
             self.callouts = callouts;
         }
     }
@@ -728,6 +821,14 @@ impl PlatformHost for RecordingHost {
     }
 
     fn async_event(&mut self, event: AsyncEvent) {
+        if event.stage == AsyncStage::Queued {
+            match event.kind {
+                AsyncJobKind::Queueable => self.queueable_jobs += 1,
+                AsyncJobKind::Future => self.future_calls += 1,
+                AsyncJobKind::PlatformEvent => self.publish_immediate_dml += 1,
+                AsyncJobKind::Batch | AsyncJobKind::Scheduled => {}
+            }
+        }
         self.async_events.push(event);
     }
 
@@ -751,6 +852,10 @@ impl PlatformHost for RecordingHost {
 
     fn user_context(&self) -> UserContext {
         self.user.clone()
+    }
+
+    fn network_context(&self) -> Option<NetworkContext> {
+        self.network.clone()
     }
 
     fn security_object_access(
@@ -795,24 +900,31 @@ impl PlatformHost for RecordingHost {
 
     fn limit_usage(&self) -> LimitUsage {
         let absolute = LimitUsage {
+            aggregate_queries: self.aggregate_queries,
+            apex_cursor_fetch_calls: 0,
+            apex_cursor_rows: 0,
+            async_calls: 0,
             queries: i64::try_from(self.query_statements).unwrap_or(i64::MAX),
+            query_locator_rows: 0,
+            query_rows: self.query_rows,
+            sosl_queries: self.sosl_queries,
             dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
+            dml_rows: self.dml_rows,
+            email_invocations: 0,
+            future_calls: self.future_calls,
+            cpu_time_millis: 0,
+            heap_size_bytes: 0,
+            mobile_push_apex_calls: 0,
+            publish_immediate_dml: self.publish_immediate_dml,
+            queueable_jobs: self.queueable_jobs,
             callouts: self.callouts,
         };
         let baseline = self.test_window_baseline.unwrap_or_default();
-        LimitUsage {
-            queries: absolute.queries - baseline.queries,
-            dml_statements: absolute.dml_statements - baseline.dml_statements,
-            callouts: absolute.callouts - baseline.callouts,
-        }
+        absolute.since(baseline)
     }
 
     fn begin_test_window(&mut self) {
-        self.test_window_baseline = Some(LimitUsage {
-            queries: i64::try_from(self.query_statements).unwrap_or(i64::MAX),
-            dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
-            callouts: self.callouts,
-        });
+        self.test_window_baseline = Some(self.limit_usage());
     }
 
     fn end_test_window(&mut self) {
@@ -827,4 +939,36 @@ fn outcome_rows(outcome: &QueryOutcome) -> usize {
         QueryOutcome::Aggregates(rows) => rows.len(),
         QueryOutcome::Search(groups) => groups.iter().map(Vec::len).sum(),
     }
+}
+
+fn relationship_query_count(request: &SoqlRequest) -> i64 {
+    request
+        .select
+        .iter()
+        .map(|select| match select {
+            QuerySelect::Subquery { query, .. } => 1 + relationship_query_count(query),
+            QuerySelect::Field(_) | QuerySelect::Aggregate { .. } => 0,
+        })
+        .sum()
+}
+
+fn query_outcome_rows(outcome: &QueryOutcome) -> i64 {
+    let rows = match outcome {
+        QueryOutcome::Records(rows) => rows.iter().map(query_record_rows).sum(),
+        QueryOutcome::Count(_) => 1,
+        QueryOutcome::Aggregates(rows) => rows.len(),
+        QueryOutcome::Search(_) => 0,
+    };
+    i64::try_from(rows).unwrap_or(i64::MAX)
+}
+
+fn query_record_rows(record: &QueryRecord) -> usize {
+    1usize.saturating_add(
+        record
+            .children
+            .values()
+            .flatten()
+            .map(query_record_rows)
+            .fold(0usize, usize::saturating_add),
+    )
 }

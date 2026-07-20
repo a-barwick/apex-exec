@@ -7133,6 +7133,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "schema"
             | "test"
             | "limits"
+            | "network"
             | "userinfo"
             | "encodingutil"
             | "security"

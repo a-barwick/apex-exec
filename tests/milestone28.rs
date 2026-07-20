@@ -7,7 +7,7 @@ use apex_exec::{
         SoqlRequest, SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
     },
     project,
-    runtime::{HttpResponseData, Interpreter, RecordingHost},
+    runtime::{HttpResponseData, Interpreter, NetworkContext, RecordingHost},
     test_runner::{self, TestOptions},
 };
 use std::{
@@ -2146,6 +2146,108 @@ public class AllRowsDemo {
     );
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
+fn network_context_and_governor_counters_are_explicit_and_measured() {
+    let checked = check(
+        r#"
+        System.debug(System.Network.getNetworkId());
+        System.debug(System.Network.getLoginUrl(System.Network.getNetworkId()));
+        System.debug(System.Network.getLogoutUrl(System.Network.getNetworkId()));
+        System.debug(System.Network.getSelfRegUrl(System.Network.getNetworkId()));
+        System.debug(System.Limits.getLimitAggregateQueries());
+        System.debug(System.Limits.getLimitFetchCallsOnApexCursor());
+        System.debug(System.Limits.getLimitApexCursorRows());
+        System.debug(System.Limits.getLimitAsyncCalls());
+        System.debug(System.Limits.getLimitCallouts());
+        System.debug(System.Limits.getLimitCpuTime());
+        System.debug(System.Limits.getLimitDmlRows());
+        System.debug(System.Limits.getLimitDmlStatements());
+        System.debug(System.Limits.getLimitEmailInvocations());
+        System.debug(System.Limits.getLimitFutureCalls());
+        System.debug(System.Limits.getLimitHeapSize());
+        System.debug(System.Limits.getLimitMobilePushApexCalls());
+        System.debug(System.Limits.getLimitPublishImmediateDML());
+        System.debug(System.Limits.getLimitQueries());
+        System.debug(System.Limits.getLimitQueryLocatorRows());
+        System.debug(System.Limits.getLimitQueryRows());
+        System.debug(System.Limits.getLimitQueueableJobs());
+        System.debug(System.Limits.getLimitSoslQueries());
+        "#,
+    )
+    .unwrap();
+    let mut host = RecordingHost::default();
+    host.set_network_context(Some(NetworkContext {
+        network_id: "0DB000000000001".to_owned(),
+        login_url: Some("https://community.example.test/login".to_owned()),
+        logout_url: Some("https://community.example.test/logout".to_owned()),
+        self_registration_url: None,
+    }));
+    let output = Interpreter::with_host(&mut host).execute(&checked).unwrap();
+    assert_eq!(
+        output,
+        [
+            "0DB000000000001",
+            "https://community.example.test/login",
+            "https://community.example.test/logout",
+            "null",
+            "300",
+            "100",
+            "50000000",
+            "200",
+            "100",
+            "10000",
+            "10000",
+            "150",
+            "10",
+            "50",
+            "6000000",
+            "10",
+            "150",
+            "100",
+            "10000",
+            "50000",
+            "50",
+            "20",
+        ]
+    );
+
+    let error =
+        execute("System.debug(System.Network.getLoginUrl('0DB000000000001'));").unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("TypeException"));
+    assert!(
+        error
+            .message
+            .contains("requires a configured network context"),
+        "{}",
+        error.message
+    );
+
+    let source = r#"
+public class LimitsUsageDemo {
+    public static void run() {
+        insert new List<M28Alpha__c>{
+            new M28Alpha__c(Name = 'First'),
+            new M28Alpha__c(Name = 'Second')
+        };
+        List<M28Alpha__c> rows = [SELECT Id FROM M28Alpha__c ORDER BY Name];
+        System.debug(rows.size());
+        System.debug(System.Limits.getDmlStatements());
+        System.debug(System.Limits.getDmlRows());
+        System.debug(System.Limits.getQueries());
+        System.debug(System.Limits.getQueryRows());
+        System.debug(System.Limits.getSoslQueries());
+    }
+}
+"#;
+    let root = test_project("LimitsUsageDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("LimitsUsageDemo.run").unwrap(),
+        ["2", "1", "2", "1", "2", "0"]
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

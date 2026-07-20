@@ -39,8 +39,9 @@ use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DE
 use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
-    LimitUsage, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind, RecordingHost,
-    TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
+    LimitUsage, M11_ASYNC_PROFILE, NetworkContext, PlatformHost, QueryEvent, QueryKind,
+    RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
+    TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 pub(crate) use instrumentation::{BranchHits, ExecutionTrace};

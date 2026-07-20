@@ -12,7 +12,7 @@ use std::{
 mod intrinsic;
 
 pub use intrinsic::{
-    ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic, MathIntrinsic,
+    ExceptionIntrinsic, IntrinsicId, LimitIntrinsic, ListIntrinsic, MapIntrinsic, MathIntrinsic,
     PlatformConstructor, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
     SystemIntrinsic,
 };
