@@ -698,6 +698,36 @@ public class FlowVersionViewSchemaDemo {
 }
 
 #[test]
+fn unqualified_calls_select_between_static_and_instance_overloads() {
+    let source = r#"
+public class MixedLexicalOverloadDemo {
+    private String pick() {
+        return 'instance';
+    }
+
+    private static String pick(Integer value) {
+        return 'static:' + value;
+    }
+
+    private String choose() {
+        return pick(42) + ':' + pick();
+    }
+
+    public static void run() {
+        System.debug(new MixedLexicalOverloadDemo().choose());
+    }
+}
+"#;
+    let root = test_project("MixedLexicalOverloadDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("MixedLexicalOverloadDemo.run").unwrap(),
+        ["static:42:instance"]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unqualified_sobject_names_expose_the_static_sobject_type_token() {
     let source = r#"
 public class UnqualifiedSObjectTypeDemo {

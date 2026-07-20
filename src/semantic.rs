@@ -97,6 +97,7 @@ enum ClassCallKind {
     Static,
     Instance,
     Super,
+    Lexical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4881,15 +4882,20 @@ impl Checker {
         let class_id = self.current_class?;
         let (owner_class_id, candidates) =
             self.lexical_class_methods_named(class_id, &name.canonical)?;
-        let kind = if owner_class_id != class_id
-            || self.current_static
-            || candidates
-                .iter()
-                .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
+        let kind = if owner_class_id != class_id || self.current_static {
+            ClassCallKind::Static
+        } else if candidates
+            .iter()
+            .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
         {
             ClassCallKind::Static
-        } else {
+        } else if candidates
+            .iter()
+            .all(|candidate| !candidate.modifiers.contains(&Modifier::Static))
+        {
             ClassCallKind::Instance
+        } else {
+            ClassCallKind::Lexical
         };
         Some(self.select_class_method_call(
             owner_class_id,
@@ -5999,10 +6005,14 @@ impl Checker {
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         let static_call = kind == ClassCallKind::Static;
-        let candidates = candidates
-            .into_iter()
-            .filter(|candidate| candidate.modifiers.contains(&Modifier::Static) == static_call)
-            .collect::<Vec<_>>();
+        let candidates = if kind == ClassCallKind::Lexical {
+            candidates
+        } else {
+            candidates
+                .into_iter()
+                .filter(|candidate| candidate.modifiers.contains(&Modifier::Static) == static_call)
+                .collect()
+        };
         let applicable = candidates
             .iter()
             .filter(|candidate| candidate.parameter_types.len() == argument_types.len())
@@ -6046,6 +6056,10 @@ impl Checker {
                 ClassCallKind::Static => CallTarget::StaticMethod(best.target),
                 ClassCallKind::Instance => CallTarget::InstanceMethod(best.target),
                 ClassCallKind::Super => CallTarget::SuperMethod(best.target),
+                ClassCallKind::Lexical if best.modifiers.contains(&Modifier::Static) => {
+                    CallTarget::StaticMethod(best.target)
+                }
+                ClassCallKind::Lexical => CallTarget::InstanceMethod(best.target),
             },
         );
         Ok(match &best.return_type {
