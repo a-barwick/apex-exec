@@ -648,6 +648,15 @@ boundaries:
 Consequential representation, profile, evidence-schema, and persistent-cache
 choices require ADRs in their implementation milestones.
 
+M27 implements the access half of this boundary through checked sharing and
+operation-access enums. `ExecutionContext` propagates compatibility and
+effective sharing independently. `PlatformHost` owns current-user, permission,
+and visibility services; the local host applies them before query windowing and
+DML preparation. Project-local `.apex-exec/security.json` and
+`.apex-exec/schema` inputs provide deterministic security and standard-object
+fixtures without turning org configuration into semantic-analysis state. See
+ADR 0030 and `docs/specifications/sharing-security.md`.
+
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.

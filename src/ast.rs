@@ -350,8 +350,14 @@ pub enum Statement {
         value: Expression,
         span: Span,
     },
+    RunAs {
+        user: Expression,
+        body: Box<Statement>,
+        span: Span,
+    },
     Dml {
         operation: DmlOperation,
+        access: DmlAccess,
         value: Expression,
         external_id: Option<Identifier>,
         span: Span,
@@ -511,17 +517,35 @@ pub enum DmlOperation {
     Undelete,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DmlAccess {
+    #[default]
+    Default,
+    UserMode,
+    SystemMode,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoqlQuery {
     pub select: Vec<SoqlSelectItem>,
     pub from: Identifier,
     pub where_clause: Option<SoqlCondition>,
+    pub access: SoqlAccess,
     pub group_by: Vec<FieldPath>,
     pub having: Option<SoqlCondition>,
     pub order_by: Vec<SoqlOrderBy>,
     pub limit: Option<SoqlValue>,
     pub offset: Option<SoqlValue>,
     pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SoqlAccess {
+    #[default]
+    Default,
+    SecurityEnforced,
+    UserMode,
+    SystemMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -852,6 +876,9 @@ pub enum TypeName {
     UndeleteResult,
     DatabaseError,
     StatusCode,
+    AccessLevel,
+    AccessType,
+    SObjectAccessDecision,
     SchedulableContext,
     SObjectType,
     DescribeSObjectResult,
@@ -866,6 +893,7 @@ pub enum TypeName {
     AssertException,
     QueryException,
     DmlException,
+    NoAccessException,
     AsyncException,
     AggregateResult,
     Type,
@@ -904,6 +932,13 @@ impl TypeName {
             "undeleteresult" | "database.undeleteresult" => Some(Self::UndeleteResult),
             "error" | "database.error" => Some(Self::DatabaseError),
             "statuscode" | "system.statuscode" => Some(Self::StatusCode),
+            "accesslevel" | "system.accesslevel" | "database.accesslevel" => {
+                Some(Self::AccessLevel)
+            }
+            "accesstype" | "system.accesstype" => Some(Self::AccessType),
+            "sobjectaccessdecision" | "system.sobjectaccessdecision" => {
+                Some(Self::SObjectAccessDecision)
+            }
             "schedulablecontext" | "system.schedulablecontext" => Some(Self::SchedulableContext),
             "sobjecttype" | "schema.sobjecttype" => Some(Self::SObjectType),
             "describesobjectresult" | "schema.describesobjectresult" => {
@@ -920,6 +955,7 @@ impl TypeName {
             "assertexception" => Some(Self::AssertException),
             "queryexception" => Some(Self::QueryException),
             "dmlexception" => Some(Self::DmlException),
+            "noaccessexception" => Some(Self::NoAccessException),
             "asyncexception" => Some(Self::AsyncException),
             "aggregateresult" => Some(Self::AggregateResult),
             "type" | "system.type" => Some(Self::Type),
@@ -941,6 +977,7 @@ impl TypeName {
                 | Self::AssertException
                 | Self::QueryException
                 | Self::DmlException
+                | Self::NoAccessException
                 | Self::AsyncException
         )
     }
@@ -972,6 +1009,9 @@ impl TypeName {
             Self::UndeleteResult => "Database.UndeleteResult".to_owned(),
             Self::DatabaseError => "Database.Error".to_owned(),
             Self::StatusCode => "StatusCode".to_owned(),
+            Self::AccessLevel => "AccessLevel".to_owned(),
+            Self::AccessType => "System.AccessType".to_owned(),
+            Self::SObjectAccessDecision => "SObjectAccessDecision".to_owned(),
             Self::SchedulableContext => "System.SchedulableContext".to_owned(),
             Self::SObjectType => "Schema.SObjectType".to_owned(),
             Self::DescribeSObjectResult => "Schema.DescribeSObjectResult".to_owned(),
@@ -986,6 +1026,7 @@ impl TypeName {
             Self::AssertException => "AssertException".to_owned(),
             Self::QueryException => "QueryException".to_owned(),
             Self::DmlException => "DmlException".to_owned(),
+            Self::NoAccessException => "NoAccessException".to_owned(),
             Self::AsyncException => "AsyncException".to_owned(),
             Self::AggregateResult => "AggregateResult".to_owned(),
             Self::Type => "System.Type".to_owned(),
@@ -1129,6 +1170,7 @@ impl Statement {
             | Self::Continue { span }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }
+            | Self::RunAs { span, .. }
             | Self::Dml { span, .. }
             | Self::Return { span, .. } => *span,
         }
@@ -1153,6 +1195,7 @@ mod tests {
             "AssertException",
             "QueryException",
             "DmlException",
+            "NoAccessException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");

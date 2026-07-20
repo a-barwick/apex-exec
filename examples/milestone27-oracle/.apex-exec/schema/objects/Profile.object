@@ -1,0 +1,3 @@
+<CustomObject>
+    <fields><fullName>Name</fullName><required>true</required><type>Text</type></fields>
+</CustomObject>

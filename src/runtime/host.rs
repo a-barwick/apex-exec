@@ -1,9 +1,11 @@
 use crate::{
     compatibility::CompatibilityProfile,
     platform::{
-        DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow, DmlRowOutcome,
-        LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog, SoqlRequest, SoslRequest,
+        AccessType, DatabaseError, DatabaseSnapshot, DmlOperation, DmlRequest, DmlRow,
+        DmlRowOutcome, LocalDatabase, PreparedDmlOutcome, QueryOutcome, SchemaCatalog,
+        SecurityError, SecurityPolicy, SoqlRequest, SoslRequest,
     },
+    runtime::security::{secure_dml_request, secure_soql_request},
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -247,6 +249,25 @@ pub trait PlatformHost {
         UserContext::default()
     }
 
+    fn security_object_access(
+        &self,
+        _user_id: &str,
+        _object: &str,
+        _access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        Err(SecurityError::Unavailable)
+    }
+
+    fn security_field_access(
+        &self,
+        _user_id: &str,
+        _object: &str,
+        _field: &str,
+        _access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        Err(SecurityError::Unavailable)
+    }
+
     fn send_http(
         &mut self,
         _request: &HttpRequestData,
@@ -361,6 +382,25 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).user_context()
     }
 
+    fn security_object_access(
+        &self,
+        user_id: &str,
+        object: &str,
+        access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        (**self).security_object_access(user_id, object, access)
+    }
+
+    fn security_field_access(
+        &self,
+        user_id: &str,
+        object: &str,
+        field: &str,
+        access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        (**self).security_field_access(user_id, object, field, access)
+    }
+
     fn send_http(
         &mut self,
         request: &HttpRequestData,
@@ -397,6 +437,8 @@ pub struct RecordingHost {
     now_millis: i64,
     random_state: u64,
     user: UserContext,
+    security: SecurityPolicy,
+    database_fixtures: Vec<crate::platform::Record>,
     http_responses: VecDeque<HttpResponseData>,
     callout_requests: Vec<HttpRequestData>,
     callouts: i64,
@@ -411,6 +453,19 @@ impl RecordingHost {
 
     pub fn set_user_context(&mut self, user: UserContext) {
         self.user = user;
+    }
+
+    pub fn set_security_policy(&mut self, security: SecurityPolicy) {
+        self.security = security;
+    }
+
+    pub fn security_policy(&self) -> &SecurityPolicy {
+        &self.security
+    }
+
+    pub fn set_database_fixtures(&mut self, records: Vec<crate::platform::Record>) {
+        self.database_fixtures = records;
+        self.database = None;
     }
 
     pub fn enqueue_http_response(&mut self, response: HttpResponseData) {
@@ -443,7 +498,11 @@ impl RecordingHost {
 
     fn database(&mut self, schema: &SchemaCatalog) -> Result<&mut LocalDatabase, DatabaseError> {
         if self.database.is_none() {
-            self.database = Some(LocalDatabase::new(schema.clone())?);
+            let mut database = LocalDatabase::new(schema.clone())?;
+            if !self.database_fixtures.is_empty() {
+                database.load_fixture(self.database_fixtures.clone())?;
+            }
+            self.database = Some(database);
         } else if self
             .database
             .as_ref()
@@ -474,6 +533,8 @@ impl Default for RecordingHost {
             now_millis: 1_735_689_600_000,
             random_state: 0x4d59_5df4_d0f3_3173,
             user: UserContext::default(),
+            security: SecurityPolicy::default(),
+            database_fixtures: Vec::new(),
             http_responses: VecDeque::new(),
             callout_requests: Vec::new(),
             callouts: 0,
@@ -498,8 +559,10 @@ impl PlatformHost for RecordingHost {
         request: &SoqlRequest,
     ) -> Result<QueryOutcome, DatabaseError> {
         self.query_statements += 1;
+        let security = self.security.clone();
         let database = self.database(schema)?;
-        let result = database.execute_soql(request);
+        let secured = secure_soql_request(&security, schema, database, request)?;
+        let result = database.execute_soql(&secured);
         let object_scans = database.last_query_object_scans();
         let rows = result.as_ref().map_or(0, outcome_rows);
         self.queries.push(QueryEvent {
@@ -603,7 +666,13 @@ impl PlatformHost for RecordingHost {
         schema: &SchemaCatalog,
         request: &DmlRequest,
     ) -> Result<Vec<PreparedDmlOutcome>, DatabaseError> {
-        self.database(schema)?.prepare_dml(request)
+        let security = self.security.clone();
+        let database = self.database(schema)?;
+        let (request, mut denied) = secure_dml_request(&security, schema, database, request)?;
+        let mut prepared = database.prepare_dml(&request)?;
+        prepared.append(&mut denied);
+        prepared.sort_by_key(PreparedDmlOutcome::input_index);
+        Ok(prepared)
     }
 
     fn record_dml(&mut self, _event: DmlEvent) {
@@ -682,6 +751,31 @@ impl PlatformHost for RecordingHost {
 
     fn user_context(&self) -> UserContext {
         self.user.clone()
+    }
+
+    fn security_object_access(
+        &self,
+        user_id: &str,
+        object: &str,
+        access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        Ok(self
+            .security
+            .object_permissions(user_id, object)?
+            .permits(access))
+    }
+
+    fn security_field_access(
+        &self,
+        user_id: &str,
+        object: &str,
+        field: &str,
+        access: AccessType,
+    ) -> Result<bool, SecurityError> {
+        Ok(self
+            .security
+            .field_permissions(user_id, object, field)?
+            .permits(access))
     }
 
     fn send_http(

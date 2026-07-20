@@ -1,0 +1,11 @@
+<CustomObject>
+    <fields><fullName>Username</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>Alias</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>Email</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>EmailEncodingKey</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>LastName</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>LanguageLocaleKey</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>LocaleSidKey</fullName><required>true</required><type>Text</type></fields>
+    <fields><fullName>ProfileId</fullName><referenceTo>Profile</referenceTo><required>true</required><type>Lookup</type></fields>
+    <fields><fullName>TimeZoneSidKey</fullName><required>true</required><type>Text</type></fields>
+</CustomObject>

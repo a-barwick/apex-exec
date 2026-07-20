@@ -17,7 +17,8 @@ fn example_project_imports_schema_compiles_and_executes_typed_and_dynamic_sobjec
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/milestone7-project");
     let compilation = project::compile(&root).unwrap();
     let invoice = compilation.schema.object("invoice__C").unwrap();
-    assert_eq!(invoice.fields().len(), 6);
+    assert_eq!(invoice.fields().len(), 7);
+    assert!(invoice.field("OwnerId").is_ok());
     assert_eq!(
         compilation.invoke("InvoiceDemo.run").unwrap(),
         ["Approved", "125"]

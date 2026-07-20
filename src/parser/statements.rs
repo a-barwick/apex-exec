@@ -1,6 +1,9 @@
 use super::Parser;
 use crate::{
-    ast::{CatchClause, DmlOperation, Statement, SwitchArm, SwitchLabels, VariableDeclarator},
+    ast::{
+        CatchClause, DmlAccess, DmlOperation, Statement, SwitchArm, SwitchLabels,
+        VariableDeclarator,
+    },
     diagnostic::Diagnostic,
     token::TokenKind,
 };
@@ -19,10 +22,42 @@ impl Parser {
             TokenKind::Try => self.parse_try(),
             TokenKind::Throw => self.parse_throw(),
             TokenKind::Return => self.parse_return(),
+            _ if self.is_run_as_start() => self.parse_run_as(),
             _ if self.is_dml_start() => self.parse_dml(),
             _ if self.is_declaration_start() => self.parse_variable_declaration(true),
             _ => self.parse_expression_statement(true),
         }
+    }
+
+    fn is_run_as_start(&self) -> bool {
+        self.check_keyword("system")
+            && matches!(self.peek(1).kind, TokenKind::Dot)
+            && matches!(
+                &self.peek(2).kind,
+                TokenKind::Identifier(name) if name.eq_ignore_ascii_case("runas")
+            )
+            && matches!(self.peek(3).kind, TokenKind::LeftParen)
+    }
+
+    fn parse_run_as(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect_keyword("system", "expected `System`")?;
+        self.expect_simple(TokenKind::Dot, "expected `.` after `System`")?;
+        self.expect_keyword("runas", "expected `runAs` after `System.`")?;
+        self.expect_simple(TokenKind::LeftParen, "expected `(` after `System.runAs`")?;
+        let user = self.parse_expression()?;
+        self.expect_simple(
+            TokenKind::RightParen,
+            "expected `)` after System.runAs user",
+        )?;
+        if !self.check(&TokenKind::LeftBrace) {
+            return Err(Diagnostic::new(
+                "System.runAs requires a block",
+                self.current().span,
+            ));
+        }
+        let body = Box::new(self.parse_block()?);
+        let span = start.span.merge(body.span());
+        Ok(Statement::RunAs { user, body, span })
     }
 
     fn is_dml_start(&self) -> bool {
@@ -45,6 +80,23 @@ impl Parser {
             "undelete" => DmlOperation::Undelete,
             _ => unreachable!("DML start was checked"),
         };
+        let access = if self.check_keyword("as") {
+            self.advance();
+            if self.check_keyword("user") {
+                self.advance();
+                DmlAccess::UserMode
+            } else if self.check_keyword("system") {
+                self.advance();
+                DmlAccess::SystemMode
+            } else {
+                return Err(Diagnostic::new(
+                    "expected `USER` or `SYSTEM` after DML `AS`",
+                    self.current().span,
+                ));
+            }
+        } else {
+            DmlAccess::Default
+        };
         let value = self.parse_expression()?;
         let external_id = if operation == DmlOperation::Upsert
             && matches!(self.current().kind, TokenKind::Identifier(_))
@@ -56,6 +108,7 @@ impl Parser {
         let end = self.expect_simple(TokenKind::Semicolon, "expected `;` after DML statement")?;
         Ok(Statement::Dml {
             operation,
+            access,
             value,
             external_id,
             span: start.span.merge(end.span),

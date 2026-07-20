@@ -1,5 +1,16 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
+/// Organization-wide default visibility for one SObject.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SharingModel {
+    Private,
+    PublicReadOnly,
+    #[default]
+    PublicReadWrite,
+    ControlledByParent,
+}
+
 /// Storage-independent type of a normalized SObject field.
 ///
 /// Metadata-specific field kinds can map onto this smaller runtime-facing
@@ -81,6 +92,7 @@ impl FieldSchema {
 pub struct ObjectSchema {
     api_name: String,
     key_prefix: String,
+    sharing_model: SharingModel,
     fields: BTreeMap<String, FieldSchema>,
 }
 
@@ -91,6 +103,7 @@ impl ObjectSchema {
         Self {
             api_name,
             key_prefix,
+            sharing_model: SharingModel::default(),
             fields: BTreeMap::new(),
         }
     }
@@ -105,8 +118,14 @@ impl ObjectSchema {
         Ok(Self {
             api_name,
             key_prefix,
+            sharing_model: SharingModel::default(),
             fields: BTreeMap::new(),
         })
+    }
+
+    pub fn with_sharing_model(mut self, sharing_model: SharingModel) -> Self {
+        self.sharing_model = sharing_model;
+        self
     }
 
     pub fn api_name(&self) -> &str {
@@ -115,6 +134,10 @@ impl ObjectSchema {
 
     pub fn key_prefix(&self) -> &str {
         &self.key_prefix
+    }
+
+    pub fn sharing_model(&self) -> &SharingModel {
+        &self.sharing_model
     }
 
     pub fn insert_field(&mut self, field: FieldSchema) -> Result<(), SchemaError> {

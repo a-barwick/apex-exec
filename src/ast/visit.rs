@@ -355,6 +355,10 @@ pub fn walk_statement<'ast, V: Visitor<'ast> + ?Sized>(
         Statement::Throw { value, .. } | Statement::Dml { value, .. } => {
             visitor.visit_expression(value);
         }
+        Statement::RunAs { user, body, .. } => {
+            visitor.visit_expression(user);
+            visitor.visit_statement(body);
+        }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
                 visitor.visit_expression(value);
@@ -698,6 +702,9 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::UndeleteResult
         | TypeName::DatabaseError
         | TypeName::StatusCode
+        | TypeName::AccessLevel
+        | TypeName::AccessType
+        | TypeName::SObjectAccessDecision
         | TypeName::SchedulableContext
         | TypeName::SObjectType
         | TypeName::DescribeSObjectResult
@@ -712,6 +719,7 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
         | TypeName::AssertException
         | TypeName::QueryException
         | TypeName::DmlException
+        | TypeName::NoAccessException
         | TypeName::AsyncException
         | TypeName::AggregateResult
         | TypeName::Type => {}

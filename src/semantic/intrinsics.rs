@@ -856,8 +856,10 @@ impl Checker {
             ("limits", "getlimitcallouts") => P::LimitsGetLimitCallouts,
             ("userinfo", "getuserid") => P::UserInfoGetUserId,
             ("userinfo", "getusername") => P::UserInfoGetUserName,
+            ("userinfo", "getprofileid") => P::UserInfoGetProfileId,
             ("encodingutil", "base64encode") => P::EncodingBase64Encode,
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
+            ("security", "stripinaccessible") => P::SecurityStripInaccessible,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
             ("eventbus", "publish") => P::EventBusPublish,
             _ => return Err(self.unsupported_platform_api(owner, method)),
@@ -1004,7 +1006,7 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Integer
             }
-            P::UserInfoGetUserId => {
+            P::UserInfoGetUserId | P::UserInfoGetProfileId => {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
                 TypeName::Id
             }
@@ -1033,6 +1035,37 @@ impl Checker {
                     &TypeName::String,
                 )?;
                 TypeName::Blob
+            }
+            P::SecurityStripInaccessible => {
+                require_static_arity(owner, method, arguments.len(), &[2, 3], arguments)?;
+                self.require_named_argument(
+                    owner,
+                    &method.spelling,
+                    0,
+                    &arguments[0],
+                    &TypeName::AccessType,
+                )?;
+                match self.expression_type(&arguments[1])? {
+                    ExpressionType::Value(TypeName::List(element))
+                        if self.is_sobject_type(&element)
+                            || self.is_dynamic_sobject_type(&element) => {}
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "Security.stripInaccessible argument 2 must be a List of SObjects",
+                            arguments[1].span(),
+                        ));
+                    }
+                }
+                if let Some(enforce_root_object_crud) = arguments.get(2) {
+                    self.require_named_argument(
+                        owner,
+                        &method.spelling,
+                        2,
+                        enforce_root_object_crud,
+                        &TypeName::Boolean,
+                    )?;
+                }
+                TypeName::SObjectAccessDecision
             }
             P::DatabaseExecuteBatch => {
                 require_static_arity(owner, method, arguments.len(), &[1, 2], arguments)?;

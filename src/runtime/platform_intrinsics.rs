@@ -1,5 +1,5 @@
 use super::{
-    Collection, EvaluatedArgument, Interpreter, PlatformHost, PlatformValue, Value,
+    Collection, EvaluatedArgument, Interpreter, PlatformHost, PlatformValue, SObjectId, Value,
     invalid_runtime_operands, runtime_exception,
     value_graph::{CycleBehavior, GraphIdentity, TraversalError, ValueGraphTraversal},
 };
@@ -14,7 +14,10 @@ use chrono::{
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
+
+const STRIP_INACCESSIBLE_DEPTH_LIMIT: usize = 32;
+const STRIP_INACCESSIBLE_NODE_LIMIT: usize = 10_000;
 
 use super::intrinsics::{
     expect_integer, expect_no_arguments, expect_string, invalid_call_arguments,
@@ -521,13 +524,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     _ => unreachable!(),
                 }))
             }
-            P::UserInfoGetUserId | P::UserInfoGetUserName => {
+            P::UserInfoGetUserId | P::UserInfoGetUserName | P::UserInfoGetProfileId => {
                 expect_no_arguments(arguments, span)?;
-                let user = self.host.user_context();
-                Ok(if intrinsic == P::UserInfoGetUserId {
-                    Value::Id(validate_id(&user.user_id, span)?)
-                } else {
-                    Value::String(user.username)
+                let user = self.current_user_context();
+                Ok(match intrinsic {
+                    P::UserInfoGetUserId => Value::Id(validate_id(&user.user_id, span)?),
+                    P::UserInfoGetUserName => Value::String(user.username),
+                    P::UserInfoGetProfileId => Value::Id("00e000000000001AAA".to_owned()),
+                    _ => unreachable!(),
                 })
             }
             P::EncodingBase64Encode => {
@@ -547,6 +551,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map_err(|error| platform_error(format!("invalid base64: {error}"), span))?;
                 Ok(self.store.allocate_platform(PlatformValue::Blob(bytes)))
             }
+            P::SecurityStripInaccessible => self.strip_inaccessible(arguments, span),
             P::HttpRequestSetEndpoint
             | P::HttpRequestSetMethod
             | P::HttpRequestSetBody
@@ -598,6 +603,258 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
         }
+    }
+
+    fn strip_inaccessible(
+        &mut self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let ([access, records] | [access, records, _]) = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let Value::Platform(access_id) = access.value else {
+            return Err(invalid_runtime_operands(access.span));
+        };
+        let PlatformValue::AccessType(access_type) = self.store.platform(access_id) else {
+            return Err(invalid_runtime_operands(access.span));
+        };
+        let access_type = *access_type;
+        let Value::Collection(records_id) = records.value else {
+            return Err(invalid_runtime_operands(records.span));
+        };
+        let Collection::List { elements, .. } = self.store.collection(records_id) else {
+            return Err(invalid_runtime_operands(records.span));
+        };
+        let elements = elements.clone();
+        let enforce_root_object_crud = match arguments.get(2) {
+            None => true,
+            Some(argument) => match argument.value {
+                Value::Boolean(value) => value,
+                _ => return Err(invalid_runtime_operands(argument.span)),
+            },
+        };
+        let user_id = self.current_user_context().user_id;
+        let mut stripped = Vec::with_capacity(elements.len());
+        let mut removed_fields = BTreeMap::<String, Vec<String>>::new();
+        let mut memo = BTreeMap::new();
+        let mut nodes = 0usize;
+        for value in elements {
+            let Value::SObject(source_id) = value else {
+                return Err(invalid_runtime_operands(records.span));
+            };
+            let source = self.store.sobject(source_id);
+            let object = self
+                .program()
+                .schema()
+                .object_at(source.object_id)
+                .expect("checked SObject type is present")
+                .clone();
+            let object_allowed = self
+                .host
+                .security_object_access(&user_id, object.api_name(), access_type)
+                .map_err(|error| {
+                    runtime_exception("NoAccessException", error.to_string(), access.span)
+                })?;
+            if enforce_root_object_crud && !object_allowed {
+                return Err(runtime_exception(
+                    "NoAccessException",
+                    format!(
+                        "No {} access to entity: {}",
+                        access_type.apex_name(),
+                        object.api_name()
+                    ),
+                    access.span,
+                ));
+            }
+            let target_id = self.strip_sobject(
+                source_id,
+                access_type,
+                &user_id,
+                &mut removed_fields,
+                &mut memo,
+                0,
+                &mut nodes,
+                access.span,
+            )?;
+            stripped.push(Value::SObject(target_id));
+        }
+        for fields in removed_fields.values_mut() {
+            fields.sort_by_key(|field| field.to_ascii_lowercase());
+            fields.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        }
+        let records = self.store.allocate_collection(Collection::List {
+            element_type: TypeName::Custom(crate::ast::NamedType::new("SObject".to_owned(), span)),
+            elements: stripped,
+            iteration_depth: 0,
+        });
+        let Value::Collection(records) = records else {
+            unreachable!("list allocation always returns a collection")
+        };
+        Ok(self
+            .store
+            .allocate_platform(PlatformValue::SecurityDecision {
+                records,
+                removed_fields,
+            }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn strip_sobject(
+        &mut self,
+        source_id: SObjectId,
+        access_type: crate::platform::AccessType,
+        user_id: &str,
+        removed_fields: &mut BTreeMap<String, Vec<String>>,
+        memo: &mut BTreeMap<SObjectId, SObjectId>,
+        depth: usize,
+        nodes: &mut usize,
+        span: Span,
+    ) -> Result<SObjectId, Diagnostic> {
+        if let Some(target) = memo.get(&source_id) {
+            return Ok(*target);
+        }
+        if depth > STRIP_INACCESSIBLE_DEPTH_LIMIT {
+            return Err(runtime_exception(
+                "NoAccessException",
+                format!(
+                    "Security.stripInaccessible exceeded relationship depth limit of {STRIP_INACCESSIBLE_DEPTH_LIMIT}"
+                ),
+                span,
+            ));
+        }
+        *nodes = nodes.saturating_add(1);
+        if *nodes > STRIP_INACCESSIBLE_NODE_LIMIT {
+            return Err(runtime_exception(
+                "NoAccessException",
+                format!(
+                    "Security.stripInaccessible exceeded SObject node limit of {STRIP_INACCESSIBLE_NODE_LIMIT}"
+                ),
+                span,
+            ));
+        }
+
+        let source = self.store.sobject(source_id).clone();
+        let object = self
+            .program()
+            .schema()
+            .object_at(source.object_id)
+            .expect("runtime SObject type belongs to its schema")
+            .clone();
+        let Value::SObject(target_id) = self.store.allocate_sobject(source.object_id) else {
+            unreachable!("SObject allocation always returns an SObject value")
+        };
+        memo.insert(source_id, target_id);
+
+        let mut target_fields = BTreeMap::new();
+        for (field_id, value) in source.fields {
+            let field = object
+                .field_at(field_id)
+                .expect("runtime SObject field belongs to its schema");
+            if self.security_field_allowed(
+                user_id,
+                object.api_name(),
+                field.api_name(),
+                access_type,
+                span,
+            )? {
+                target_fields.insert(field_id, value);
+            } else {
+                record_removed_field(removed_fields, object.api_name(), field.api_name());
+            }
+        }
+
+        let mut target_relationships = BTreeMap::new();
+        for (reference_field_id, related_id) in source.relationships {
+            let field = object
+                .field_at(reference_field_id)
+                .expect("runtime relationship field belongs to its schema");
+            if self.security_field_allowed(
+                user_id,
+                object.api_name(),
+                field.api_name(),
+                access_type,
+                span,
+            )? {
+                let related = self.strip_sobject(
+                    related_id,
+                    access_type,
+                    user_id,
+                    removed_fields,
+                    memo,
+                    depth + 1,
+                    nodes,
+                    span,
+                )?;
+                target_relationships.insert(reference_field_id, related);
+            } else {
+                target_fields.remove(&reference_field_id);
+                record_removed_field(removed_fields, object.api_name(), field.api_name());
+            }
+        }
+
+        let mut target_children = BTreeMap::new();
+        for (relationship, collection_id) in source.children {
+            let Collection::List {
+                element_type,
+                elements,
+                ..
+            } = self.store.collection(collection_id).clone()
+            else {
+                return Err(runtime_exception(
+                    "NoAccessException",
+                    "Security.stripInaccessible encountered a non-list child relationship",
+                    span,
+                ));
+            };
+            let mut sanitized = Vec::with_capacity(elements.len());
+            for value in elements {
+                let Value::SObject(child_id) = value else {
+                    return Err(runtime_exception(
+                        "NoAccessException",
+                        "Security.stripInaccessible encountered a non-SObject child relationship",
+                        span,
+                    ));
+                };
+                sanitized.push(Value::SObject(self.strip_sobject(
+                    child_id,
+                    access_type,
+                    user_id,
+                    removed_fields,
+                    memo,
+                    depth + 1,
+                    nodes,
+                    span,
+                )?));
+            }
+            let Value::Collection(collection) = self.store.allocate_collection(Collection::List {
+                element_type,
+                elements: sanitized,
+                iteration_depth: 0,
+            }) else {
+                unreachable!("list allocation always returns a collection")
+            };
+            target_children.insert(relationship, collection);
+        }
+
+        let target = self.store.sobject_mut(target_id);
+        target.fields = target_fields;
+        target.relationships = target_relationships;
+        target.children = target_children;
+        Ok(target_id)
+    }
+
+    fn security_field_allowed(
+        &self,
+        user_id: &str,
+        object: &str,
+        field: &str,
+        access_type: crate::platform::AccessType,
+        span: Span,
+    ) -> Result<bool, Diagnostic> {
+        self.host
+            .security_field_access(user_id, object, field, access_type)
+            .map_err(|error| runtime_exception("NoAccessException", error.to_string(), span))
     }
 
     fn call_test_context(
@@ -1208,6 +1465,17 @@ fn value_span(arguments: &[EvaluatedArgument], fallback: Span) -> Span {
 
 fn request_span(arguments: &[EvaluatedArgument], fallback: Span) -> Span {
     value_span(arguments, fallback)
+}
+
+fn record_removed_field(
+    removed_fields: &mut BTreeMap<String, Vec<String>>,
+    object: &str,
+    field: &str,
+) {
+    removed_fields
+        .entry(object.to_owned())
+        .or_default()
+        .push(field.to_owned());
 }
 
 fn platform_error(message: impl Into<String>, span: Span) -> Diagnostic {

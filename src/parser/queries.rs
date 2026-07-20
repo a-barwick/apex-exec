@@ -1,10 +1,10 @@
 use super::Parser;
 use crate::{
     ast::{
-        Expression, FieldPath, NullsOrder, SoqlAggregateFunction, SoqlComparisonOperator,
-        SoqlCondition, SoqlDateLiteral, SoqlDateLiteralKind, SoqlInValues, SoqlLogicalOperator,
-        SoqlOrderBy, SoqlQuery, SoqlSelectItem, SoqlValue, SortDirection, SoslQuery, SoslReturning,
-        SoslScope,
+        Expression, FieldPath, NullsOrder, SoqlAccess, SoqlAggregateFunction,
+        SoqlComparisonOperator, SoqlCondition, SoqlDateLiteral, SoqlDateLiteralKind, SoqlInValues,
+        SoqlLogicalOperator, SoqlOrderBy, SoqlQuery, SoqlSelectItem, SoqlValue, SortDirection,
+        SoslQuery, SoslReturning, SoslScope,
     },
     diagnostic::Diagnostic,
     token::TokenKind,
@@ -39,6 +39,7 @@ impl Parser {
         self.expect_keyword("from", "expected `FROM` after SOQL select list")?;
         let from = self.expect_identifier("expected an SObject type after `FROM`")?;
         let where_clause = self.parse_optional_condition("where")?;
+        let access = self.parse_optional_soql_access()?;
         let group_by = self.parse_optional_group_by()?;
         let having = self.parse_optional_condition("having")?;
         let order_by = self.parse_optional_order_by()?;
@@ -52,6 +53,7 @@ impl Parser {
             select,
             from,
             where_clause,
+            access,
             group_by,
             having,
             order_by,
@@ -59,6 +61,29 @@ impl Parser {
             offset,
             span: start.span.merge(end),
         })
+    }
+
+    fn parse_optional_soql_access(&mut self) -> Result<SoqlAccess, Diagnostic> {
+        if !self.check_keyword("with") {
+            return Ok(SoqlAccess::Default);
+        }
+        let start = self.advance().span;
+        let mode = if self.check_keyword("security_enforced") {
+            self.advance();
+            SoqlAccess::SecurityEnforced
+        } else if self.check_keyword("user_mode") {
+            self.advance();
+            SoqlAccess::UserMode
+        } else if self.check_keyword("system_mode") {
+            self.advance();
+            SoqlAccess::SystemMode
+        } else {
+            return Err(Diagnostic::new(
+                "expected `SECURITY_ENFORCED`, `USER_MODE`, or `SYSTEM_MODE` after `WITH`",
+                start,
+            ));
+        };
+        Ok(mode)
     }
 
     fn parse_select_list(&mut self) -> Result<Vec<SoqlSelectItem>, Diagnostic> {
@@ -573,8 +598,8 @@ impl Parser {
 
     fn is_query_clause_keyword(&self) -> bool {
         [
-            "from", "where", "group", "having", "order", "limit", "offset", "asc", "desc", "nulls",
-            "and", "or",
+            "from", "where", "with", "group", "having", "order", "limit", "offset", "asc", "desc",
+            "nulls", "and", "or",
         ]
         .iter()
         .any(|keyword| self.check_keyword(keyword))

@@ -1,4 +1,4 @@
-use super::{FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError};
+use super::{FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SharingModel};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -101,6 +101,7 @@ impl From<SchemaError> for MetadataError {
 
 struct ObjectBuilder {
     api_name: String,
+    sharing_model: SharingModel,
     fields: Vec<FieldSchema>,
 }
 
@@ -108,8 +109,10 @@ impl ObjectBuilder {
     fn new(api_name: String) -> Self {
         Self {
             api_name,
+            sharing_model: SharingModel::default(),
             fields: vec![
                 FieldSchema::new("Id", FieldType::Id, false),
+                FieldSchema::new("OwnerId", FieldType::Id, true),
                 FieldSchema::new("CreatedDate", FieldType::Datetime, true),
                 FieldSchema::new("LastModifiedDate", FieldType::Datetime, true),
             ],
@@ -117,7 +120,7 @@ impl ObjectBuilder {
     }
 
     fn finish(self) -> Result<ObjectSchema, SchemaError> {
-        let mut object = ObjectSchema::new(self.api_name);
+        let mut object = ObjectSchema::new(self.api_name).with_sharing_model(self.sharing_model);
         for field in self.fields {
             object.insert_field(field)?;
         }
@@ -175,6 +178,18 @@ fn import_object_file(
         ));
     }
     let mut builder = ObjectBuilder::new(api_name);
+    builder.sharing_model = match tag_text(&xml, "sharingModel").as_deref() {
+        None | Some("ReadWrite") => SharingModel::PublicReadWrite,
+        Some("Read") => SharingModel::PublicReadOnly,
+        Some("Private") => SharingModel::Private,
+        Some("ControlledByParent") => SharingModel::ControlledByParent,
+        Some(value) => {
+            return Err(MetadataError::invalid(
+                path,
+                format!("unsupported sharing model `{value}`"),
+            ));
+        }
+    };
 
     if let Some(name_field) = first_element(&xml, "nameField") {
         let field_type = required_text(path, name_field, "type")?;
@@ -357,7 +372,11 @@ mod tests {
 
         let schema = import_metadata([&root]).unwrap();
         let invoice = schema.object("invoice__C").unwrap();
-        assert_eq!(invoice.fields().len(), 6);
+        assert_eq!(invoice.fields().len(), 7);
+        assert_eq!(
+            invoice.field("OwnerId").unwrap().data_type(),
+            &FieldType::Id
+        );
         assert_eq!(
             invoice.field("Amount__c").unwrap().data_type(),
             &FieldType::Integer
@@ -411,7 +430,9 @@ mod tests {
         )
         .unwrap();
         let schema = import_metadata([&root]).unwrap();
-        assert_eq!(schema.object("Widget__c").unwrap().fields().len(), 5);
+        let widget = schema.object("Widget__c").unwrap();
+        assert_eq!(widget.fields().len(), 6);
+        assert_eq!(widget.field("OwnerId").unwrap().data_type(), &FieldType::Id);
 
         fs::write(
             objects.join("Bad__c.object"),

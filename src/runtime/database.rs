@@ -46,10 +46,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &mut self,
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
+        access_level_argument: Option<usize>,
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
         let argument = self.evaluate(&arguments[0])?;
+        let access = access_level_argument
+            .map(|index| self.evaluate(&arguments[index]))
+            .transpose()?
+            .map(|value| self.runtime_access_level(value, arguments[1].span()))
+            .transpose()?;
         if let Some(locator) = self.static_query_locator(kind, &argument) {
             return Ok(locator);
         }
@@ -60,7 +66,17 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         };
-        let checked = self.check_dynamic_query(&source, expected_object_id, kind, span)?;
+        let mut checked = self.check_dynamic_query(&source, expected_object_id, kind, span)?;
+        if let Some(access) = access {
+            checked.access = match access {
+                crate::platform::AccessLevel::UserMode => {
+                    crate::platform::QueryAccessMode::UserMode
+                }
+                crate::platform::AccessLevel::SystemMode => {
+                    crate::platform::QueryAccessMode::SystemMode
+                }
+            };
+        }
         let request = self.soql_request(&checked, span)?;
         let schema = self.program().schema().clone();
         let outcome = self
@@ -255,8 +271,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<(), Diagnostic> {
         let value = self.evaluate(expression)?;
-        self.execute_dml_value(target, value, true, span)
-            .map(|_| ())
+        self.execute_dml_value(
+            target,
+            value,
+            true,
+            target
+                .statement_access
+                .unwrap_or(crate::platform::AccessLevel::SystemMode),
+            span,
+        )
+        .map(|_| ())
     }
 
     fn collect_dml_rows(
@@ -332,6 +356,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         target: DatabaseDmlTarget,
         value: Value,
         all_or_none: bool,
+        access: crate::platform::AccessLevel,
         span: Span,
     ) -> Result<Vec<DmlRowOutcome>, Diagnostic> {
         if self.trigger_depth >= 16 {
@@ -355,6 +380,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let request = DmlRequest {
             operation,
             all_or_none,
+            access,
+            sharing: if (target.access_level_argument.is_some()
+                || target.statement_access.is_some())
+                && access == crate::platform::AccessLevel::SystemMode
+            {
+                crate::platform::SharingMode::WithoutSharing
+            } else {
+                self.execution_context.sharing_mode()
+            },
+            user_id: self.current_user_context().user_id,
             external_id: self.dml_external_id(target, &schema),
             rows: std::mem::take(&mut collected.rows),
         };
@@ -824,6 +859,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 std::mem::replace(&mut self.scopes, vec![std::collections::HashMap::new()]);
             let saved_receiver = self.current_receiver.take();
             let saved_declaring = self.current_declaring_class.take();
+            let saved_execution_context = self.execution_context;
+            self.execution_context = self.execution_context.for_trigger();
             self.call_stack.push(ActiveCall {
                 method: trigger.name.spelling.clone(),
                 call_span: span,
@@ -843,6 +880,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             self.scopes = caller_scopes;
             self.current_receiver = saved_receiver;
             self.current_declaring_class = saved_declaring;
+            self.execution_context = saved_execution_context;
 
             self.host.trigger(RuntimeTriggerEvent {
                 trigger: trigger.name.spelling.clone(),
@@ -1115,6 +1153,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .to_owned();
         Ok(SoqlRequest {
             object,
+            access: query.access,
+            sharing: self.execution_context.sharing_mode(),
+            user_id: self.current_user_context().user_id,
+            visible_record_ids: None,
             select: query
                 .select
                 .iter()

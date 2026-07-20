@@ -12,6 +12,7 @@
 mod database;
 pub mod metadata;
 pub mod schema;
+pub mod security;
 pub mod sobject;
 pub mod sqlite;
 pub mod storage;
@@ -26,7 +27,12 @@ pub use database::{
 };
 pub use metadata::{MetadataError, import_metadata};
 pub use schema::{
-    FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider,
+    FieldSchema, FieldType, ObjectSchema, SchemaCatalog, SchemaError, SchemaProvider, SharingModel,
+};
+pub use security::{
+    AccessLevel, AccessType, FieldPermissions, ObjectPermissions, QueryAccessMode, RecordAccess,
+    RecordGrant, SecurityError, SecurityGroup, SecurityPolicy, SecurityPrincipal, SecurityUser,
+    SharingMode,
 };
 pub use sobject::{SObject, SObjectError};
 pub use sqlite::{SqliteError, SqliteStorage, SqliteStorageTransaction};
