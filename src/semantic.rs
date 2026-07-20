@@ -204,6 +204,7 @@ enum ScalarSwitchKey {
 
 struct Checker {
     scopes: Vec<HashMap<String, TypeName>>,
+    final_scopes: Vec<HashMap<String, bool>>,
     loop_depth: usize,
     return_type: Option<ReturnType>,
     methods: HashMap<String, Vec<MethodSignature>>,
@@ -242,6 +243,7 @@ impl Checker {
     fn new(schema: SchemaCatalog, profiles: SourceProfiles) -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            final_scopes: vec![HashMap::new()],
             loop_depth: 0,
             return_type: None,
             methods: HashMap::new(),
@@ -362,6 +364,7 @@ impl Checker {
         }
 
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_final_scopes = std::mem::replace(&mut self.final_scopes, vec![HashMap::new()]);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_return_type = self.return_type.replace(ReturnType::Void);
         let saved_class = self.current_class.take();
@@ -369,6 +372,7 @@ impl Checker {
         let saved_trigger = self.current_trigger_object.replace(object_id);
         let result = self.check_method_body(&trigger.body);
         self.scopes = saved_scopes;
+        self.final_scopes = saved_final_scopes;
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
         self.current_class = saved_class;
@@ -2289,6 +2293,7 @@ impl Checker {
         constructor: &ConstructorDeclaration,
     ) -> Result<(), Diagnostic> {
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_final_scopes = std::mem::replace(&mut self.final_scopes, vec![HashMap::new()]);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_return_type = self.return_type.replace(ReturnType::Void);
         let saved_final_assignment_scope =
@@ -2301,6 +2306,7 @@ impl Checker {
             self.check_method_body(&constructor.body)
         })();
         self.scopes = saved_scopes;
+        self.final_scopes = saved_final_scopes;
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
         self.current_final_assignment_scope = saved_final_assignment_scope;
@@ -2468,6 +2474,8 @@ impl Checker {
                 continue;
             };
             let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+            let saved_final_scopes =
+                std::mem::replace(&mut self.final_scopes, vec![HashMap::new()]);
             let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
             let saved_return_type = self.return_type.replace(match accessor.kind {
                 AccessorKind::Get => ReturnType::Value(property.ty.clone()),
@@ -2479,6 +2487,7 @@ impl Checker {
             }
             let result = self.check_method_body(body);
             self.scopes = saved_scopes;
+            self.final_scopes = saved_final_scopes;
             self.loop_depth = saved_loop_depth;
             self.return_type = saved_return_type;
             result?;
@@ -2553,6 +2562,7 @@ impl Checker {
             return Ok(());
         };
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_final_scopes = std::mem::replace(&mut self.final_scopes, vec![HashMap::new()]);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_return_type = self.return_type.replace(method.return_type.clone());
 
@@ -2575,6 +2585,7 @@ impl Checker {
         })();
 
         self.scopes = saved_scopes;
+        self.final_scopes = saved_final_scopes;
         self.loop_depth = saved_loop_depth;
         self.return_type = saved_return_type;
         result
@@ -3053,7 +3064,7 @@ impl Checker {
                 initializer,
                 ..
             } => {
-                self.check_declarator(ty, name, Some(initializer))?;
+                self.check_declarator(ty, name, Some(initializer), false)?;
                 Ok(())
             }
             Statement::LocalDeclaration {
@@ -3062,19 +3073,34 @@ impl Checker {
                 declarators,
                 ..
             } => {
-                if let Some(modifier) = modifiers.first() {
-                    return Err(Diagnostic::new(
+                let mut is_final = false;
+                for modifier in modifiers {
+                    if *modifier == Modifier::Final && !is_final {
+                        is_final = true;
+                        continue;
+                    }
+                    let message = if *modifier == Modifier::Final {
+                        "duplicate local modifier `final`".to_owned()
+                    } else {
                         format!(
                             "local modifier `{}` is parsed but unsupported by the active compatibility profile",
                             modifier_name(*modifier)
-                        ),
+                        )
+                    };
+                    return Err(Diagnostic::new(
+                        message,
                         declarators
                             .first()
                             .map_or_else(|| statement.span(), |declarator| declarator.span),
                     ));
                 }
                 for declarator in declarators {
-                    self.check_declarator(ty, &declarator.name, declarator.initializer.as_ref())?;
+                    self.check_declarator(
+                        ty,
+                        &declarator.name,
+                        declarator.initializer.as_ref(),
+                        is_final,
+                    )?;
                 }
                 Ok(())
             }
@@ -3093,6 +3119,7 @@ impl Checker {
         ty: &TypeName,
         name: &Identifier,
         initializer: Option<&Expression>,
+        is_final: bool,
     ) -> Result<(), Diagnostic> {
         self.validate_type(ty, name.span)?;
         if self.current_scope().contains_key(&name.canonical) {
@@ -3107,6 +3134,12 @@ impl Checker {
         }
         self.current_scope_mut()
             .insert(name.canonical.clone(), ty.clone());
+        if is_final {
+            self.final_scopes
+                .last_mut()
+                .expect("checker always has a final-local scope")
+                .insert(name.canonical.clone(), initializer.is_some());
+        }
         Ok(())
     }
 
@@ -3537,6 +3570,12 @@ impl Checker {
 
     fn variable_type(&mut self, identifier: &Identifier) -> Result<ExpressionType, Diagnostic> {
         if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
+            if self.final_local_state(&identifier.canonical) == Some(false) {
+                return Err(Diagnostic::new(
+                    format!("final local `{}` is not initialized", identifier.spelling),
+                    identifier.span,
+                ));
+            }
             self.references
                 .insert(identifier.span, ReferenceTarget::Local);
             return Ok(ExpressionType::Value(ty));
@@ -4968,6 +5007,24 @@ impl Checker {
         require_read: bool,
     ) -> Result<TypeName, Diagnostic> {
         if let Some(ty) = self.lookup(&identifier.canonical).cloned() {
+            if let Some(initialized) = self.final_local_state(&identifier.canonical) {
+                if initialized {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "final local `{}` is already initialized",
+                            identifier.spelling
+                        ),
+                        identifier.span,
+                    ));
+                }
+                if require_read {
+                    return Err(Diagnostic::new(
+                        format!("final local `{}` is not initialized", identifier.spelling),
+                        identifier.span,
+                    ));
+                }
+                self.mark_final_local_initialized(&identifier.canonical);
+            }
             self.references
                 .insert(identifier.span, ReferenceTarget::Local);
             self.places.insert(identifier.span, PlaceTarget::Local);
@@ -6530,13 +6587,37 @@ impl Checker {
         self.scopes.last_mut().expect("checker always has a scope")
     }
 
+    fn final_local_state(&self, canonical: &str) -> Option<bool> {
+        for (scope, finals) in self.scopes.iter().zip(&self.final_scopes).rev() {
+            if scope.contains_key(canonical) {
+                return finals.get(canonical).copied();
+            }
+        }
+        None
+    }
+
+    fn mark_final_local_initialized(&mut self, canonical: &str) {
+        for (scope, finals) in self.scopes.iter().zip(&mut self.final_scopes).rev() {
+            if scope.contains_key(canonical) {
+                let initialized = finals
+                    .get_mut(canonical)
+                    .expect("final local state exists for a final binding");
+                *initialized = true;
+                return;
+            }
+        }
+        unreachable!("final local binding was resolved above")
+    }
+
     fn with_scope<T>(
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, Diagnostic>,
     ) -> Result<T, Diagnostic> {
         self.scopes.push(HashMap::new());
+        self.final_scopes.push(HashMap::new());
         let result = operation(self);
         self.scopes.pop();
+        self.final_scopes.pop();
         result
     }
 

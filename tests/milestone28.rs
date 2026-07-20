@@ -918,6 +918,34 @@ System.debug(operation == System.TriggerOperation.AFTER_UPDATE);
 }
 
 #[test]
+fn final_locals_allow_exactly_one_assignment_per_lexical_binding() {
+    let output = execute(
+        r#"
+final Integer initialized = 40;
+final Integer assignedLater;
+assignedLater = 2;
+{
+    Integer assignedLater = 3;
+    assignedLater++;
+    System.debug(assignedLater);
+}
+System.debug(initialized + assignedLater);
+"#,
+    )
+    .unwrap();
+    assert_eq!(output, ["4", "42"]);
+
+    for invalid in [
+        "final Integer value = 1; value = 2;",
+        "final Integer value; System.debug(value);",
+        "final Integer value; value = 1; value++;",
+        "final final Integer value = 1;",
+    ] {
+        assert!(check(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
 fn final_fields_are_assignable_in_declarations_initializers_and_constructors_only() {
     let output = execute(
         r#"
