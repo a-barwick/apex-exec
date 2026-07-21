@@ -309,8 +309,14 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 F::Id("Id"),
                 F::String("Name"),
                 F::String("Username"),
+                F::String("Alias"),
+                F::String("Email"),
+                F::String("EmailEncodingKey"),
                 F::String("FirstName"),
                 F::String("LastName"),
+                F::String("LanguageLocaleKey"),
+                F::String("LocaleSidKey"),
+                F::String("TimeZoneSidKey"),
                 F::String("FederationIdentifier"),
                 F::String("SmallPhotoUrl"),
                 F::Reference {
@@ -373,4 +379,54 @@ fn object(api_name: &str, fields: &[StandardField<'_>]) -> ObjectSchema {
             .expect("curated standard schema has unique fields");
     }
     object
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STANDARD_OBJECT_COUNT: usize = 29;
+    const STANDARD_FIELD_COUNT: usize = 150;
+
+    #[test]
+    fn user_schema_supports_the_deterministic_run_as_fixture_fields() {
+        let objects = standard_objects();
+        let user = objects
+            .iter()
+            .find(|object| object.api_name() == "User")
+            .expect("curated standard schema contains User");
+
+        for field in [
+            "Alias",
+            "Email",
+            "EmailEncodingKey",
+            "LanguageLocaleKey",
+            "LocaleSidKey",
+            "TimeZoneSidKey",
+        ] {
+            assert_eq!(user.field(field).unwrap().data_type(), &FieldType::String);
+        }
+        assert_eq!(
+            user.field("ProfileId").unwrap().data_type(),
+            &FieldType::Reference {
+                target_object: "Profile".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn standard_schema_construction_is_deterministic_and_has_a_fixed_work_budget() {
+        let first = standard_objects();
+        let second = standard_objects();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), STANDARD_OBJECT_COUNT);
+        assert_eq!(
+            first
+                .iter()
+                .map(|object| object.fields().len())
+                .sum::<usize>(),
+            STANDARD_FIELD_COUNT
+        );
+    }
 }
