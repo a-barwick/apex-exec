@@ -89,7 +89,10 @@ impl<'ast> Visitor<'ast> for GrammarCensus {
     fn visit_annotation(&mut self, annotation: &'ast ast::Annotation) {
         if matches!(
             annotation.kind,
-            AnnotationKind::Other | AnnotationKind::SuppressWarnings | AnnotationKind::TestVisible
+            AnnotationKind::AuraEnabled { .. }
+                | AnnotationKind::Other
+                | AnnotationKind::SuppressWarnings
+                | AnnotationKind::TestVisible
         ) {
             *self
                 .annotations
@@ -197,47 +200,72 @@ fn north_star_grammar_census_is_comment_aware_and_stable() {
 
 #[test]
 fn annotations_switch_and_external_id_dml_preserve_lossless_syntax_and_phase_boundaries() {
-    let annotation_source = "@AuraEnabled(cacheable=true label='Read') public class Service {}";
+    let annotation_source = r#"
+        public class Service {
+            @AuraEnabled(cacheable=true continuation=false)
+            public static String load() {
+                return 'ready';
+            }
+        }
+    "#;
     let annotation_program = parse(annotation_source).unwrap();
-    let annotation = &annotation_program.classes[0].annotations[0];
+    let ClassMember::Method(method) = &annotation_program.classes[0].members[0] else {
+        panic!("expected an @AuraEnabled method");
+    };
+    let annotation = &method.annotations[0];
     assert_eq!(annotation.name.spelling, "AuraEnabled");
     assert_eq!(annotation.arguments.len(), 2);
     assert_eq!(
-        &annotation_source[annotation.span.start..annotation.span.end],
-        "@AuraEnabled(cacheable=true label='Read')"
+        annotation.kind,
+        AnnotationKind::AuraEnabled {
+            cacheable: Some(true),
+            continuation: Some(false),
+        }
     );
-    let annotation_error = check(annotation_source).unwrap_err();
+    assert_eq!(
+        &annotation_source[annotation.span.start..annotation.span.end],
+        "@AuraEnabled(cacheable=true continuation=false)"
+    );
+    check(annotation_source).unwrap();
+
+    let unsupported_annotation_source = "@NamespaceAccessible public class Service {}";
+    parse(unsupported_annotation_source).unwrap();
+    let annotation_error = check(unsupported_annotation_source).unwrap_err();
     assert!(annotation_error.message.contains("parsed but unsupported"));
 
-    let switch_source =
-        "switch on left ?? right { when 'a', null { System.debug('x'); } when else {} }";
+    let switch_source = r#"
+        String left;
+        String right = 'a';
+        switch on left ?? right { when 'a', null { System.debug('x'); } when else {} }
+    "#;
     let switch_program = parse(switch_source).unwrap();
-    let Statement::Switch { value, arms, span } = &switch_program.statements[0] else {
+    let Statement::Switch { value, arms, span } = &switch_program.statements[2] else {
         panic!("expected a dedicated switch statement");
     };
     assert!(matches!(value, Expression::NullCoalesce { .. }));
     assert_eq!(arms.len(), 2);
     assert!(matches!(arms[1].labels, SwitchLabels::Else(_)));
-    assert_eq!(&switch_source[span.start..span.end], switch_source);
-    let switch_error = check(switch_source).unwrap_err();
-    assert!(switch_error.message.contains("`switch on`/`when`"));
+    assert_eq!(
+        &switch_source[span.start..span.end],
+        "switch on left ?? right { when 'a', null { System.debug('x'); } when else {} }"
+    );
+    assert_eq!(execute(switch_source).unwrap(), ["x"]);
 
-    let dml_source = "upsert records External_Key__c;";
+    let dml_source = "SObject records; upsert records External_Key__c;";
     let dml_program = parse(dml_source).unwrap();
     let Statement::Dml {
         external_id: Some(external_id),
         ..
-    } = &dml_program.statements[0]
+    } = &dml_program.statements[1]
     else {
         panic!("expected an external-ID DML node");
     };
     assert_eq!(external_id.spelling, "External_Key__c");
     let dml_error = check(dml_source).unwrap_err();
-    assert!(dml_error.message.contains("unknown variable `records`"));
     assert!(
-        !dml_error
+        dml_error
             .message
-            .contains("external-ID DML is parsed but unsupported")
+            .contains("external-ID upsert requires one statically known SObject type")
     );
 }
 
@@ -275,14 +303,29 @@ fn uninitialized_multi_declarator_and_multi_for_forms_execute_in_source_order() 
 
 #[test]
 fn remaining_modifiers_and_multi_fields_fail_in_the_semantic_phase() {
-    for source in [
-        "final Integer value = 1;",
-        "transient Integer value = 1;",
-        "public class Example { transient Integer value; }",
-    ] {
+    check("final Integer value = 1;").unwrap();
+    assert_eq!(
+        execute("final Integer value; value = 1; System.debug(value);").unwrap(),
+        ["1"]
+    );
+    let final_error = check("final Integer value; value = 1; value = 2;").unwrap_err();
+    assert!(final_error.message.contains("already initialized"));
+
+    let local_transient = "transient Integer value = 1;";
+    parse(local_transient).unwrap();
+    let transient_error = check(local_transient).unwrap_err();
+    assert!(
+        transient_error
+            .message
+            .contains("local modifier `transient`")
+    );
+
+    check("public class Example { transient Integer value; }").unwrap();
+
+    for source in ["public class Example { Integer first = 1, second; }"] {
         parse(source).unwrap();
         let error = check(source).unwrap_err();
-        assert!(error.message.contains("parsed but unsupported"));
+        assert!(error.message.contains("multi-declarator fields"));
     }
 
     let fields = "public class Example { Integer first = 1, second; }";
@@ -291,8 +334,6 @@ fn remaining_modifiers_and_multi_fields_fail_in_the_semantic_phase() {
         program.classes[0].members[0],
         ClassMember::FieldGroup(_)
     ));
-    let error = check(fields).unwrap_err();
-    assert!(error.message.contains("multi-declarator fields"));
 }
 
 #[test]
