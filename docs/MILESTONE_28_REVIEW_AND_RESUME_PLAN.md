@@ -204,7 +204,7 @@ package after review and integration.
 | ID | Package | Status | Depends on | Primary ownership |
 |---|---|---|---|---|
 | M28-Q1 | Semantic receiver and profile correctness | Complete (`7d706c9`; reviewed and integrated; format, check, focused tests, and filtered suite pass) | Recorded review | `semantic.rs`, focused semantic/M10/M25 tests |
-| M28-Q2 | Standard `User` schema restoration | Ready | Q1 integrated at `7d706c9` | Standard schema, M27 tests |
+| M28-Q2 | Standard `User` schema restoration | Review (`codex/m28-q2-user-schema`, `79932cc`) | Q1 integrated at `7d706c9` | Standard schema, M27 tests |
 | M28-Q3 | M21 expectation and census reconciliation | Blocked | Q2 integrated | M21 tests and census documentation |
 | M28-Q4A | AST and SObject error-shape Clippy cleanup | Blocked | Q3 integrated | AST, platform SObject |
 | M28-Q4B | SQLite error-shape and database Clippy cleanup | Blocked | Q4A integrated | SQLite, platform database |
