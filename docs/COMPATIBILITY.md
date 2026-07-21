@@ -35,6 +35,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Initializers remain checked and execute in source order |
 | Uninitialized/multi-declarator locals | Yes | Yes | Yes | Compatible | Uninitialized values receive typed null; declarators check and execute left to right in one scope |
+| `final` local bindings | Yes | Yes | Yes | Compatible | Exactly-once lexical bindings: initialize in the declaration or assign once before reading; reassignment and reads before initialization are rejected |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative; arithmetic, String, bitwise, and shift compounds share evaluate-once lvalue handling |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
@@ -76,17 +77,17 @@ platform area. Broader surfaces retain their stated fidelity level.
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
 | Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, `ALL ROWS`, soft-delete visibility, and SQLite execution |
 | Static SOSL | Yes | Yes | Yes | Simplified | Checked returning clauses with deterministic local String-field matching |
-| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution; external-ID upsert is retained then rejected semantically |
-| `Database` DML methods | Yes | Yes | Yes | Simplified | Common methods are atomic and return void; partial result APIs are unsupported |
+| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution; external-ID upsert resolves a configured field on one statically known schema SObject, while dynamic, unknown, and misconfigured cases are explicit |
+| `Database` DML methods | Yes | Yes | Yes | Simplified | Atomic and `allOrNone=false` partial-result overloads return typed ordered outcomes; supported access/DML options and external-ID fields are schema-checked |
 | Apex triggers | Yes | Yes | Yes | Simplified | Schema-checked `.trigger` units, typed contexts, eight before/after DML events, bulk handlers, and bounded recursion |
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, source-ordered initializer blocks, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
-| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` is retained then rejected semantically |
+| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` fields execute normally and are omitted from JSON serialization, while non-field uses are rejected semantically |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, `SeeAllData=false`, deterministic `IsParallel` partitioning, method-only `@TestSetup`, lexical-test-only `@TestVisible` access, and correct `Test.isRunningTest()` mode; `SeeAllData=true` is explicit |
-| Non-test annotations | Yes | Partial | Partial | Simplified | `@SuppressWarnings` accepts exactly one positional String and is runtime-neutral; all other names/arguments remain lossless and unsupported effects are explicit |
+| Non-test annotations | Yes | Partial | Partial | Simplified | `@SuppressWarnings` accepts exactly one positional String and is runtime-neutral. `@AuraEnabled` supports public/global fields and properties plus public/global static methods, with Boolean `cacheable`/`continuation` method options; it is runtime-neutral and does not imply Lightning behavior. Other names/effects remain lossless and explicitly unsupported |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
 | Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract, deterministic chunking/context/finish, and marker-gated `Database.Stateful` receiver persistence; non-stateful stages restore the enqueue snapshot |
