@@ -294,6 +294,12 @@ fn method_receivers_resolve_variables_before_static_types() {
     let error = check_source("String System = 'value'; System.debug('no');").unwrap_err();
     assert_eq!(error.message, "unknown method `debug` on String");
 
+    let error = check_source("String System = 'value'; System.Request.getCurrent();").unwrap_err();
+    assert_eq!(
+        error.message,
+        "member access requires a class instance, found String"
+    );
+
     let source = "Date Date = Date.today(); Date selected = Date.today();";
     let error = check_source(source).unwrap_err();
     assert_eq!(

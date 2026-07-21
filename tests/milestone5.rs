@@ -39,8 +39,8 @@ public class Counter extends BaseCounter implements Greeter {
     }
 }
 
-Counter counter = new Counter(2);
-System.debug(counter.greet());
+Counter instance = new Counter(2);
+System.debug(instance.greet());
 System.debug(Counter.total());
 ";
 
