@@ -155,7 +155,7 @@ pub enum SObjectError {
     InvalidFieldValue {
         object: String,
         field: String,
-        expected: FieldType,
+        expected: Box<FieldType>,
         actual: &'static str,
     },
     ReadOnlyField {
@@ -247,7 +247,7 @@ fn validate_value(
         Err(SObjectError::InvalidFieldValue {
             object: object.to_owned(),
             field: field.to_owned(),
-            expected: expected.clone(),
+            expected: Box::new(expected.clone()),
             actual: data_value_name(value),
         })
     }
@@ -309,16 +309,21 @@ mod tests {
             account.get(&schema, "NAME").unwrap(),
             Some(&DataValue::String("Acme".to_owned()))
         );
+        let invalid_value = account
+            .set(&schema, "Employees", DataValue::Boolean(true))
+            .unwrap_err();
         assert_eq!(
-            account
-                .set(&schema, "Employees", DataValue::Boolean(true))
-                .unwrap_err(),
+            invalid_value,
             SObjectError::InvalidFieldValue {
                 object: "Account".to_owned(),
                 field: "Employees".to_owned(),
-                expected: FieldType::Integer,
+                expected: Box::new(FieldType::Integer),
                 actual: "Boolean",
             }
+        );
+        assert_eq!(
+            invalid_value.to_string(),
+            "field `Account.Employees` expects Integer, found Boolean"
         );
     }
 

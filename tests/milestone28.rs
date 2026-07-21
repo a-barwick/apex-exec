@@ -1,5 +1,5 @@
 use apex_exec::{
-    ast::{AnnotationKind, ClassMember},
+    ast::{AnnotationKind, ClassMember, Statement, SwitchLabels},
     check, execute, parse,
     platform::{
         DataValue, FieldSchema, FieldType, LocalDatabase, ObjectSchema, QueryAccessMode,
@@ -19,6 +19,30 @@ use std::{
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn typed_switch_pattern_ast_preserves_payload_and_source_spans() {
+    let source = "SObject value; switch on value { when Schema.Example__c example {} }";
+    let program = parse(source).unwrap();
+    let Statement::Switch { arms, .. } = &program.statements[1] else {
+        panic!("expected switch statement");
+    };
+    let SwitchLabels::TypePattern(pattern) = &arms[0].labels else {
+        panic!("expected typed switch pattern");
+    };
+
+    assert_eq!(pattern.ty.apex_name(), "Schema.Example__c");
+    assert_eq!(pattern.binding.spelling, "example");
+    assert_eq!(pattern.binding.canonical, "example");
+    assert_eq!(
+        &source[pattern.span.start..pattern.span.end],
+        "Schema.Example__c example"
+    );
+    assert_eq!(
+        &source[pattern.binding.span.start..pattern.binding.span.end],
+        "example"
+    );
+}
 
 #[test]
 fn is_test_parallel_option_is_lossless_checked_and_class_scoped() {

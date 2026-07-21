@@ -2791,7 +2791,7 @@ impl Checker {
     ) -> Result<(), Diagnostic> {
         if arms
             .iter()
-            .any(|arm| matches!(arm.labels, SwitchLabels::TypePattern { .. }))
+            .any(|arm| matches!(&arm.labels, SwitchLabels::TypePattern(_)))
         {
             self.check_sobject_type_switch(value, arms, span)
         } else {
@@ -2825,23 +2825,19 @@ impl Checker {
         let mut pattern_count = 0usize;
         for arm in arms {
             match &arm.labels {
-                SwitchLabels::TypePattern {
-                    ty,
-                    binding,
-                    span: pattern_span,
-                } => {
-                    self.validate_type(ty, *pattern_span)?;
-                    if !self.is_sobject_type(ty) {
+                SwitchLabels::TypePattern(pattern) => {
+                    self.validate_type(&pattern.ty, pattern.span)?;
+                    if !self.is_sobject_type(&pattern.ty) {
                         return Err(Diagnostic::new(
                             format!(
                                 "switch type pattern must name a concrete SObject, found {}",
-                                ty.apex_name()
+                                pattern.ty.apex_name()
                             ),
-                            *pattern_span,
+                            pattern.span,
                         ));
                     }
                     let object_id = self
-                        .sobject_object_id(ty)
+                        .sobject_object_id(&pattern.ty)
                         .expect("validated concrete SObject has a schema identity");
                     if !self.is_dynamic_sobject_type(&value_type)
                         && self.sobject_object_id(&value_type) != Some(object_id)
@@ -2849,25 +2845,25 @@ impl Checker {
                         return Err(Diagnostic::new(
                             format!(
                                 "{} cannot match switch value type {}",
-                                ty.apex_name(),
+                                pattern.ty.apex_name(),
                                 value_type.apex_name()
                             ),
-                            *pattern_span,
+                            pattern.span,
                         ));
                     }
                     self.switch_patterns
-                        .insert(*pattern_span, ObjectTypeId::from_index(object_id));
+                        .insert(pattern.span, ObjectTypeId::from_index(object_id));
                     if !seen_types.insert(object_id) {
                         return Err(Diagnostic::new(
-                            format!("duplicate switch type pattern `{}`", ty.apex_name()),
-                            *pattern_span,
+                            format!("duplicate switch type pattern `{}`", pattern.ty.apex_name()),
+                            pattern.span,
                         ));
                     }
                     pattern_count += 1;
                     self.with_scope(|checker| {
                         checker
                             .current_scope_mut()
-                            .insert(binding.canonical.clone(), ty.clone());
+                            .insert(pattern.binding.canonical.clone(), pattern.ty.clone());
                         checker.check_statement(&arm.body)
                     })?;
                 }
@@ -2948,7 +2944,7 @@ impl Checker {
                     self.check_statement(&arm.body)?;
                 }
                 SwitchLabels::Else(_) => self.check_statement(&arm.body)?,
-                SwitchLabels::TypePattern { .. } => {
+                SwitchLabels::TypePattern(_) => {
                     return Err(Diagnostic::new(
                         "scalar and SObject type-pattern labels cannot be mixed",
                         arm.span,

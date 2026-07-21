@@ -315,9 +315,9 @@ pub fn walk_switch_arm<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, arm: &'
                 visitor.visit_expression(label);
             }
         }
-        SwitchLabels::TypePattern { ty, binding, .. } => {
-            visitor.visit_type_name(ty);
-            visitor.visit_identifier(binding);
+        SwitchLabels::TypePattern(pattern) => {
+            visitor.visit_type_name(&pattern.ty);
+            visitor.visit_identifier(&pattern.binding);
         }
         SwitchLabels::Else(_) => {}
     }

@@ -178,8 +178,8 @@ fn visit_statement(
         }
         Statement::Switch { arms, .. } => {
             for arm in arms {
-                if let SwitchLabels::TypePattern { span, .. } = &arm.labels {
-                    branches.insert(*span);
+                if let SwitchLabels::TypePattern(pattern) = &arm.labels {
+                    branches.insert(pattern.span);
                 }
                 visit_statement(&arm.body, statements, branches);
             }

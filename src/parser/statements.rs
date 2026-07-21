@@ -2,7 +2,7 @@ use super::Parser;
 use crate::{
     ast::{
         CatchClause, DmlAccess, DmlOperation, Statement, SwitchArm, SwitchLabels,
-        VariableDeclarator,
+        SwitchTypePattern, VariableDeclarator,
     },
     diagnostic::Diagnostic,
     token::TokenKind,
@@ -281,11 +281,11 @@ impl Parser {
                 let (ty, type_span) = self.parse_type_name()?;
                 let binding =
                     self.expect_identifier("expected a binding name after switch pattern type")?;
-                SwitchLabels::TypePattern {
+                SwitchLabels::TypePattern(Box::new(SwitchTypePattern {
                     span: type_span.merge(binding.span),
                     ty,
                     binding,
-                }
+                }))
             } else {
                 let mut labels = vec![self.parse_expression()?];
                 while self.check(&TokenKind::Comma) {

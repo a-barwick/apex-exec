@@ -1212,15 +1212,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let value = self.evaluate(expression)?;
         for arm in arms {
             match &arm.labels {
-                SwitchLabels::TypePattern {
-                    ty,
-                    binding,
-                    span: pattern_span,
-                } => {
-                    let Some(expected_object) = self.program().switch_pattern(*pattern_span) else {
+                SwitchLabels::TypePattern(pattern) => {
+                    let Some(expected_object) = self.program().switch_pattern(pattern.span) else {
                         return Err(Diagnostic::new(
                             "SObject switch pattern is missing its checked target",
-                            *pattern_span,
+                            pattern.span,
                         ));
                     };
                     let matched = matches!(
@@ -1228,13 +1224,13 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         Value::SObject(id)
                             if self.store.sobject(*id).object_id == expected_object.index()
                     );
-                    self.record_branch(*pattern_span, matched);
+                    self.record_branch(pattern.span, matched);
                     if matched {
                         self.scopes.push(HashMap::new());
                         self.bind_local(
-                            binding,
-                            ty,
-                            typed_value(value.clone(), ty, *pattern_span)?,
+                            &pattern.binding,
+                            &pattern.ty,
+                            typed_value(value.clone(), &pattern.ty, pattern.span)?,
                         );
                         let result = self.execute_statement(&arm.body);
                         self.scopes.pop();
