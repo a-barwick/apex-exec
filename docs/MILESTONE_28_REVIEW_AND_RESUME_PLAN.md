@@ -208,7 +208,7 @@ package after review and integration.
 | M28-Q3 | M21 expectation and census reconciliation | Complete (`aa82776f`; reviewed and integrated; format/check pass, M21 6/6, North Star 16/16, full Rust test pass; 28 Q4-owned Clippy diagnostics verified) | Q2 integrated at `666eebd` | M21 tests and census documentation |
 | M28-Q4A | AST and SObject error-shape Clippy cleanup | Complete (`4fa1350`; reviewed and integrated; Rust 1.88 format/check/full test pass; 10 owned diagnostics eliminated, leaving Q4B=15 and Q4C=3) | Q3 integrated at `aa82776f` | AST, platform SObject |
 | M28-Q4B | SQLite error-shape and database Clippy cleanup | Complete (`ea0881f`; reviewed and integrated; Rust 1.88 format/check/full test pass; 15 owned diagnostics eliminated, leaving Q4C=3) | Q4A integrated at `4fa1350` | SQLite, platform database |
-| M28-Q4C | Remaining semantic Clippy cleanup | Ready | Q4B integrated at `ea0881f` | Semantic and async contract helpers |
+| M28-Q4C | Remaining semantic Clippy cleanup | Active (`codex/m28-q4c-semantic-clippy`; owner `/root/m28_q4c_semantic`) | Q4B integrated at `ea0881f` | Semantic and async contract helpers |
 | M28-M1 | Frontend and coverage maintainability restoration | Blocked | Clippy green | AST visitor, parser, coverage |
 | M28-M2A | Metadata import maintainability restoration | Blocked | M1 integrated | Platform metadata |
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Blocked | M2A integrated | Platform database/schema/SQLite |

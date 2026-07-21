@@ -1599,11 +1599,13 @@ impl Checker {
     }
 
     fn validate_async_contract(&mut self, class_id: usize) -> Result<(), Diagnostic> {
-        let mut contract = hir::AsyncClassContract::default();
-        contract.allows_callouts = self.classes[class_id]
-            .interfaces
-            .iter()
-            .any(|interface| is_allows_callouts_interface(&interface.canonical));
+        let mut contract = hir::AsyncClassContract {
+            allows_callouts: self.classes[class_id]
+                .interfaces
+                .iter()
+                .any(|interface| is_allows_callouts_interface(&interface.canonical)),
+            ..Default::default()
+        };
 
         if self.classes[class_id]
             .interfaces
@@ -3039,7 +3041,7 @@ impl Checker {
             Expression::LongLiteral(value, _)
                 if matches!(value_type, TypeName::Integer | TypeName::Long) =>
             {
-                Ok(ScalarSwitchKey::Integer((*value).into()))
+                Ok(ScalarSwitchKey::Integer(*value))
             }
             Expression::NullLiteral(_) => Ok(ScalarSwitchKey::Null),
             Expression::MemberAccess { span, .. } if enum_class.is_some() => {
@@ -4878,11 +4880,11 @@ impl Checker {
         let class_id = self.current_class?;
         let (owner_class_id, candidates) =
             self.lexical_class_methods_named(class_id, &name.canonical)?;
-        let kind = if owner_class_id != class_id || self.current_static {
-            ClassCallKind::Static
-        } else if candidates
-            .iter()
-            .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
+        let kind = if owner_class_id != class_id
+            || self.current_static
+            || candidates
+                .iter()
+                .all(|candidate| candidate.modifiers.contains(&Modifier::Static))
         {
             ClassCallKind::Static
         } else if candidates

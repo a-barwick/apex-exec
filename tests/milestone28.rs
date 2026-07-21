@@ -753,8 +753,12 @@ public class MixedLexicalOverloadDemo {
         return 'static:' + value;
     }
 
+    private static String chooseStatic() {
+        return pick(7);
+    }
+
     private String choose() {
-        return pick(42) + ':' + pick();
+        return chooseStatic() + ':' + pick(42) + ':' + pick();
     }
 
     public static void run() {
@@ -766,7 +770,7 @@ public class MixedLexicalOverloadDemo {
     let compilation = project::compile(&root).unwrap();
     assert_eq!(
         compilation.invoke("MixedLexicalOverloadDemo.run").unwrap(),
-        ["static:42:instance"]
+        ["static:7:static:42:instance"]
     );
     fs::remove_dir_all(root).unwrap();
 }
