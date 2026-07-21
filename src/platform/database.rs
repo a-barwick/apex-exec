@@ -5,7 +5,7 @@ use super::{
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     error::Error,
     fmt,
 };
@@ -1280,9 +1280,8 @@ fn hydrate_summary_fields<T: StorageTransaction>(
     let mut children_by_object = BTreeMap::<String, Vec<Record>>::new();
     for (_, _, definition) in &summaries {
         let canonical = definition.child_object.to_ascii_lowercase();
-        if !children_by_object.contains_key(&canonical) {
-            children_by_object.insert(
-                canonical,
+        if let Entry::Vacant(entry) = children_by_object.entry(canonical) {
+            entry.insert(
                 transaction
                     .scan(&definition.child_object)
                     .map_err(DatabaseError::storage)?,

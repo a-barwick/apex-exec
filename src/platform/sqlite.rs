@@ -300,7 +300,7 @@ pub enum SqliteError {
     InvalidFieldValue {
         object: String,
         field: String,
-        expected: FieldType,
+        expected: Box<FieldType>,
         actual: &'static str,
     },
     MissingRequiredField {
@@ -580,7 +580,7 @@ fn validate_data_value(
         Err(SqliteError::InvalidFieldValue {
             object: object.to_owned(),
             field: field.api_name().to_owned(),
-            expected: field.data_type().clone(),
+            expected: Box::new(field.data_type().clone()),
             actual: value_name(value),
         })
     }
@@ -1189,10 +1189,25 @@ mod tests {
         ));
         let mut wrong_type = Record::new("Account", RecordId::generate("001", 2).unwrap());
         wrong_type.set_field("Name", 42_i64);
-        assert!(matches!(
-            transaction.write(wrong_type).unwrap_err(),
-            SqliteError::InvalidFieldValue { .. }
-        ));
+        let invalid_field_value = transaction.write(wrong_type).unwrap_err();
+        match &invalid_field_value {
+            SqliteError::InvalidFieldValue {
+                object,
+                field,
+                expected,
+                actual,
+            } => {
+                assert_eq!(object, "Account");
+                assert_eq!(field, "Name");
+                assert_eq!(**expected, FieldType::String);
+                assert_eq!(actual, &"Integer");
+            }
+            error => panic!("expected invalid field value error, got {error:?}"),
+        }
+        assert_eq!(
+            invalid_field_value.to_string(),
+            "field `Account.Name` expects String, found Integer"
+        );
         assert!(matches!(
             transaction.savepoint("bad-name").unwrap_err(),
             SqliteError::InvalidSavepoint(_)
