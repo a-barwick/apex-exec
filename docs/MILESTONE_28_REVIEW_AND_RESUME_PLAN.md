@@ -203,8 +203,8 @@ package after review and integration.
 
 | ID | Package | Status | Depends on | Primary ownership |
 |---|---|---|---|---|
-| M28-Q1 | Semantic receiver and profile correctness | Review (`5634c4f`, `c7b3218`; focused/filtered verification passes; full gates remain blocked by Q2/Q3/Q4) | Recorded review | `semantic.rs`, focused semantic/M10/M25 tests |
-| M28-Q2 | Standard `User` schema restoration | Blocked | Q1 integrated | Standard schema, M27 tests |
+| M28-Q1 | Semantic receiver and profile correctness | Complete (`7d706c9`; reviewed and integrated; format, check, focused tests, and filtered suite pass) | Recorded review | `semantic.rs`, focused semantic/M10/M25 tests |
+| M28-Q2 | Standard `User` schema restoration | Ready | Q1 integrated at `7d706c9` | Standard schema, M27 tests |
 | M28-Q3 | M21 expectation and census reconciliation | Blocked | Q2 integrated | M21 tests and census documentation |
 | M28-Q4A | AST and SObject error-shape Clippy cleanup | Blocked | Q3 integrated | AST, platform SObject |
 | M28-Q4B | SQLite error-shape and database Clippy cleanup | Blocked | Q4A integrated | SQLite, platform database |
@@ -401,6 +401,6 @@ surface. Implementation agents must not make those decisions.
 
 ## Immediate action
 
-Start only M28-Q1 using
-[`MILESTONE_28_Q1_KICKOFF_PROMPT.md`](MILESTONE_28_Q1_KICKOFF_PROMPT.md).
-All other packages remain blocked until Q1 is reviewed and integrated.
+Start only M28-Q2. Before implementation, record its branch and **Active**
+status, reproduce both M27 failures, and preserve the narrow standard-schema
+scope. All later packages remain blocked until Q2 is reviewed and integrated.
