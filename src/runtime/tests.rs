@@ -409,8 +409,8 @@ fn null_aware_non_null_paths_preserve_argument_exceptions() {
              public static Integer explode() { return 1 / 0; } \
              public String label(Integer value) { return 'value=' + value; } \
          } \
-         Box box = new Box(); \
-         String value = box?.label(Box.explode()) ?? 'fallback';",
+         Box instance = new Box(); \
+         String value = instance?.label(Box.explode()) ?? 'fallback';",
     )
     .unwrap_err();
 

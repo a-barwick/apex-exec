@@ -5288,53 +5288,26 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        if let Expression::Variable(identifier) = receiver
+            && self.is_lexically_bound_value(identifier)
+        {
+            let ExpressionType::Value(receiver_type) = self.variable_type(identifier)? else {
+                unreachable!("variables always have value types")
+            };
+            let result = self.instance_method_type(&receiver_type, method, arguments, span, false);
+            return self.finish_method_call_type(receiver, method, span, result);
+        }
         if let Some(result) = self.dynamic_database_method_call(receiver, method, arguments, span) {
-            return result;
+            return self.finish_method_call_type(receiver, method, span, result);
         }
         if let Some(result) = self.custom_metadata_method_call(receiver, method, arguments, span) {
-            return result;
+            return self.finish_method_call_type(receiver, method, span, result);
         }
         if let Some(result) = self.qualified_type_method_call(receiver, method, arguments, span) {
-            return result;
+            return self.finish_method_call_type(receiver, method, span, result);
         }
         let result = if let Expression::Variable(identifier) = receiver {
-            if let Some(receiver_type) = self.lookup(&identifier.canonical).cloned() {
-                let static_candidates =
-                    self.class_ids
-                        .get(&identifier.canonical)
-                        .copied()
-                        .map(|class_id| {
-                            (
-                                class_id,
-                                self.class_methods_named(class_id, &method.canonical)
-                                    .into_iter()
-                                    .filter(|candidate| {
-                                        candidate.modifiers.contains(&Modifier::Static)
-                                    })
-                                    .collect::<Vec<_>>(),
-                            )
-                        });
-                if let Some((class_id, candidates)) = static_candidates
-                    && !candidates.is_empty()
-                {
-                    let argument_types = arguments
-                        .iter()
-                        .map(|argument| self.expression_type(argument))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    self.select_class_method_call(
-                        class_id,
-                        method,
-                        &argument_types,
-                        candidates,
-                        ClassCallKind::Static,
-                        span,
-                    )
-                } else {
-                    self.references
-                        .insert(identifier.span, ReferenceTarget::Local);
-                    self.instance_method_type(&receiver_type, method, arguments, span, false)
-                }
-            } else if let Some(result) =
+            if let Some(result) =
                 self.unbound_class_method_call(identifier, method, arguments, span)
             {
                 result
@@ -5430,7 +5403,8 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
-        if !is_database_receiver(receiver)
+        if self.receiver_starts_with_lexical_value(receiver)
+            || !is_database_receiver(receiver)
             || !matches!(
                 method.canonical.as_str(),
                 "query"
@@ -5533,8 +5507,13 @@ impl Checker {
         arguments: &[Expression],
         span: Span,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
+        if self.receiver_starts_with_lexical_value(receiver) {
+            return None;
+        }
         if let Some(owner) = qualified_expression_name(receiver) {
             let normalized = owner.strip_prefix("system.").unwrap_or(&owner);
+            let display_owner = qualified_expression_spelling(receiver)
+                .expect("qualified static owner preserves source spelling");
             let checked = match normalized {
                 "string" => Some(self.static_string_method_type(method, arguments)),
                 "math" => Some(self.static_math_method_type(method, arguments)),
@@ -5543,7 +5522,7 @@ impl Checker {
                         || owner == "system.request"
                         || matches!(platform, "database" | "cache.org" | "cache.session") =>
                 {
-                    Some(self.static_platform_method_type(&owner, method, arguments))
+                    Some(self.static_platform_method_type(&display_owner, method, arguments))
                 }
                 _ => None,
             };
@@ -6691,6 +6670,24 @@ impl Checker {
             .find_map(|scope| scope.get(canonical))
     }
 
+    fn is_lexically_bound_value(&self, identifier: &Identifier) -> bool {
+        self.lookup(&identifier.canonical).is_some()
+            || self.current_class.is_some_and(|class_id| {
+                self.lexical_class_value_member(class_id, &identifier.canonical)
+                    .is_some()
+            })
+    }
+
+    fn receiver_starts_with_lexical_value(&self, receiver: &Expression) -> bool {
+        match receiver {
+            Expression::Variable(identifier) => self.is_lexically_bound_value(identifier),
+            Expression::MemberAccess { receiver, .. } => {
+                self.receiver_starts_with_lexical_value(receiver)
+            }
+            _ => false,
+        }
+    }
+
     fn current_scope(&self) -> &HashMap<String, TypeName> {
         self.scopes.last().expect("checker always has a scope")
     }
@@ -7025,8 +7022,25 @@ fn qualified_expression_name(expression: &Expression) -> Option<String> {
     }
 }
 
+fn qualified_expression_spelling(expression: &Expression) -> Option<String> {
+    match expression {
+        Expression::Variable(identifier) => Some(identifier.spelling.clone()),
+        Expression::MemberAccess {
+            receiver,
+            member,
+            safe_navigation: false,
+            ..
+        } => Some(format!(
+            "{}.{}",
+            qualified_expression_spelling(receiver)?,
+            member.spelling
+        )),
+        _ => None,
+    }
+}
+
 fn receiver_name(expression: &Expression) -> String {
-    qualified_expression_name(expression).unwrap_or_else(|| "value".to_owned())
+    qualified_expression_spelling(expression).unwrap_or_else(|| "value".to_owned())
 }
 
 fn is_database_receiver(expression: &Expression) -> bool {
