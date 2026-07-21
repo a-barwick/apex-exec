@@ -283,14 +283,21 @@ pub struct SwitchArm {
     pub span: Span,
 }
 
+/// A typed `switch when` label that binds a concrete SObject pattern.
+///
+/// Kept behind `SwitchLabels::TypePattern`'s boxed boundary so scalar switch
+/// labels do not inherit the storage cost of a full `TypeName`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SwitchTypePattern {
+    pub ty: TypeName,
+    pub binding: Identifier,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SwitchLabels {
     Expressions(Vec<Expression>),
-    TypePattern {
-        ty: TypeName,
-        binding: Identifier,
-        span: Span,
-    },
+    TypePattern(Box<SwitchTypePattern>),
     Else(Span),
 }
 
