@@ -282,9 +282,29 @@ fn checks_string_math_and_system_signatures() {
 
 #[test]
 fn method_receivers_resolve_variables_before_static_types() {
-    let error =
-        check_source("String String = 'value'; String converted = String.valueOf(1);").unwrap_err();
+    let source = "String String = 'value'; String converted = String.valueOf(1);";
+    let error = check_source(source).unwrap_err();
     assert_eq!(error.message, "unknown method `valueOf` on String");
+    assert_eq!(error.span.start, source.find("valueOf").unwrap());
+    assert_eq!(
+        error.span.end,
+        source.find("valueOf").unwrap() + "valueOf".len()
+    );
+
+    let error = check_source("String System = 'value'; System.debug('no');").unwrap_err();
+    assert_eq!(error.message, "unknown method `debug` on String");
+
+    let source = "Date Date = Date.today(); Date selected = Date.today();";
+    let error = check_source(source).unwrap_err();
+    assert_eq!(
+        error.message,
+        "unsupported API `Date.today` in compatibility profile `salesforce-api-66.0`"
+    );
+    assert_eq!(error.span.start, source.rfind("today").unwrap());
+    assert_eq!(
+        error.span.end,
+        source.rfind("today").unwrap() + "today".len()
+    );
 }
 
 #[test]

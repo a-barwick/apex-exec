@@ -69,12 +69,26 @@ fn legacy_profiles_reject_unmodeled_syntax_and_curated_platform_apis() {
         None,
     );
     let error = project::compile(&platform).unwrap_err().render();
-    assert!(error.contains("API `date.today`"));
+    assert!(error.contains("API `Date.today`"));
+    assert!(error.contains("not modeled"));
+    assert!(error.contains("salesforce-api-31.0"));
+
+    let qualified_platform = temporary_project("legacy-qualified-platform");
+    write_project(
+        &qualified_platform,
+        "31.0",
+        "LegacyQualifiedPlatform",
+        "public class LegacyQualifiedPlatform { public static String run() { return System.Request.getCurrent().getRequestId(); } }",
+        None,
+    );
+    let error = project::compile(&qualified_platform).unwrap_err().render();
+    assert!(error.contains("API `System.Request.getCurrent`"));
     assert!(error.contains("not modeled"));
     assert!(error.contains("salesforce-api-31.0"));
 
     fs::remove_dir_all(syntax).unwrap();
     fs::remove_dir_all(platform).unwrap();
+    fs::remove_dir_all(qualified_platform).unwrap();
 }
 
 #[test]
