@@ -678,84 +678,21 @@ pub fn walk_type_name<'ast, V: Visitor<'ast> + ?Sized>(visitor: &mut V, ty: &'as
     match ty {
         TypeName::Custom(named_type) => visitor.visit_named_type(named_type),
         TypeName::List(element) | TypeName::Set(element) | TypeName::Iterable(element) => {
-            visitor.visit_type_name(element)
+            walk_type_children(visitor, [element.as_ref()]);
         }
         TypeName::Map(key, value) => {
-            visitor.visit_type_name(key);
-            visitor.visit_type_name(value);
+            walk_type_children(visitor, [key.as_ref(), value.as_ref()]);
         }
-        TypeName::String
-        | TypeName::Boolean
-        | TypeName::Integer
-        | TypeName::Long
-        | TypeName::Decimal
-        | TypeName::Double
-        | TypeName::Date
-        | TypeName::Datetime
-        | TypeName::Time
-        | TypeName::Id
-        | TypeName::Blob
-        | TypeName::Object
-        | TypeName::Pattern
-        | TypeName::Matcher
-        | TypeName::Http
-        | TypeName::HttpRequest
-        | TypeName::HttpResponse
-        | TypeName::HttpCalloutMock
-        | TypeName::Callable
-        | TypeName::Queueable
-        | TypeName::QueueableContext
-        | TypeName::BatchableContext
-        | TypeName::FinalizerContext
-        | TypeName::ParentJobResult
-        | TypeName::Quiddity
-        | TypeName::TriggerOperation
-        | TypeName::LoggingLevel
-        | TypeName::CacheVisibility
-        | TypeName::CachePartition
-        | TypeName::Request
-        | TypeName::QueryLocator
-        | TypeName::DmlOptions
-        | TypeName::SaveResult
-        | TypeName::UpsertResult
-        | TypeName::DeleteResult
-        | TypeName::UndeleteResult
-        | TypeName::DatabaseError
-        | TypeName::StatusCode
-        | TypeName::AccessLevel
-        | TypeName::AccessType
-        | TypeName::SObjectAccessDecision
-        | TypeName::SchedulableContext
-        | TypeName::SObjectType
-        | TypeName::DescribeSObjectResult
-        | TypeName::SObjectField
-        | TypeName::DescribeFieldResult
-        | TypeName::SObjectFieldMap
-        | TypeName::FieldSetMap
-        | TypeName::FieldSet
-        | TypeName::FieldSetMember
-        | TypeName::PicklistEntry
-        | TypeName::VisualEditorDataRow
-        | TypeName::VisualEditorDynamicPickListRows
-        | TypeName::SoapType
-        | TypeName::DisplayType
-        | TypeName::Exception
-        | TypeName::NullPointerException
-        | TypeName::ListException
-        | TypeName::MathException
-        | TypeName::TypeException
-        | TypeName::StringException
-        | TypeName::IllegalArgumentException
-        | TypeName::FinalException
-        | TypeName::AssertException
-        | TypeName::QueryException
-        | TypeName::DmlException
-        | TypeName::NoAccessException
-        | TypeName::AsyncException
-        | TypeName::OrgCacheException
-        | TypeName::SessionCacheException
-        | TypeName::AggregateResult
-        | TypeName::Type => {}
+        _ => {}
+    }
+}
+
+fn walk_type_children<'ast, V: Visitor<'ast> + ?Sized>(
+    visitor: &mut V,
+    children: impl IntoIterator<Item = &'ast TypeName>,
+) {
+    for child in children {
+        visitor.visit_type_name(child);
     }
 }
 
@@ -843,5 +780,40 @@ mod tests {
         order.visit_program(&program);
 
         assert_eq!(order.0, ["run", "condition"]);
+    }
+
+    #[test]
+    fn type_child_traversal_preserves_nested_map_order() {
+        #[derive(Default)]
+        struct TypeOrder(Vec<String>);
+
+        impl<'ast> Visitor<'ast> for TypeOrder {
+            fn visit_type_name(&mut self, ty: &'ast TypeName) {
+                self.0.push(ty.apex_name());
+                walk_type_name(self, ty);
+            }
+        }
+
+        let ty = TypeName::Map(
+            Box::new(TypeName::List(Box::new(TypeName::String))),
+            Box::new(TypeName::Set(Box::new(TypeName::Custom(NamedType::new(
+                "Domain.Widget".to_owned(),
+                crate::span::Span::new(0, 13),
+            ))))),
+        );
+        let mut order = TypeOrder::default();
+
+        order.visit_type_name(&ty);
+
+        assert_eq!(
+            order.0,
+            [
+                "Map<List<String>,Set<Domain.Widget>>",
+                "List<String>",
+                "String",
+                "Set<Domain.Widget>",
+                "Domain.Widget",
+            ]
+        );
     }
 }

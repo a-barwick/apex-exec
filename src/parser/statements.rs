@@ -1,7 +1,7 @@
 use super::Parser;
 use crate::{
     ast::{
-        CatchClause, DmlAccess, DmlOperation, Statement, SwitchArm, SwitchLabels,
+        CatchClause, DmlAccess, DmlOperation, Expression, Statement, SwitchArm, SwitchLabels,
         SwitchTypePattern, VariableDeclarator,
     },
     diagnostic::Diagnostic,
@@ -264,43 +264,7 @@ impl Parser {
         self.expect_keyword("on", "expected `on` after `switch`")?;
         let value = self.parse_expression()?;
         self.expect_simple(TokenKind::LeftBrace, "expected `{` after switch value")?;
-        let mut arms = Vec::new();
-        let mut saw_else = false;
-        while self.check(&TokenKind::When) {
-            let when = self.advance();
-            if saw_else {
-                return Err(Diagnostic::new(
-                    "`when else` must be the final switch arm",
-                    when.span,
-                ));
-            }
-            let labels = if self.check(&TokenKind::Else) {
-                saw_else = true;
-                SwitchLabels::Else(self.advance().span)
-            } else if self.is_switch_type_pattern_start() {
-                let (ty, type_span) = self.parse_type_name()?;
-                let binding =
-                    self.expect_identifier("expected a binding name after switch pattern type")?;
-                SwitchLabels::TypePattern(Box::new(SwitchTypePattern {
-                    span: type_span.merge(binding.span),
-                    ty,
-                    binding,
-                }))
-            } else {
-                let mut labels = vec![self.parse_expression()?];
-                while self.check(&TokenKind::Comma) {
-                    self.advance();
-                    labels.push(self.parse_expression()?);
-                }
-                SwitchLabels::Expressions(labels)
-            };
-            let body = self.parse_block()?;
-            arms.push(SwitchArm {
-                span: when.span.merge(body.span()),
-                labels,
-                body,
-            });
-        }
+        let arms = self.parse_switch_arms()?;
         if arms.is_empty() {
             return Err(Diagnostic::new(
                 "switch requires at least one `when` arm",
@@ -313,6 +277,66 @@ impl Parser {
             arms,
             span: start.span.merge(end.span),
         })
+    }
+
+    fn parse_switch_arms(&mut self) -> Result<Vec<SwitchArm>, Diagnostic> {
+        let mut arms = Vec::new();
+        let mut saw_else = false;
+        while self.check(&TokenKind::When) {
+            arms.push(self.parse_switch_arm(&mut saw_else)?);
+        }
+        Ok(arms)
+    }
+
+    fn parse_switch_arm(&mut self, saw_else: &mut bool) -> Result<SwitchArm, Diagnostic> {
+        let when = self.advance();
+        if *saw_else {
+            return Err(Diagnostic::new(
+                "`when else` must be the final switch arm",
+                when.span,
+            ));
+        }
+        let labels = self.parse_switch_labels(saw_else)?;
+        let body = self.parse_block()?;
+        Ok(SwitchArm {
+            span: when.span.merge(body.span()),
+            labels,
+            body,
+        })
+    }
+
+    fn parse_switch_labels(&mut self, saw_else: &mut bool) -> Result<SwitchLabels, Diagnostic> {
+        if self.check(&TokenKind::Else) {
+            *saw_else = true;
+            return Ok(SwitchLabels::Else(self.advance().span));
+        }
+        if self.is_switch_type_pattern_start() {
+            return self
+                .parse_switch_type_pattern()
+                .map(SwitchLabels::TypePattern);
+        }
+        self.parse_switch_expression_labels()
+            .map(SwitchLabels::Expressions)
+    }
+
+    fn parse_switch_type_pattern(&mut self) -> Result<Box<SwitchTypePattern>, Diagnostic> {
+        let (ty, type_span) = self.parse_type_name()?;
+        let binding =
+            self.expect_identifier("expected a binding name after switch pattern type")?;
+        Ok(Box::new(SwitchTypePattern {
+            span: type_span.merge(binding.span),
+            ty,
+            binding,
+        }))
+    }
+
+    fn parse_switch_expression_labels(&mut self) -> Result<Vec<Expression>, Diagnostic> {
+        let mut labels = vec![self.parse_expression()?];
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            labels.push(self.parse_expression()?);
+        }
+        Ok(labels)
     }
 
     fn is_switch_type_pattern_start(&self) -> bool {
