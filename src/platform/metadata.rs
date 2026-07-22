@@ -14,37 +14,69 @@ use std::{
 pub fn import_metadata(
     source_roots: impl IntoIterator<Item = impl AsRef<Path>>,
 ) -> Result<SchemaCatalog, MetadataError> {
-    let mut object_files = Vec::new();
-    let mut field_files = Vec::new();
-    let mut field_set_files = Vec::new();
-    for root in source_roots {
-        collect_metadata_files(
-            root.as_ref(),
-            &mut object_files,
-            &mut field_files,
-            &mut field_set_files,
-        )?;
-    }
-    object_files.sort();
-    object_files.dedup();
-    field_files.sort();
-    field_files.dedup();
-    field_set_files.sort();
-    field_set_files.dedup();
-
-    let mut objects = BTreeMap::<String, ObjectBuilder>::new();
-    for path in object_files {
-        import_object_file(&path, &mut objects)?;
-    }
-    for path in field_files {
-        import_field_file(&path, &mut objects)?;
-    }
-    for path in field_set_files {
-        import_field_set_file(&path, &mut objects)?;
-    }
+    let files = MetadataFiles::discover(source_roots)?;
+    let mut objects = import_metadata_objects(&files)?;
     insert_metadata_relationship_targets(&mut objects);
     resolve_summaries(&mut objects)?;
 
+    build_metadata_catalog(objects)
+}
+
+#[derive(Default)]
+struct MetadataFiles {
+    object_files: Vec<PathBuf>,
+    field_files: Vec<PathBuf>,
+    field_set_files: Vec<PathBuf>,
+}
+
+impl MetadataFiles {
+    fn discover(
+        source_roots: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Result<Self, MetadataError> {
+        let mut files = Self::default();
+        for root in source_roots {
+            collect_metadata_files(
+                root.as_ref(),
+                &mut files.object_files,
+                &mut files.field_files,
+                &mut files.field_set_files,
+            )?;
+        }
+        files.normalize();
+        Ok(files)
+    }
+
+    fn normalize(&mut self) {
+        for paths in [
+            &mut self.object_files,
+            &mut self.field_files,
+            &mut self.field_set_files,
+        ] {
+            paths.sort();
+            paths.dedup();
+        }
+    }
+}
+
+fn import_metadata_objects(
+    files: &MetadataFiles,
+) -> Result<BTreeMap<String, ObjectBuilder>, MetadataError> {
+    let mut objects = BTreeMap::new();
+    for path in &files.object_files {
+        import_object_file(path, &mut objects)?;
+    }
+    for path in &files.field_files {
+        import_field_file(path, &mut objects)?;
+    }
+    for path in &files.field_set_files {
+        import_field_set_file(path, &mut objects)?;
+    }
+    Ok(objects)
+}
+
+fn build_metadata_catalog(
+    objects: BTreeMap<String, ObjectBuilder>,
+) -> Result<SchemaCatalog, MetadataError> {
     let mut catalog = SchemaCatalog::new();
     for object in super::standard_schema::standard_objects() {
         catalog.insert_object(object)?;
@@ -391,21 +423,89 @@ fn parse_field(
     if metadata_type == "Summary" {
         return parse_summary(path, xml, api_name);
     }
-    let display_type = metadata_display_type(&metadata_type);
-    let data_type = match metadata_type.as_str() {
-        "Checkbox" => FieldType::Boolean,
-        "Number" => {
-            let scale = tag_text(xml, "scale").unwrap_or_else(|| "0".to_owned());
-            if scale != "0" {
-                return Err(MetadataError::invalid(
+    parse_regular_field(path, xml, api_name, &metadata_type)
+}
+
+fn parse_regular_field(
+    path: &Path,
+    xml: &str,
+    api_name: String,
+    metadata_type: &str,
+) -> Result<ParsedField, MetadataError> {
+    let attributes = parse_regular_field_attributes(path, xml, &api_name)?;
+    let mut field = FieldSchema::new(
+        api_name,
+        decode_regular_field_type(path, xml, &attributes.api_name, metadata_type)?,
+        !attributes.required,
+    )
+    .with_describe(
+        attributes.label,
+        attributes.length,
+        attributes.inline_help_text,
+        metadata_display_type(metadata_type),
+        attributes.picklist_values,
+    );
+    if attributes.external_id {
+        field = field.with_external_id(attributes.unique);
+    }
+    Ok(ParsedField::Ready(match attributes.relationship_name {
+        Some(name) => field.with_relationship_name(name),
+        None => field,
+    }))
+}
+
+struct RegularFieldAttributes {
+    api_name: String,
+    required: bool,
+    external_id: bool,
+    unique: bool,
+    relationship_name: Option<String>,
+    label: String,
+    length: Option<usize>,
+    inline_help_text: Option<String>,
+    picklist_values: Vec<String>,
+}
+
+fn parse_regular_field_attributes(
+    path: &Path,
+    xml: &str,
+    api_name: &str,
+) -> Result<RegularFieldAttributes, MetadataError> {
+    let length = tag_text(xml, "length")
+        .map(|value| {
+            value.parse::<usize>().map_err(|_| {
+                MetadataError::invalid(
                     path,
-                    format!(
-                        "Number field `{api_name}` has scale {scale}; Decimal storage is not supported"
-                    ),
-                ));
-            }
-            FieldType::Integer
-        }
+                    format!("field `{api_name}` has invalid length `{value}`"),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(RegularFieldAttributes {
+        api_name: api_name.to_owned(),
+        required: tag_text(xml, "required").is_some_and(|value| value.eq_ignore_ascii_case("true")),
+        external_id: tag_text(xml, "externalId")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+        unique: tag_text(xml, "unique").is_some_and(|value| value.eq_ignore_ascii_case("true")),
+        relationship_name: tag_text(xml, "relationshipName"),
+        label: tag_text(xml, "label").unwrap_or_else(|| api_name.to_owned()),
+        length,
+        inline_help_text: tag_text(xml, "inlineHelpText"),
+        picklist_values: elements(xml, "value")
+            .filter_map(|value| tag_text(value, "fullName"))
+            .collect(),
+    })
+}
+
+fn decode_regular_field_type(
+    path: &Path,
+    xml: &str,
+    api_name: &str,
+    metadata_type: &str,
+) -> Result<FieldType, MetadataError> {
+    let field_type = match metadata_type {
+        "Checkbox" => FieldType::Boolean,
+        "Number" => number_field_type(path, xml, api_name)?,
         "Text"
         | "TextArea"
         | "LongTextArea"
@@ -418,18 +518,8 @@ fn parse_field(
         | "EncryptedText" => FieldType::String,
         "Date" => FieldType::Date,
         "DateTime" => FieldType::Datetime,
-        "Lookup" | "MasterDetail" => {
-            let target_object = required_text(path, xml, "referenceTo")?;
-            FieldType::Reference { target_object }
-        }
-        "MetadataRelationship" => {
-            let target_metadata = required_text(path, xml, "referenceTo")?;
-            let controlling_field = tag_text(xml, "metadataRelationshipControllingField");
-            FieldType::MetadataRelationship {
-                target_metadata,
-                controlling_field,
-            }
-        }
+        "Lookup" | "MasterDetail" => reference_field_type(path, xml)?,
+        "MetadataRelationship" => metadata_relationship_field_type(path, xml)?,
         "Id" => FieldType::Id,
         unsupported => {
             return Err(MetadataError::invalid(
@@ -438,40 +528,33 @@ fn parse_field(
             ));
         }
     };
-    let required =
-        tag_text(xml, "required").is_some_and(|value| value.eq_ignore_ascii_case("true"));
-    let external_id =
-        tag_text(xml, "externalId").is_some_and(|value| value.eq_ignore_ascii_case("true"));
-    let unique = tag_text(xml, "unique").is_some_and(|value| value.eq_ignore_ascii_case("true"));
-    let relationship_name = tag_text(xml, "relationshipName");
-    let label = tag_text(xml, "label").unwrap_or_else(|| api_name.clone());
-    let length = tag_text(xml, "length")
-        .map(|value| {
-            value.parse::<usize>().map_err(|_| {
-                MetadataError::invalid(
-                    path,
-                    format!("field `{api_name}` has invalid length `{value}`"),
-                )
-            })
-        })
-        .transpose()?;
-    let picklist_values = elements(xml, "value")
-        .filter_map(|value| tag_text(value, "fullName"))
-        .collect();
-    let mut field = FieldSchema::new(api_name, data_type, !required).with_describe(
-        label,
-        length,
-        tag_text(xml, "inlineHelpText"),
-        display_type,
-        picklist_values,
-    );
-    if external_id {
-        field = field.with_external_id(unique);
+    Ok(field_type)
+}
+
+fn number_field_type(path: &Path, xml: &str, api_name: &str) -> Result<FieldType, MetadataError> {
+    let scale = tag_text(xml, "scale").unwrap_or_else(|| "0".to_owned());
+    if scale != "0" {
+        return Err(MetadataError::invalid(
+            path,
+            format!(
+                "Number field `{api_name}` has scale {scale}; Decimal storage is not supported"
+            ),
+        ));
     }
-    Ok(ParsedField::Ready(match relationship_name {
-        Some(name) => field.with_relationship_name(name),
-        None => field,
-    }))
+    Ok(FieldType::Integer)
+}
+
+fn reference_field_type(path: &Path, xml: &str) -> Result<FieldType, MetadataError> {
+    Ok(FieldType::Reference {
+        target_object: required_text(path, xml, "referenceTo")?,
+    })
+}
+
+fn metadata_relationship_field_type(path: &Path, xml: &str) -> Result<FieldType, MetadataError> {
+    Ok(FieldType::MetadataRelationship {
+        target_metadata: required_text(path, xml, "referenceTo")?,
+        controlling_field: tag_text(xml, "metadataRelationshipControllingField"),
+    })
 }
 
 fn metadata_display_type(metadata_type: &str) -> DisplayType {
@@ -496,72 +579,11 @@ fn metadata_display_type(metadata_type: &str) -> DisplayType {
 }
 
 fn parse_summary(path: &Path, xml: &str, api_name: String) -> Result<ParsedField, MetadataError> {
-    let operation = match required_text(path, xml, "summaryOperation")?.as_str() {
-        "count" => SummaryOperation::Count,
-        "sum" => SummaryOperation::Sum,
-        "min" => SummaryOperation::Min,
-        "max" => SummaryOperation::Max,
-        unsupported => {
-            return Err(MetadataError::invalid(
-                path,
-                format!("unsupported roll-up summary operation `{unsupported}`"),
-            ));
-        }
-    };
-    let foreign_key = required_text(path, xml, "summaryForeignKey")?;
-    let (child_object, foreign_key_field) =
-        qualified_field(path, &foreign_key, "summaryForeignKey")?;
-    let summarized_field = tag_text(xml, "summarizedField")
-        .map(|field| {
-            let (object, field) = qualified_field(path, &field, "summarizedField")?;
-            if !object.eq_ignore_ascii_case(&child_object) {
-                return Err(MetadataError::invalid(
-                    path,
-                    format!(
-                        "summarized field object `{object}` does not match roll-up child object `{child_object}`"
-                    ),
-                ));
-            }
-            Ok(field)
-        })
-        .transpose()?;
-    if operation != SummaryOperation::Count && summarized_field.is_none() {
-        return Err(MetadataError::invalid(
-            path,
-            format!(
-                "{} roll-up summary `{api_name}` is missing `<summarizedField>`",
-                summary_operation_name(operation)
-            ),
-        ));
-    }
-
-    let mut filters = Vec::new();
-    for filter_xml in elements(xml, "summaryFilterItems") {
-        let field = required_text(path, filter_xml, "field")?;
-        let (object, field) = qualified_field(path, &field, "summary filter field")?;
-        if !object.eq_ignore_ascii_case(&child_object) {
-            return Err(MetadataError::invalid(
-                path,
-                format!(
-                    "summary filter object `{object}` does not match roll-up child object `{child_object}`"
-                ),
-            ));
-        }
-        let operator = match required_text(path, filter_xml, "operation")?.as_str() {
-            "equals" => SummaryFilterOperator::Equal,
-            unsupported => {
-                return Err(MetadataError::invalid(
-                    path,
-                    format!("unsupported roll-up summary filter operation `{unsupported}`"),
-                ));
-            }
-        };
-        filters.push(SummaryFilter {
-            field,
-            operator,
-            value: required_text(path, filter_xml, "value")?,
-        });
-    }
+    let operation = parse_summary_operation(path, xml)?;
+    let (child_object, foreign_key_field) = parse_summary_child_reference(path, xml)?;
+    let summarized_field = parse_summarized_field(path, xml, &child_object)?;
+    require_summarized_field(path, operation, &api_name, &summarized_field)?;
+    let filters = parse_summary_filters(path, xml, &child_object)?;
 
     Ok(ParsedField::Summary(PendingSummary {
         path: path.to_path_buf(),
@@ -577,135 +599,322 @@ fn parse_summary(path: &Path, xml: &str, api_name: String) -> Result<ParsedField
     }))
 }
 
+fn parse_summary_operation(path: &Path, xml: &str) -> Result<SummaryOperation, MetadataError> {
+    let operation = match required_text(path, xml, "summaryOperation")?.as_str() {
+        "count" => SummaryOperation::Count,
+        "sum" => SummaryOperation::Sum,
+        "min" => SummaryOperation::Min,
+        "max" => SummaryOperation::Max,
+        unsupported => {
+            return Err(MetadataError::invalid(
+                path,
+                format!("unsupported roll-up summary operation `{unsupported}`"),
+            ));
+        }
+    };
+    Ok(operation)
+}
+
+fn parse_summary_child_reference(
+    path: &Path,
+    xml: &str,
+) -> Result<(String, String), MetadataError> {
+    let foreign_key = required_text(path, xml, "summaryForeignKey")?;
+    qualified_field(path, &foreign_key, "summaryForeignKey")
+}
+
+fn parse_summarized_field(
+    path: &Path,
+    xml: &str,
+    child_object: &str,
+) -> Result<Option<String>, MetadataError> {
+    tag_text(xml, "summarizedField")
+        .map(|value| {
+            parse_summary_child_field(
+                path,
+                &value,
+                "summarizedField",
+                "summarized field",
+                child_object,
+            )
+        })
+        .transpose()
+}
+
+fn parse_summary_child_field(
+    path: &Path,
+    value: &str,
+    element: &str,
+    description: &str,
+    child_object: &str,
+) -> Result<String, MetadataError> {
+    let (object, field) = qualified_field(path, value, element)?;
+    if !object.eq_ignore_ascii_case(child_object) {
+        return Err(MetadataError::invalid(
+            path,
+            format!(
+                "{description} object `{object}` does not match roll-up child object `{child_object}`"
+            ),
+        ));
+    }
+    Ok(field)
+}
+
+fn require_summarized_field(
+    path: &Path,
+    operation: SummaryOperation,
+    api_name: &str,
+    summarized_field: &Option<String>,
+) -> Result<(), MetadataError> {
+    if operation != SummaryOperation::Count && summarized_field.is_none() {
+        return Err(MetadataError::invalid(
+            path,
+            format!(
+                "{} roll-up summary `{api_name}` is missing `<summarizedField>`",
+                summary_operation_name(operation)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_summary_filters(
+    path: &Path,
+    xml: &str,
+    child_object: &str,
+) -> Result<Vec<SummaryFilter>, MetadataError> {
+    elements(xml, "summaryFilterItems")
+        .map(|filter_xml| parse_summary_filter(path, filter_xml, child_object))
+        .collect()
+}
+
+fn parse_summary_filter(
+    path: &Path,
+    filter_xml: &str,
+    child_object: &str,
+) -> Result<SummaryFilter, MetadataError> {
+    let field = required_text(path, filter_xml, "field")?;
+    let field = parse_summary_child_field(
+        path,
+        &field,
+        "summary filter field",
+        "summary filter",
+        child_object,
+    )?;
+    let operator = match required_text(path, filter_xml, "operation")?.as_str() {
+        "equals" => SummaryFilterOperator::Equal,
+        unsupported => {
+            return Err(MetadataError::invalid(
+                path,
+                format!("unsupported roll-up summary filter operation `{unsupported}`"),
+            ));
+        }
+    };
+    Ok(SummaryFilter {
+        field,
+        operator,
+        value: required_text(path, filter_xml, "value")?,
+    })
+}
+
 fn resolve_summaries(objects: &mut BTreeMap<String, ObjectBuilder>) -> Result<(), MetadataError> {
+    for (parent_key, summary) in take_pending_summaries(objects) {
+        let field = resolve_summary_field(objects, &parent_key, summary)?;
+        objects
+            .get_mut(&parent_key)
+            .expect("pending roll-up parent remains in object map")
+            .fields
+            .push(field);
+    }
+    Ok(())
+}
+
+fn take_pending_summaries(
+    objects: &mut BTreeMap<String, ObjectBuilder>,
+) -> Vec<(String, PendingSummary)> {
     let mut pending = Vec::new();
-    for (parent, builder) in objects.iter_mut() {
+    for (parent, builder) in objects {
         pending.extend(
             std::mem::take(&mut builder.summaries)
                 .into_iter()
                 .map(|summary| (parent.clone(), summary)),
         );
     }
-    for (parent_key, summary) in pending {
-        let parent = objects
-            .get(&parent_key)
-            .expect("pending roll-up parent remains in object map");
-        let child = objects
-            .get(&canonical_name(&summary.definition.child_object))
-            .ok_or_else(|| {
-                MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up summary child object `{}` is not present in imported metadata",
-                        summary.definition.child_object
-                    ),
-                )
-            })?;
-        let foreign_key =
-            builder_field(child, &summary.definition.foreign_key_field).ok_or_else(|| {
-                MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up foreign key `{}.{}` is not present in imported metadata",
-                        child.api_name, summary.definition.foreign_key_field
-                    ),
-                )
-            })?;
-        match foreign_key.data_type() {
-            FieldType::Reference { target_object }
-                if target_object.eq_ignore_ascii_case(&parent.api_name) => {}
-            FieldType::Reference { target_object } => {
-                return Err(MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up foreign key `{}.{}` targets `{target_object}`, not `{}`",
-                        child.api_name, summary.definition.foreign_key_field, parent.api_name
-                    ),
-                ));
-            }
-            _ => {
-                return Err(MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up foreign key `{}.{}` is not a Lookup or MasterDetail field",
-                        child.api_name, summary.definition.foreign_key_field
-                    ),
-                ));
-            }
+    pending
+}
+
+fn resolve_summary_field(
+    objects: &BTreeMap<String, ObjectBuilder>,
+    parent_key: &str,
+    summary: PendingSummary,
+) -> Result<FieldSchema, MetadataError> {
+    let parent = objects
+        .get(parent_key)
+        .expect("pending roll-up parent remains in object map");
+    let child = resolve_summary_child(objects, &summary)?;
+    validate_summary_foreign_key(parent, child, &summary)?;
+    validate_summary_filters(child, &summary)?;
+    let result_type = resolve_summary_result_type(child, &summary)?;
+    let PendingSummary {
+        api_name,
+        nullable,
+        definition,
+        ..
+    } = summary;
+    Ok(FieldSchema::new(
+        api_name,
+        FieldType::Summary {
+            result_type: Box::new(result_type),
+            definition,
+        },
+        nullable,
+    ))
+}
+
+fn resolve_summary_child<'a>(
+    objects: &'a BTreeMap<String, ObjectBuilder>,
+    summary: &PendingSummary,
+) -> Result<&'a ObjectBuilder, MetadataError> {
+    objects
+        .get(&canonical_name(&summary.definition.child_object))
+        .ok_or_else(|| {
+            MetadataError::invalid(
+                &summary.path,
+                format!(
+                    "roll-up summary child object `{}` is not present in imported metadata",
+                    summary.definition.child_object
+                ),
+            )
+        })
+}
+
+fn validate_summary_foreign_key(
+    parent: &ObjectBuilder,
+    child: &ObjectBuilder,
+    summary: &PendingSummary,
+) -> Result<(), MetadataError> {
+    let foreign_key = resolve_summary_foreign_key(child, summary)?;
+    match foreign_key.data_type() {
+        FieldType::Reference { target_object }
+            if target_object.eq_ignore_ascii_case(&parent.api_name) =>
+        {
+            Ok(())
         }
-        for filter in &summary.definition.filters {
-            let field = builder_field(child, &filter.field).ok_or_else(|| {
-                MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up filter field `{}.{}` is not present in imported metadata",
-                        child.api_name, filter.field
-                    ),
-                )
-            })?;
-            if !valid_summary_filter_value(field.data_type(), &filter.value) {
-                return Err(MetadataError::invalid(
-                    &summary.path,
-                    format!(
-                        "roll-up filter value `{}` is invalid for `{}.{}` ({:?})",
-                        filter.value,
-                        child.api_name,
-                        field.api_name(),
-                        field.data_type()
-                    ),
-                ));
-            }
-        }
-        let result_type = match summary.definition.operation {
-            SummaryOperation::Count => FieldType::Integer,
-            SummaryOperation::Sum | SummaryOperation::Min | SummaryOperation::Max => {
-                let field_name = summary
-                    .definition
-                    .summarized_field
-                    .as_deref()
-                    .expect("non-count roll-up has summarized field");
-                let field = builder_field(child, field_name).ok_or_else(|| {
-                    MetadataError::invalid(
-                        &summary.path,
-                        format!(
-                            "summarized field `{}.{field_name}` is not present in imported metadata",
-                            child.api_name
-                        ),
-                    )
-                })?;
-                match (summary.definition.operation, field.data_type()) {
-                    (SummaryOperation::Sum, FieldType::Integer)
-                    | (
-                        SummaryOperation::Min | SummaryOperation::Max,
-                        FieldType::Integer | FieldType::Date | FieldType::Datetime,
-                    ) => field.data_type().clone(),
-                    (operation, unsupported) => {
-                        return Err(MetadataError::invalid(
-                            &summary.path,
-                            format!(
-                                "{} roll-up summary `{}` cannot summarize field type {unsupported:?}",
-                                summary_operation_name(operation),
-                                summary.api_name
-                            ),
-                        ));
-                    }
-                }
-            }
-        };
-        objects
-            .get_mut(&parent_key)
-            .expect("pending roll-up parent remains in object map")
-            .fields
-            .push(FieldSchema::new(
-                summary.api_name,
-                FieldType::Summary {
-                    result_type: Box::new(result_type),
-                    definition: summary.definition,
-                },
-                summary.nullable,
+        FieldType::Reference { target_object } => Err(MetadataError::invalid(
+            &summary.path,
+            format!(
+                "roll-up foreign key `{}.{}` targets `{target_object}`, not `{}`",
+                child.api_name, summary.definition.foreign_key_field, parent.api_name
+            ),
+        )),
+        _ => Err(MetadataError::invalid(
+            &summary.path,
+            format!(
+                "roll-up foreign key `{}.{}` is not a Lookup or MasterDetail field",
+                child.api_name, summary.definition.foreign_key_field
+            ),
+        )),
+    }
+}
+
+fn resolve_summary_foreign_key<'a>(
+    child: &'a ObjectBuilder,
+    summary: &PendingSummary,
+) -> Result<&'a FieldSchema, MetadataError> {
+    builder_field(child, &summary.definition.foreign_key_field).ok_or_else(|| {
+        MetadataError::invalid(
+            &summary.path,
+            format!(
+                "roll-up foreign key `{}.{}` is not present in imported metadata",
+                child.api_name, summary.definition.foreign_key_field
+            ),
+        )
+    })
+}
+
+fn validate_summary_filters(
+    child: &ObjectBuilder,
+    summary: &PendingSummary,
+) -> Result<(), MetadataError> {
+    for filter in &summary.definition.filters {
+        let field = resolve_summary_filter_field(child, summary, filter)?;
+        if !valid_summary_filter_value(field.data_type(), &filter.value) {
+            return Err(MetadataError::invalid(
+                &summary.path,
+                format!(
+                    "roll-up filter value `{}` is invalid for `{}.{}` ({:?})",
+                    filter.value,
+                    child.api_name,
+                    field.api_name(),
+                    field.data_type()
+                ),
             ));
+        }
     }
     Ok(())
+}
+
+fn resolve_summary_filter_field<'a>(
+    child: &'a ObjectBuilder,
+    summary: &PendingSummary,
+    filter: &SummaryFilter,
+) -> Result<&'a FieldSchema, MetadataError> {
+    builder_field(child, &filter.field).ok_or_else(|| {
+        MetadataError::invalid(
+            &summary.path,
+            format!(
+                "roll-up filter field `{}.{}` is not present in imported metadata",
+                child.api_name, filter.field
+            ),
+        )
+    })
+}
+
+fn resolve_summary_result_type(
+    child: &ObjectBuilder,
+    summary: &PendingSummary,
+) -> Result<FieldType, MetadataError> {
+    match summary.definition.operation {
+        SummaryOperation::Count => Ok(FieldType::Integer),
+        SummaryOperation::Sum | SummaryOperation::Min | SummaryOperation::Max => {
+            let field = resolve_summary_result_field(child, summary)?;
+            match (summary.definition.operation, field.data_type()) {
+                (SummaryOperation::Sum, FieldType::Integer)
+                | (
+                    SummaryOperation::Min | SummaryOperation::Max,
+                    FieldType::Integer | FieldType::Date | FieldType::Datetime,
+                ) => Ok(field.data_type().clone()),
+                (operation, unsupported) => Err(MetadataError::invalid(
+                    &summary.path,
+                    format!(
+                        "{} roll-up summary `{}` cannot summarize field type {unsupported:?}",
+                        summary_operation_name(operation),
+                        summary.api_name
+                    ),
+                )),
+            }
+        }
+    }
+}
+
+fn resolve_summary_result_field<'a>(
+    child: &'a ObjectBuilder,
+    summary: &PendingSummary,
+) -> Result<&'a FieldSchema, MetadataError> {
+    let field_name = summary
+        .definition
+        .summarized_field
+        .as_deref()
+        .expect("non-count roll-up has summarized field");
+    builder_field(child, field_name).ok_or_else(|| {
+        MetadataError::invalid(
+            &summary.path,
+            format!(
+                "summarized field `{}.{field_name}` is not present in imported metadata",
+                child.api_name
+            ),
+        )
+    })
 }
 
 fn builder_field<'a>(builder: &'a ObjectBuilder, api_name: &str) -> Option<&'a FieldSchema> {
@@ -892,6 +1101,30 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_repeated_roots_and_imports_field_sets_after_fields() {
+        let root = temp_directory();
+        let invoice = root.join("main/default/objects/Invoice__c");
+        write_decomposed_invoice(&invoice);
+        write_decomposed_invoice_line(&root.join("main/default/objects/InvoiceLine__c"));
+        let field_sets = invoice.join("fieldSets");
+        fs::create_dir_all(&field_sets).unwrap();
+        fs::write(
+            field_sets.join("InvoiceFields.fieldSet-meta.xml"),
+            r#"<FieldSet><fullName>InvoiceFields</fullName><label>Invoice Fields</label><displayedFields><field>Amount__c</field></displayedFields></FieldSet>"#,
+        )
+        .unwrap();
+
+        let schema = import_metadata([&root, &root]).unwrap();
+        let invoice = schema.object("Invoice__c").unwrap();
+        let field_sets = invoice.field_sets().collect::<Vec<_>>();
+        assert_eq!(field_sets.len(), 1);
+        assert_eq!(field_sets[0].api_name(), "InvoiceFields");
+        assert_eq!(field_sets[0].fields(), ["Amount__c"]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_rollup_filter_values_that_do_not_match_the_child_field_type() {
         let root = temp_directory();
         let invoice = root.join("main/default/objects/Invoice__c");
@@ -916,29 +1149,25 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn write_decomposed_invoice(object: &Path) {
-        fs::create_dir_all(object.join("fields")).unwrap();
-        fs::write(
-            object.join("Invoice__c.object-meta.xml"),
+    const DECOMPOSED_INVOICE_FILES: [(&str, &str); 5] = [
+        (
+            "Invoice__c.object-meta.xml",
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
   <label>Invoice</label>
   <nameField><label>Invoice Number</label><type>AutoNumber</type></nameField>
 </CustomObject>"#,
-        )
-        .unwrap();
-        fs::write(
-            object.join("fields/Amount__c.field-meta.xml"),
+        ),
+        (
+            "fields/Amount__c.field-meta.xml",
             r#"<CustomField><fullName>Amount__c</fullName><externalId>true</externalId><required>true</required><scale>0</scale><type>Number</type><unique>true</unique></CustomField>"#,
-        )
-        .unwrap();
-        fs::write(
-            object.join("fields/Account__c.field-meta.xml"),
+        ),
+        (
+            "fields/Account__c.field-meta.xml",
             r#"<CustomField><fullName>Account__c</fullName><referenceTo>Account</referenceTo><type>Lookup</type></CustomField>"#,
-        )
-        .unwrap();
-        fs::write(
-            object.join("fields/Total__c.field-meta.xml"),
+        ),
+        (
+            "fields/Total__c.field-meta.xml",
             r#"<CustomField>
 <fullName>Total__c</fullName>
 <summarizedField>InvoiceLine__c.Amount__c</summarizedField>
@@ -946,10 +1175,9 @@ mod tests {
 <summaryOperation>sum</summaryOperation>
 <type>Summary</type>
 </CustomField>"#,
-        )
-        .unwrap();
-        fs::write(
-            object.join("fields/PaidLines__c.field-meta.xml"),
+        ),
+        (
+            "fields/PaidLines__c.field-meta.xml",
             r#"<CustomField>
 <fullName>PaidLines__c</fullName>
 <summaryFilterItems><field>InvoiceLine__c.Paid__c</field><operation>equals</operation><value>true</value></summaryFilterItems>
@@ -957,8 +1185,18 @@ mod tests {
 <summaryOperation>count</summaryOperation>
 <type>Summary</type>
 </CustomField>"#,
-        )
-        .unwrap();
+        ),
+    ];
+
+    fn write_decomposed_invoice(object: &Path) {
+        write_decomposed_fixture(object, &DECOMPOSED_INVOICE_FILES);
+    }
+
+    fn write_decomposed_fixture(object: &Path, files: &[(&str, &str)]) {
+        fs::create_dir_all(object.join("fields")).unwrap();
+        for (relative_path, contents) in files {
+            fs::write(object.join(relative_path), contents).unwrap();
+        }
     }
 
     fn write_decomposed_invoice_line(object: &Path) {
