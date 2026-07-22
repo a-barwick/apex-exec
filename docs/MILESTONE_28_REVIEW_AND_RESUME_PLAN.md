@@ -208,9 +208,9 @@ package after review and integration.
 | M28-Q3 | M21 expectation and census reconciliation | Complete (`aa82776f`; reviewed and integrated; format/check pass, M21 6/6, North Star 16/16, full Rust test pass; 28 Q4-owned Clippy diagnostics verified) | Q2 integrated at `666eebd` | M21 tests and census documentation |
 | M28-Q4A | AST and SObject error-shape Clippy cleanup | Complete (`4fa1350`; reviewed and integrated; Rust 1.88 format/check/full test pass; 10 owned diagnostics eliminated, leaving Q4B=15 and Q4C=3) | Q3 integrated at `aa82776f` | AST, platform SObject |
 | M28-Q4B | SQLite error-shape and database Clippy cleanup | Complete (`ea0881f`; reviewed and integrated; Rust 1.88 format/check/full test pass; 15 owned diagnostics eliminated, leaving Q4C=3) | Q4A integrated at `4fa1350` | SQLite, platform database |
-| M28-Q4C | Remaining semantic Clippy cleanup | Active (`codex/m28-q4c-semantic-clippy`; owner `/root/m28_q4c_semantic`) | Q4B integrated at `ea0881f` | Semantic and async contract helpers |
-| M28-Q4D | M21 test-only single-element-loop Clippy remediation | Review (`codex/m28-q4d-m21-clippy`; `dedeff97b1aa878d2f7a0e2f9de88549a7bea483`; Rust 1.88 format/check/M21/full-test/Clippy pass) | Q4C candidate verification at `2b27f17` | `tests/milestone21.rs`, finding/tracker documentation |
-| M28-M1 | Frontend and coverage maintainability restoration | Blocked | Clippy green | AST visitor, parser, coverage |
+| M28-Q4C | Remaining semantic Clippy cleanup | Complete (`2b27f17`; review approved; integrated with Q4D as `73e82d1`; fresh isolated-target Rust 1.88 format/check/full-test/Clippy pass) | Q4B integrated at `ea0881f` | Semantic and async contract helpers |
+| M28-Q4D | M21 test-only single-element-loop Clippy remediation | Complete (`dedeff97`; review approved; integrated as `73e82d1`; fresh isolated-target Rust 1.88 format/check/full-test/Clippy pass) | Q4C candidate verification at `2b27f17` | `tests/milestone21.rs`, finding/tracker documentation |
+| M28-M1 | Frontend and coverage maintainability restoration | Ready | Clippy green after Q4C/Q4D integration at `73e82d1` | AST visitor, parser, coverage |
 | M28-M2A | Metadata import maintainability restoration | Blocked | M1 integrated | Platform metadata |
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Blocked | M2A integrated | Platform database/schema/SQLite |
 | M28-M3A | Runtime call/member/construction restoration | Blocked | M2B integrated | Runtime core |
@@ -418,6 +418,7 @@ surface. Implementation agents must not make those decisions.
 
 ## Immediate action
 
-Start only M28-Q2. Before implementation, record its branch and **Active**
-status, reproduce both M27 failures, and preserve the narrow standard-schema
-scope. All later packages remain blocked until Q2 is reviewed and integrated.
+Start only M28-M1. Before implementation, record its branch and **Active**
+status, reproduce its owned maintainability findings, and preserve the narrow
+frontend-and-coverage scope. All later packages remain blocked until M1 is
+reviewed and integrated.
