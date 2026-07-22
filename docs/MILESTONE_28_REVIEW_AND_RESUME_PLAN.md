@@ -215,8 +215,8 @@ package after review and integration.
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Complete (`898b88d`; reviewed `05db986`/`898b88d` integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 29 downstream M3A–M5B debts against the unchanged baseline) | M2A integrated at `a1c5141` | Platform database/schema/SQLite |
 | M28-M3A | Runtime call/member/construction restoration | Complete (`247db5c`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 26 downstream M3B–M5B debts against the unchanged baseline) | M2B integrated at `898b88d` | Runtime core |
 | M28-M3B | Runtime collection dispatch restoration | Complete (`9c71d03`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 23 downstream M3C–M5B debts against the unchanged baseline) | M3A integrated at `247db5c` | Runtime List/Set/Map intrinsics |
-| M28-M3C | Runtime String and value-graph restoration | Review (`ae85601` on `codex/m28-m3c-string-valuegraph`) | M3B integrated at `9c71d03` | Runtime String/value graph |
-| M28-M4 | Runtime platform dispatch decomposition | Blocked | M3C integrated | `runtime/platform_intrinsics.rs` |
+| M28-M3C | Runtime String and value-graph restoration | Complete (`ae85601`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 20 downstream M4/M5A/M5B debts against the unchanged baseline) | M3B integrated at `9c71d03` | Runtime String/value graph |
+| M28-M4 | Runtime platform dispatch decomposition | Ready | M3C integrated at `ae85601` | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Blocked | M4 integrated | `semantic/intrinsics.rs` |
 | M28-M5B | Core semantic hotspot restoration | Blocked | M5A integrated | `semantic.rs` |
 | M28-V0 | Integrated quality-gate checkpoint | Blocked | Q1-Q4C, M1-M5B | Verification and documentation |
