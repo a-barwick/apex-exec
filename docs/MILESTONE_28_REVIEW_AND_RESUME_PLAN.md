@@ -214,8 +214,8 @@ package after review and integration.
 | M28-M2A | Metadata import maintainability restoration | Complete (`a1c5141`; reviewed `fa82e55`/`1d40f3b` integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 32 downstream M2B–M5B debts) | M1 integrated at `e044cea` | Platform metadata |
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Complete (`898b88d`; reviewed `05db986`/`898b88d` integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 29 downstream M3A–M5B debts against the unchanged baseline) | M2A integrated at `a1c5141` | Platform database/schema/SQLite |
 | M28-M3A | Runtime call/member/construction restoration | Complete (`247db5c`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 26 downstream M3B–M5B debts against the unchanged baseline) | M2B integrated at `898b88d` | Runtime core |
-| M28-M3B | Runtime collection dispatch restoration | Review (`2a09d70`; Rust 1.88 fmt/full-test/Clippy pass; Lizard reports exactly 23 downstream M3C–M5B debts against the unchanged baseline) | M3A integrated at `247db5c` | Runtime List/Set/Map intrinsics |
-| M28-M3C | Runtime String and value-graph restoration | Blocked | M3B integrated | Runtime String/value graph |
+| M28-M3B | Runtime collection dispatch restoration | Complete (`9c71d03`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 23 downstream M3C–M5B debts against the unchanged baseline) | M3A integrated at `247db5c` | Runtime List/Set/Map intrinsics |
+| M28-M3C | Runtime String and value-graph restoration | Ready | M3B integrated at `9c71d03` | Runtime String/value graph |
 | M28-M4 | Runtime platform dispatch decomposition | Blocked | M3C integrated | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Blocked | M4 integrated | `semantic/intrinsics.rs` |
 | M28-M5B | Core semantic hotspot restoration | Blocked | M5A integrated | `semantic.rs` |
