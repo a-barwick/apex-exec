@@ -79,6 +79,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         if matches!(
             intrinsic,
+            P::JsonSerialize
+                | P::JsonSerializePretty
+                | P::JsonDeserialize
+                | P::JsonDeserializeUntyped
+        ) {
+            return self.call_json_intrinsic(intrinsic, arguments, span);
+        }
+        if matches!(
+            intrinsic,
             P::LoggingLevelValues | P::LoggingLevelValueOf | P::PlatformEnumOrdinal
         ) {
             return self.call_logging_level(intrinsic, receiver, arguments, span);
@@ -96,275 +105,50 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return self.call_network(intrinsic, arguments, span);
         }
         match intrinsic {
-            P::DateNewInstance => {
-                let [year, month, day] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let date = date_from_parts(
-                    expect_integer(&year.value, year.span)?,
-                    expect_integer(&month.value, month.span)?,
-                    expect_integer(&day.value, day.span)?,
-                    span,
-                )?;
-                Ok(Value::Date(date))
-            }
-            P::DateValueOf => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = expect_string(&value.value, value.span)?;
-                parse_date(value, value_span(arguments, span)).map(Value::Date)
-            }
-            P::DateToday => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Date(
-                    datetime_from_millis(self.host.now_millis(), span)?.date_naive(),
-                ))
-            }
-            P::DateAddDays | P::DateAddMonths | P::DateAddYears => {
-                let date = expect_date(receiver, span)?;
-                let [amount] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let amount = expect_integer(&amount.value, amount.span)?;
-                let result = match intrinsic {
-                    P::DateAddDays => date.checked_add_signed(Duration::days(amount)),
-                    P::DateAddMonths => add_months(date, amount),
-                    P::DateAddYears => add_months(
-                        date,
-                        amount.checked_mul(12).ok_or_else(|| {
-                            platform_error("Date year adjustment is out of range", span)
-                        })?,
-                    ),
-                    _ => unreachable!(),
-                }
-                .ok_or_else(|| platform_error("Date adjustment is out of range", span))?;
-                Ok(Value::Date(result))
-            }
-            P::DateDaysBetween => {
-                let date = expect_date(receiver, span)?;
-                let [other] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Value::Date(other) = other.value else {
-                    return Err(invalid_runtime_operands(other.span));
-                };
-                Ok(Value::Integer((other - date).num_days()))
-            }
-            P::DateFormat => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::String(
-                    expect_date(receiver, span)?.format("%Y-%m-%d").to_string(),
-                ))
-            }
-            P::DateYear | P::DateMonth | P::DateDay => {
-                expect_no_arguments(arguments, span)?;
-                let date = expect_date(receiver, span)?;
-                Ok(Value::Integer(match intrinsic {
-                    P::DateYear => i64::from(date.year()),
-                    P::DateMonth => i64::from(date.month()),
-                    P::DateDay => i64::from(date.day()),
-                    _ => unreachable!(),
-                }))
-            }
-            P::DatetimeNewInstance => {
-                let [year, month, day, hour, minute, second] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let date = date_from_parts(
-                    expect_integer(&year.value, year.span)?,
-                    expect_integer(&month.value, month.span)?,
-                    expect_integer(&day.value, day.span)?,
-                    span,
-                )?;
-                let time = time_from_parts(
-                    expect_integer(&hour.value, hour.span)?,
-                    expect_integer(&minute.value, minute.span)?,
-                    expect_integer(&second.value, second.span)?,
-                    0,
-                    span,
-                )?;
-                Ok(Value::Datetime(
-                    Utc.from_utc_datetime(&NaiveDateTime::new(date, time)),
-                ))
-            }
-            P::DatetimeNow => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Datetime(datetime_from_millis(
-                    self.host.now_millis(),
-                    span,
-                )?))
-            }
-            P::DatetimeValueOf | P::DatetimeValueOfGmt => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let argument_span = value.span;
-                match &value.value {
-                    Value::String(value) => {
-                        parse_datetime(value, argument_span).map(Value::Datetime)
-                    }
-                    Value::Long(value) if intrinsic == P::DatetimeValueOf => {
-                        datetime_from_millis(*value, argument_span).map(Value::Datetime)
-                    }
-                    _ => Err(invalid_runtime_operands(argument_span)),
-                }
-            }
-            P::DatetimeGetTime => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Long(
-                    expect_datetime(receiver, span)?.timestamp_millis(),
-                ))
-            }
-            P::DatetimeDate | P::DatetimeDateGmt => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Date(expect_datetime(receiver, span)?.date_naive()))
-            }
-            P::DatetimeTime | P::DatetimeTimeGmt => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Time(expect_datetime(receiver, span)?.time()))
-            }
-            P::DatetimeAddDays
+            P::DateNewInstance
+            | P::DateValueOf
+            | P::DateToday
+            | P::DateAddDays
+            | P::DateAddMonths
+            | P::DateAddYears
+            | P::DateDaysBetween
+            | P::DateFormat
+            | P::DateYear
+            | P::DateMonth
+            | P::DateDay => self.call_date_intrinsic(intrinsic, receiver, arguments, span),
+            P::DatetimeNewInstance
+            | P::DatetimeNow
+            | P::DatetimeValueOf
+            | P::DatetimeValueOfGmt
+            | P::DatetimeGetTime
+            | P::DatetimeDate
+            | P::DatetimeDateGmt
+            | P::DatetimeTime
+            | P::DatetimeTimeGmt
+            | P::DatetimeAddDays
             | P::DatetimeAddHours
             | P::DatetimeAddMinutes
-            | P::DatetimeAddSeconds => {
-                let datetime = expect_datetime(receiver, span)?;
-                let [amount] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let amount = expect_integer(&amount.value, amount.span)?;
-                let duration = match intrinsic {
-                    P::DatetimeAddDays => Duration::days(amount),
-                    P::DatetimeAddHours => Duration::hours(amount),
-                    P::DatetimeAddMinutes => Duration::minutes(amount),
-                    P::DatetimeAddSeconds => Duration::seconds(amount),
-                    _ => unreachable!(),
-                };
-                Ok(Value::Datetime(
-                    datetime.checked_add_signed(duration).ok_or_else(|| {
-                        platform_error("Datetime adjustment is out of range", span)
-                    })?,
-                ))
+            | P::DatetimeAddSeconds
+            | P::DatetimeFormat => {
+                self.call_datetime_intrinsic(intrinsic, receiver, arguments, span)
             }
-            P::DatetimeFormat => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::String(
-                    expect_datetime(receiver, span)?
-                        .format("%Y-%m-%d %H:%M:%S")
-                        .to_string(),
-                ))
-            }
-            P::TimeNewInstance => {
-                let [hour, minute, second, millisecond] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                Ok(Value::Time(time_from_parts(
-                    expect_integer(&hour.value, hour.span)?,
-                    expect_integer(&minute.value, minute.span)?,
-                    expect_integer(&second.value, second.span)?,
-                    expect_integer(&millisecond.value, millisecond.span)?,
-                    span,
-                )?))
-            }
-            P::TimeValueOf => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = expect_string(&value.value, value.span)?;
-                NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
-                    .map(Value::Time)
-                    .map_err(|_| platform_error(format!("invalid Time `{value}`"), span))
-            }
-            P::TimeAddHours | P::TimeAddMinutes | P::TimeAddSeconds | P::TimeAddMilliseconds => {
-                let time = expect_time(receiver, span)?;
-                let [amount] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let amount = expect_integer(&amount.value, amount.span)?;
-                let duration = match intrinsic {
-                    P::TimeAddHours => Duration::hours(amount),
-                    P::TimeAddMinutes => Duration::minutes(amount),
-                    P::TimeAddSeconds => Duration::seconds(amount),
-                    P::TimeAddMilliseconds => Duration::milliseconds(amount),
-                    _ => unreachable!(),
-                };
-                Ok(Value::Time(time.overflowing_add_signed(duration).0))
-            }
-            P::TimeHour | P::TimeMinute | P::TimeSecond | P::TimeMillisecond => {
-                expect_no_arguments(arguments, span)?;
-                let time = expect_time(receiver, span)?;
-                Ok(Value::Integer(match intrinsic {
-                    P::TimeHour => i64::from(time.hour()),
-                    P::TimeMinute => i64::from(time.minute()),
-                    P::TimeSecond => i64::from(time.second()),
-                    P::TimeMillisecond => i64::from(time.nanosecond() / 1_000_000),
-                    _ => unreachable!(),
-                }))
-            }
-            P::TimeFormat => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::String(
-                    expect_time(receiver, span)?
-                        .format("%H:%M:%S%.3f")
-                        .to_string(),
-                ))
-            }
-            P::DecimalValueOf => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = expect_string(&value.value, value.span)?;
-                Decimal::from_str(value)
-                    .map(Value::Decimal)
-                    .map_err(|_| platform_error(format!("invalid Decimal `{value}`"), span))
-            }
-            P::DoubleValueOf => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = expect_string(&value.value, value.span)?;
-                value
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(ApexDouble::new)
-                    .map(Value::Double)
-                    .ok_or_else(|| platform_error(format!("invalid Double `{value}`"), span))
-            }
-            P::LongValueOf => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = expect_string(&value.value, value.span)?;
-                value
-                    .parse::<i64>()
-                    .map(Value::Long)
-                    .map_err(|_| platform_error(format!("invalid Long `{value}`"), span))
-            }
-            P::DecimalSetScale => {
-                let mut decimal = expect_decimal(receiver, span)?;
-                let [scale] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let scale = expect_integer(&scale.value, scale.span)?;
-                let scale = u32::try_from(scale)
-                    .ok()
-                    .filter(|scale| *scale <= 28)
-                    .ok_or_else(|| {
-                        platform_error("Decimal scale must be between 0 and 28", span)
-                    })?;
-                decimal.rescale(scale);
-                Ok(Value::Decimal(decimal))
-            }
-            P::DecimalAbs => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Decimal(expect_decimal(receiver, span)?.abs()))
-            }
-            P::DecimalScale => {
-                expect_no_arguments(arguments, span)?;
-                Ok(Value::Integer(i64::from(
-                    expect_decimal(receiver, span)?.scale(),
-                )))
-            }
+            P::TimeNewInstance
+            | P::TimeValueOf
+            | P::TimeAddHours
+            | P::TimeAddMinutes
+            | P::TimeAddSeconds
+            | P::TimeAddMilliseconds
+            | P::TimeHour
+            | P::TimeMinute
+            | P::TimeSecond
+            | P::TimeMillisecond
+            | P::TimeFormat => self.call_time_intrinsic(intrinsic, receiver, arguments, span),
+            P::DecimalValueOf
+            | P::DoubleValueOf
+            | P::LongValueOf
+            | P::DecimalSetScale
+            | P::DecimalAbs
+            | P::DecimalScale => self.call_numeric_intrinsic(intrinsic, receiver, arguments, span),
             P::IdValueOf => {
                 let [value] = arguments else {
                     return Err(invalid_call_arguments(span));
@@ -411,44 +195,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     &receiver.ok_or_else(|| invalid_runtime_operands(span))?,
                 )))
             }
-            P::JsonSerialize | P::JsonSerializePretty => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let json = self.value_to_json(&value.value, value.span)?;
-                let serialized = if intrinsic == P::JsonSerializePretty {
-                    serde_json::to_string_pretty(&json)
-                } else {
-                    serde_json::to_string(&json)
-                }
-                .map_err(|error| {
-                    platform_error(format!("JSON serialization failed: {error}"), span)
-                })?;
-                Ok(Value::String(serialized))
-            }
-            P::JsonDeserialize => {
-                let [source, target] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_span = source.span;
-                let source = expect_string(&source.value, source_span)?;
-                let Value::TypeLiteral(target) = &target.value else {
-                    return Err(invalid_call_arguments(target.span));
-                };
-                let json: JsonValue = serde_json::from_str(source).map_err(|error| {
-                    platform_error(format!("invalid JSON: {error}"), source_span)
-                })?;
-                self.typed_json_to_value(json, target, span, 0, &mut TypedJsonState::default())
-            }
-            P::JsonDeserializeUntyped => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source = expect_string(&value.value, value.span)?;
-                let json: JsonValue = serde_json::from_str(source).map_err(|error| {
-                    platform_error(format!("invalid JSON: {error}"), value.span)
-                })?;
-                self.json_to_value(json, span)
+            P::JsonSerialize
+            | P::JsonSerializePretty
+            | P::JsonDeserialize
+            | P::JsonDeserializeUntyped => {
+                unreachable!("JSON intrinsics are dispatched before the platform match")
             }
             P::PatternCompile => {
                 let [pattern] = arguments else {
@@ -883,6 +634,485 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .store
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
+        }
+    }
+
+    fn call_date_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DateNewInstance | P::DateValueOf | P::DateToday => {
+                self.call_date_static_intrinsic(intrinsic, arguments, span)
+            }
+            P::DateAddDays
+            | P::DateAddMonths
+            | P::DateAddYears
+            | P::DateDaysBetween
+            | P::DateFormat
+            | P::DateYear
+            | P::DateMonth
+            | P::DateDay => self.call_date_instance_intrinsic(intrinsic, receiver, arguments, span),
+            _ => unreachable!("Date intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_date_static_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match intrinsic {
+            PlatformIntrinsic::DateNewInstance => {
+                let [year, month, day] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let date = date_from_parts(
+                    expect_integer(&year.value, year.span)?,
+                    expect_integer(&month.value, month.span)?,
+                    expect_integer(&day.value, day.span)?,
+                    span,
+                )?;
+                Ok(Value::Date(date))
+            }
+            PlatformIntrinsic::DateValueOf => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let value = expect_string(&value.value, value.span)?;
+                parse_date(value, value_span(arguments, span)).map(Value::Date)
+            }
+            PlatformIntrinsic::DateToday => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Date(
+                    datetime_from_millis(self.host.now_millis(), span)?.date_naive(),
+                ))
+            }
+            _ => unreachable!("static Date intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_date_instance_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DateAddDays | P::DateAddMonths | P::DateAddYears => {
+                let date = expect_date(receiver, span)?;
+                let [amount] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let amount = expect_integer(&amount.value, amount.span)?;
+                let result = match intrinsic {
+                    P::DateAddDays => date.checked_add_signed(Duration::days(amount)),
+                    P::DateAddMonths => add_months(date, amount),
+                    P::DateAddYears => add_months(
+                        date,
+                        amount.checked_mul(12).ok_or_else(|| {
+                            platform_error("Date year adjustment is out of range", span)
+                        })?,
+                    ),
+                    _ => unreachable!(),
+                }
+                .ok_or_else(|| platform_error("Date adjustment is out of range", span))?;
+                Ok(Value::Date(result))
+            }
+            P::DateDaysBetween => {
+                let date = expect_date(receiver, span)?;
+                let [other] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let Value::Date(other) = other.value else {
+                    return Err(invalid_runtime_operands(other.span));
+                };
+                Ok(Value::Integer((other - date).num_days()))
+            }
+            P::DateFormat => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::String(
+                    expect_date(receiver, span)?.format("%Y-%m-%d").to_string(),
+                ))
+            }
+            P::DateYear | P::DateMonth | P::DateDay => {
+                expect_no_arguments(arguments, span)?;
+                let date = expect_date(receiver, span)?;
+                Ok(Value::Integer(match intrinsic {
+                    P::DateYear => i64::from(date.year()),
+                    P::DateMonth => i64::from(date.month()),
+                    P::DateDay => i64::from(date.day()),
+                    _ => unreachable!(),
+                }))
+            }
+            _ => unreachable!("instance Date intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_datetime_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DatetimeNewInstance
+            | P::DatetimeNow
+            | P::DatetimeValueOf
+            | P::DatetimeValueOfGmt => {
+                self.call_datetime_static_intrinsic(intrinsic, arguments, span)
+            }
+            P::DatetimeGetTime
+            | P::DatetimeDate
+            | P::DatetimeDateGmt
+            | P::DatetimeTime
+            | P::DatetimeTimeGmt
+            | P::DatetimeAddDays
+            | P::DatetimeAddHours
+            | P::DatetimeAddMinutes
+            | P::DatetimeAddSeconds
+            | P::DatetimeFormat => {
+                self.call_datetime_instance_intrinsic(intrinsic, receiver, arguments, span)
+            }
+            _ => unreachable!("Datetime intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_datetime_static_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DatetimeNewInstance => {
+                let [year, month, day, hour, minute, second] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let date = date_from_parts(
+                    expect_integer(&year.value, year.span)?,
+                    expect_integer(&month.value, month.span)?,
+                    expect_integer(&day.value, day.span)?,
+                    span,
+                )?;
+                let time = time_from_parts(
+                    expect_integer(&hour.value, hour.span)?,
+                    expect_integer(&minute.value, minute.span)?,
+                    expect_integer(&second.value, second.span)?,
+                    0,
+                    span,
+                )?;
+                Ok(Value::Datetime(
+                    Utc.from_utc_datetime(&NaiveDateTime::new(date, time)),
+                ))
+            }
+            P::DatetimeNow => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Datetime(datetime_from_millis(
+                    self.host.now_millis(),
+                    span,
+                )?))
+            }
+            P::DatetimeValueOf | P::DatetimeValueOfGmt => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let argument_span = value.span;
+                match &value.value {
+                    Value::String(value) => {
+                        parse_datetime(value, argument_span).map(Value::Datetime)
+                    }
+                    Value::Long(value) if intrinsic == P::DatetimeValueOf => {
+                        datetime_from_millis(*value, argument_span).map(Value::Datetime)
+                    }
+                    _ => Err(invalid_runtime_operands(argument_span)),
+                }
+            }
+            _ => unreachable!("static Datetime intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_datetime_instance_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DatetimeGetTime => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Long(
+                    expect_datetime(receiver, span)?.timestamp_millis(),
+                ))
+            }
+            P::DatetimeDate | P::DatetimeDateGmt => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Date(expect_datetime(receiver, span)?.date_naive()))
+            }
+            P::DatetimeTime | P::DatetimeTimeGmt => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Time(expect_datetime(receiver, span)?.time()))
+            }
+            P::DatetimeAddDays
+            | P::DatetimeAddHours
+            | P::DatetimeAddMinutes
+            | P::DatetimeAddSeconds => {
+                let datetime = expect_datetime(receiver, span)?;
+                let [amount] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let amount = expect_integer(&amount.value, amount.span)?;
+                let duration = match intrinsic {
+                    P::DatetimeAddDays => Duration::days(amount),
+                    P::DatetimeAddHours => Duration::hours(amount),
+                    P::DatetimeAddMinutes => Duration::minutes(amount),
+                    P::DatetimeAddSeconds => Duration::seconds(amount),
+                    _ => unreachable!(),
+                };
+                Ok(Value::Datetime(
+                    datetime.checked_add_signed(duration).ok_or_else(|| {
+                        platform_error("Datetime adjustment is out of range", span)
+                    })?,
+                ))
+            }
+            P::DatetimeFormat => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::String(
+                    expect_datetime(receiver, span)?
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string(),
+                ))
+            }
+            _ => unreachable!("instance Datetime intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_time_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::TimeNewInstance | P::TimeValueOf => {
+                self.call_time_static_intrinsic(intrinsic, arguments, span)
+            }
+            P::TimeAddHours
+            | P::TimeAddMinutes
+            | P::TimeAddSeconds
+            | P::TimeAddMilliseconds
+            | P::TimeHour
+            | P::TimeMinute
+            | P::TimeSecond
+            | P::TimeMillisecond
+            | P::TimeFormat => {
+                self.call_time_instance_intrinsic(intrinsic, receiver, arguments, span)
+            }
+            _ => unreachable!("Time intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_time_static_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match intrinsic {
+            PlatformIntrinsic::TimeNewInstance => {
+                let [hour, minute, second, millisecond] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                Ok(Value::Time(time_from_parts(
+                    expect_integer(&hour.value, hour.span)?,
+                    expect_integer(&minute.value, minute.span)?,
+                    expect_integer(&second.value, second.span)?,
+                    expect_integer(&millisecond.value, millisecond.span)?,
+                    span,
+                )?))
+            }
+            PlatformIntrinsic::TimeValueOf => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let value = expect_string(&value.value, value.span)?;
+                NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
+                    .map(Value::Time)
+                    .map_err(|_| platform_error(format!("invalid Time `{value}`"), span))
+            }
+            _ => unreachable!("static Time intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_time_instance_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::TimeAddHours | P::TimeAddMinutes | P::TimeAddSeconds | P::TimeAddMilliseconds => {
+                let time = expect_time(receiver, span)?;
+                let [amount] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let amount = expect_integer(&amount.value, amount.span)?;
+                let duration = match intrinsic {
+                    P::TimeAddHours => Duration::hours(amount),
+                    P::TimeAddMinutes => Duration::minutes(amount),
+                    P::TimeAddSeconds => Duration::seconds(amount),
+                    P::TimeAddMilliseconds => Duration::milliseconds(amount),
+                    _ => unreachable!(),
+                };
+                Ok(Value::Time(time.overflowing_add_signed(duration).0))
+            }
+            P::TimeHour | P::TimeMinute | P::TimeSecond | P::TimeMillisecond => {
+                expect_no_arguments(arguments, span)?;
+                let time = expect_time(receiver, span)?;
+                Ok(Value::Integer(match intrinsic {
+                    P::TimeHour => i64::from(time.hour()),
+                    P::TimeMinute => i64::from(time.minute()),
+                    P::TimeSecond => i64::from(time.second()),
+                    P::TimeMillisecond => i64::from(time.nanosecond() / 1_000_000),
+                    _ => unreachable!(),
+                }))
+            }
+            P::TimeFormat => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::String(
+                    expect_time(receiver, span)?
+                        .format("%H:%M:%S%.3f")
+                        .to_string(),
+                ))
+            }
+            _ => unreachable!("instance Time intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_numeric_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DecimalValueOf | P::DoubleValueOf | P::LongValueOf => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let value = expect_string(&value.value, value.span)?;
+                match intrinsic {
+                    P::DecimalValueOf => Decimal::from_str(value)
+                        .map(Value::Decimal)
+                        .map_err(|_| platform_error(format!("invalid Decimal `{value}`"), span)),
+                    P::DoubleValueOf => value
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(ApexDouble::new)
+                        .map(Value::Double)
+                        .ok_or_else(|| platform_error(format!("invalid Double `{value}`"), span)),
+                    P::LongValueOf => value
+                        .parse::<i64>()
+                        .map(Value::Long)
+                        .map_err(|_| platform_error(format!("invalid Long `{value}`"), span)),
+                    _ => unreachable!(),
+                }
+            }
+            P::DecimalSetScale => {
+                let mut decimal = expect_decimal(receiver, span)?;
+                let [scale] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let scale = expect_integer(&scale.value, scale.span)?;
+                let scale = u32::try_from(scale)
+                    .ok()
+                    .filter(|scale| *scale <= 28)
+                    .ok_or_else(|| {
+                        platform_error("Decimal scale must be between 0 and 28", span)
+                    })?;
+                decimal.rescale(scale);
+                Ok(Value::Decimal(decimal))
+            }
+            P::DecimalAbs => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Decimal(expect_decimal(receiver, span)?.abs()))
+            }
+            P::DecimalScale => {
+                expect_no_arguments(arguments, span)?;
+                Ok(Value::Integer(i64::from(
+                    expect_decimal(receiver, span)?.scale(),
+                )))
+            }
+            _ => unreachable!("numeric intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_json_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::JsonSerialize | P::JsonSerializePretty => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let json = self.value_to_json(&value.value, value.span)?;
+                let serialized = if intrinsic == P::JsonSerializePretty {
+                    serde_json::to_string_pretty(&json)
+                } else {
+                    serde_json::to_string(&json)
+                }
+                .map_err(|error| {
+                    platform_error(format!("JSON serialization failed: {error}"), span)
+                })?;
+                Ok(Value::String(serialized))
+            }
+            P::JsonDeserialize => {
+                let [source, target] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let source_span = source.span;
+                let source = expect_string(&source.value, source_span)?;
+                let Value::TypeLiteral(target) = &target.value else {
+                    return Err(invalid_call_arguments(target.span));
+                };
+                let json: JsonValue = serde_json::from_str(source).map_err(|error| {
+                    platform_error(format!("invalid JSON: {error}"), source_span)
+                })?;
+                self.typed_json_to_value(json, target, span, 0, &mut TypedJsonState::default())
+            }
+            P::JsonDeserializeUntyped => {
+                let [value] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let source = expect_string(&value.value, value.span)?;
+                let json: JsonValue = serde_json::from_str(source).map_err(|error| {
+                    platform_error(format!("invalid JSON: {error}"), value.span)
+                })?;
+                self.json_to_value(json, span)
+            }
+            _ => unreachable!("JSON intrinsic dispatch is closed"),
         }
     }
 
@@ -1874,27 +2104,20 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         use PlatformIntrinsic as P;
-        if intrinsic != P::SObjectTypeNewSObject {
-            expect_no_arguments(arguments, span)?;
+        if matches!(
+            intrinsic,
+            P::SObjectTypeGetDescribe
+                | P::SObjectTypeGetName
+                | P::SObjectTypeNewSObject
+                | P::SObjectFieldGetDescribe
+                | P::SObjectFieldMapGetMap
+                | P::FieldSetMapGetMap
+        ) {
+            return self.call_schema_token_intrinsic(intrinsic, receiver, arguments, span);
         }
+        expect_no_arguments(arguments, span)?;
         match intrinsic {
             P::SchemaGetGlobalDescribe => self.schema_global_describe(),
-            P::SObjectTypeGetDescribe => {
-                let object_id = self.expect_schema_object(receiver, false, span)?;
-                Ok(self
-                    .store
-                    .allocate_platform(PlatformValue::DescribeSObject(object_id)))
-            }
-            P::SObjectTypeGetName => {
-                let object_id = self.expect_schema_object(receiver, false, span)?;
-                Ok(Value::String(
-                    self.schema_object(object_id).api_name().to_owned(),
-                ))
-            }
-            P::SObjectTypeNewSObject => {
-                let object_id = self.expect_schema_object(receiver, false, span)?;
-                self.schema_new_sobject(object_id, arguments, span)
-            }
             P::DescribeGetName
             | P::DescribeGetLocalName
             | P::DescribeGetLabel
@@ -1905,15 +2128,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             | P::DescribeIsAccessible
             | P::DescribeIsDeletable
             | P::DescribeIsUpdateable => self.describe_sobject_value(intrinsic, receiver, span),
-            P::SObjectFieldGetDescribe => {
-                let (object_id, field_id) = self.expect_schema_field(receiver, false, span)?;
-                Ok(self.store.allocate_platform(PlatformValue::DescribeField {
-                    object_id,
-                    field_id,
-                }))
-            }
-            P::SObjectFieldMapGetMap => self.sobject_field_map(receiver, span),
-            P::FieldSetMapGetMap => self.field_set_map(receiver, span),
             P::DescribeFieldGetName
             | P::DescribeFieldGetLocalName
             | P::DescribeFieldGetLabel
@@ -1946,6 +2160,53 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(Value::String(value.clone()))
             }
             _ => unreachable!("schema intrinsic dispatch is closed"),
+        }
+    }
+
+    fn call_schema_token_intrinsic(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        match intrinsic {
+            P::SObjectTypeGetDescribe => {
+                expect_no_arguments(arguments, span)?;
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                Ok(self
+                    .store
+                    .allocate_platform(PlatformValue::DescribeSObject(object_id)))
+            }
+            P::SObjectTypeGetName => {
+                expect_no_arguments(arguments, span)?;
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                Ok(Value::String(
+                    self.schema_object(object_id).api_name().to_owned(),
+                ))
+            }
+            P::SObjectTypeNewSObject => {
+                let object_id = self.expect_schema_object(receiver, false, span)?;
+                self.schema_new_sobject(object_id, arguments, span)
+            }
+            P::SObjectFieldGetDescribe => {
+                expect_no_arguments(arguments, span)?;
+                let (object_id, field_id) = self.expect_schema_field(receiver, false, span)?;
+                Ok(self.store.allocate_platform(PlatformValue::DescribeField {
+                    object_id,
+                    field_id,
+                }))
+            }
+            P::SObjectFieldMapGetMap => {
+                expect_no_arguments(arguments, span)?;
+                self.sobject_field_map(receiver, span)
+            }
+            P::FieldSetMapGetMap => {
+                expect_no_arguments(arguments, span)?;
+                self.field_set_map(receiver, span)
+            }
+            _ => unreachable!("schema token dispatch is closed"),
         }
     }
 
@@ -2083,6 +2344,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         use PlatformIntrinsic as P;
+        match intrinsic {
+            P::DescribeFieldGetSoapType | P::DescribeFieldGetType => {
+                return self.describe_field_enum_value(intrinsic, receiver, span);
+            }
+            P::DescribeFieldGetReferenceTo => {
+                return self.describe_field_reference_to(receiver, span);
+            }
+            P::DescribeFieldGetPicklistValues => {
+                return self.describe_field_picklist_values(receiver, span);
+            }
+            _ => {}
+        }
         let (object_id, field_id) = self.expect_schema_field(receiver, true, span)?;
         let field = self
             .schema_object(object_id)
@@ -2103,60 +2376,101 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .relationship_name()
                 .map(|value| Value::String(value.to_owned()))
                 .unwrap_or_else(|| Value::Null(Some(TypeName::String))),
-            P::DescribeFieldGetSoapType => {
-                let value = schema_soap_type(field);
-                self.store
-                    .allocate_platform(PlatformValue::PlatformEnum(value))
-            }
-            P::DescribeFieldGetType => self.store.allocate_platform(PlatformValue::PlatformEnum(
-                crate::platform::PlatformEnum::DisplayType(field.display_type()),
-            )),
-            P::DescribeFieldGetReferenceTo => {
-                let target = match field.data_type() {
-                    crate::platform::FieldType::Reference { target_object } => {
-                        Some(target_object.as_str())
-                    }
-                    crate::platform::FieldType::MetadataRelationship {
-                        target_metadata, ..
-                    } => Some(target_metadata.as_str()),
-                    _ => None,
-                };
-                let elements = target
-                    .and_then(|target| self.program().schema().object_index(target))
-                    .map(|target| {
-                        vec![
-                            self.store
-                                .allocate_platform(PlatformValue::SObjectType(target)),
-                        ]
-                    })
-                    .unwrap_or_default();
-                self.allocate(Collection::List {
-                    element_type: TypeName::SObjectType,
-                    elements,
-                    iteration_depth: 0,
-                })
-            }
-            P::DescribeFieldGetPicklistValues => {
-                let values = field.picklist_values().to_vec();
-                let elements = values
-                    .into_iter()
-                    .map(|value| {
-                        self.store
-                            .allocate_platform(PlatformValue::PicklistEntry(value))
-                    })
-                    .collect();
-                self.allocate(Collection::List {
-                    element_type: TypeName::PicklistEntry,
-                    elements,
-                    iteration_depth: 0,
-                })
-            }
             P::DescribeFieldIsNameField => {
                 Value::Boolean(field.api_name().eq_ignore_ascii_case("Name"))
             }
             P::DescribeFieldIsSortable | P::DescribeFieldIsAccessible => Value::Boolean(true),
             _ => unreachable!("describe field accessor is closed"),
         })
+    }
+
+    fn describe_field_enum_value(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.expect_schema_field(receiver, true, span)?;
+        let value = {
+            let field = self
+                .schema_object(object_id)
+                .field_at(field_id)
+                .expect("describe field handle references a checked field");
+            match intrinsic {
+                PlatformIntrinsic::DescribeFieldGetSoapType => schema_soap_type(field),
+                PlatformIntrinsic::DescribeFieldGetType => {
+                    crate::platform::PlatformEnum::DisplayType(field.display_type())
+                }
+                _ => unreachable!("describe field enum accessor is closed"),
+            }
+        };
+        Ok(self
+            .store
+            .allocate_platform(PlatformValue::PlatformEnum(value)))
+    }
+
+    fn describe_field_reference_to(
+        &mut self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.expect_schema_field(receiver, true, span)?;
+        let target = {
+            let field = self
+                .schema_object(object_id)
+                .field_at(field_id)
+                .expect("describe field handle references a checked field");
+            match field.data_type() {
+                crate::platform::FieldType::Reference { target_object } => {
+                    Some(target_object.to_owned())
+                }
+                crate::platform::FieldType::MetadataRelationship {
+                    target_metadata, ..
+                } => Some(target_metadata.to_owned()),
+                _ => None,
+            }
+        };
+        let elements = target
+            .as_deref()
+            .and_then(|target| self.program().schema().object_index(target))
+            .map(|target| {
+                vec![
+                    self.store
+                        .allocate_platform(PlatformValue::SObjectType(target)),
+                ]
+            })
+            .unwrap_or_default();
+        Ok(self.allocate(Collection::List {
+            element_type: TypeName::SObjectType,
+            elements,
+            iteration_depth: 0,
+        }))
+    }
+
+    fn describe_field_picklist_values(
+        &mut self,
+        receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.expect_schema_field(receiver, true, span)?;
+        let values = self
+            .schema_object(object_id)
+            .field_at(field_id)
+            .expect("describe field handle references a checked field")
+            .picklist_values()
+            .to_vec();
+        let elements = values
+            .into_iter()
+            .map(|value| {
+                self.store
+                    .allocate_platform(PlatformValue::PicklistEntry(value))
+            })
+            .collect();
+        Ok(self.allocate(Collection::List {
+            element_type: TypeName::PicklistEntry,
+            elements,
+            iteration_depth: 0,
+        }))
     }
 
     fn field_set_map(&mut self, receiver: Option<Value>, span: Span) -> Result<Value, Diagnostic> {
@@ -2619,58 +2933,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         if value.is_null() {
             return Ok(Value::Null(Some(target.clone())));
         }
+        if is_typed_json_scalar(target) {
+            return typed_json_scalar_value(value, target, span);
+        }
         match target {
             TypeName::Object => self.bounded_untyped_json(value, span, depth, state),
-            TypeName::String => match value {
-                JsonValue::String(value) => Ok(Value::String(value)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Boolean => match value {
-                JsonValue::Bool(value) => Ok(Value::Boolean(value)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Integer => match value.as_i64().and_then(|value| i32::try_from(value).ok()) {
-                Some(value) => Ok(Value::Integer(i64::from(value))),
-                None => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Long => value
-                .as_i64()
-                .map(Value::Long)
-                .ok_or_else(|| typed_json_mismatch(target, span)),
-            TypeName::Decimal => match value {
-                JsonValue::Number(value) => Decimal::from_str(&value.to_string())
-                    .map(Value::Decimal)
-                    .map_err(|_| typed_json_mismatch(target, span)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Double => match value {
-                JsonValue::Number(value) => value
-                    .as_f64()
-                    .and_then(ApexDouble::new)
-                    .map(Value::Double)
-                    .ok_or_else(|| typed_json_mismatch(target, span)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Date => match value {
-                JsonValue::String(value) => NaiveDate::parse_from_str(&value, "%Y-%m-%d")
-                    .map(Value::Date)
-                    .map_err(|_| typed_json_mismatch(target, span)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Datetime => match value {
-                JsonValue::String(value) => parse_json_datetime(&value, span).map(Value::Datetime),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Time => match value {
-                JsonValue::String(value) => NaiveTime::parse_from_str(&value, "%H:%M:%S%.f")
-                    .map(Value::Time)
-                    .map_err(|_| typed_json_mismatch(target, span)),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
-            TypeName::Id => match value {
-                JsonValue::String(value) => validate_id(&value, span).map(Value::Id),
-                _ => Err(typed_json_mismatch(target, span)),
-            },
             TypeName::List(element) | TypeName::Set(element) => {
                 let JsonValue::Array(values) = value else {
                     return Err(typed_json_mismatch(target, span));
@@ -2983,6 +3250,83 @@ fn parse_json_datetime(value: &str, span: Span) -> Result<DateTime<Utc>, Diagnos
         return Ok(value.with_timezone(&Utc));
     }
     parse_datetime(value, span).map_err(|_| typed_json_mismatch(&TypeName::Datetime, span))
+}
+
+fn is_typed_json_scalar(target: &TypeName) -> bool {
+    matches!(
+        target,
+        TypeName::String
+            | TypeName::Boolean
+            | TypeName::Integer
+            | TypeName::Long
+            | TypeName::Decimal
+            | TypeName::Double
+            | TypeName::Date
+            | TypeName::Datetime
+            | TypeName::Time
+            | TypeName::Id
+    )
+}
+
+fn typed_json_scalar_value(
+    value: JsonValue,
+    target: &TypeName,
+    span: Span,
+) -> Result<Value, Diagnostic> {
+    match target {
+        TypeName::String => match value {
+            JsonValue::String(value) => Ok(Value::String(value)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Boolean => match value {
+            JsonValue::Bool(value) => Ok(Value::Boolean(value)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Integer => value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .map(|value| Value::Integer(i64::from(value)))
+            .ok_or_else(|| typed_json_mismatch(target, span)),
+        TypeName::Long => value
+            .as_i64()
+            .map(Value::Long)
+            .ok_or_else(|| typed_json_mismatch(target, span)),
+        TypeName::Decimal => match value {
+            JsonValue::Number(value) => Decimal::from_str(&value.to_string())
+                .map(Value::Decimal)
+                .map_err(|_| typed_json_mismatch(target, span)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Double => match value {
+            JsonValue::Number(value) => value
+                .as_f64()
+                .and_then(ApexDouble::new)
+                .map(Value::Double)
+                .ok_or_else(|| typed_json_mismatch(target, span)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Date => match value {
+            JsonValue::String(value) => NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map(Value::Date)
+                .map_err(|_| typed_json_mismatch(target, span)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Datetime => match value {
+            JsonValue::String(value) => parse_json_datetime(&value, span).map(Value::Datetime),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Time => match value {
+            JsonValue::String(value) => NaiveTime::parse_from_str(&value, "%H:%M:%S%.f")
+                .map(Value::Time)
+                .map_err(|_| typed_json_mismatch(target, span)),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        TypeName::Id => match value {
+            JsonValue::String(value) => validate_id(&value, span).map(Value::Id),
+            _ => Err(typed_json_mismatch(target, span)),
+        },
+        _ => unreachable!("typed JSON scalar target is closed"),
+    }
 }
 
 fn typed_json_mismatch(target: &TypeName, span: Span) -> Diagnostic {
