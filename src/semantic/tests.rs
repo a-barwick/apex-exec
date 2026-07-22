@@ -281,6 +281,29 @@ fn checks_string_math_and_system_signatures() {
 }
 
 #[test]
+fn platform_owner_descriptors_keep_cross_family_intrinsic_ids_stable() {
+    check_source(
+        "Date dateValue = Date.newInstance(2024, 2, 29); \
+         Date tomorrow = dateValue.addDays(1); \
+         Datetime timestamp = Datetime.now(); Long epoch = timestamp.getTime(); \
+         Time clock = Time.newInstance(1, 2, 3, 4); Integer hour = clock.hour(); \
+         Blob bytes = Blob.valueOf('value'); Integer size = bytes.size(); \
+         Pattern pattern = Pattern.compile('value'); Matcher matcher = pattern.matcher('value'); \
+         Boolean found = matcher.find(); \
+         HttpRequest request = new HttpRequest(); request.setHeader('name', 'value'); \
+         String header = request.getHeader('name'); \
+         Map<String, Schema.SObjectType> globals = Schema.getGlobalDescribe();",
+    )
+    .unwrap();
+
+    let error = check_source("Date dateValue = Date.today(); dateValue.missing();").unwrap_err();
+    assert_eq!(
+        error.message,
+        "unsupported API `Date.missing` in compatibility profile `salesforce-api-66.0`"
+    );
+}
+
+#[test]
 fn method_receivers_resolve_variables_before_static_types() {
     let source = "String String = 'value'; String converted = String.valueOf(1);";
     let error = check_source(source).unwrap_err();
