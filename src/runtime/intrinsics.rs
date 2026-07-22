@@ -604,65 +604,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match intrinsic {
-            ListIntrinsic::Add => match arguments {
-                [value] => {
-                    self.ensure_collection_mutable(id, span)?;
-                    let element_type = self.list_type(id).clone();
-                    let value = typed_value(value.value.clone(), &element_type, value.span)?;
-                    let Collection::List { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.push(value);
-                    Ok(Value::Void)
-                }
-                [index, value] => {
-                    self.ensure_collection_mutable(id, span)?;
-                    let index_value = expect_integer(&index.value, index.span)?;
-                    let (element_type, size) = match self.collection(id) {
-                        Collection::List {
-                            element_type,
-                            elements,
-                            ..
-                        } => (element_type.clone(), elements.len()),
-                        _ => unreachable!(),
-                    };
-                    let index = checked_list_index(index_value, size, true, index.span)?;
-                    let value = typed_value(value.value.clone(), &element_type, value.span)?;
-                    let Collection::List { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.insert(index, value);
-                    Ok(Value::Void)
-                }
-                _ => Err(invalid_call_arguments(span)),
-            },
-            ListIntrinsic::AddAll => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.list_type(id).clone();
-                let values: Vec<Value> = source_elements
-                    .into_iter()
-                    .map(|value| typed_value(value, &element_type, source.span))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.extend(values);
-                Ok(Value::Void)
-            }
-            ListIntrinsic::Clear => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.clear();
-                Ok(Value::Void)
-            }
+            ListIntrinsic::Add => self.list_add(id, arguments, span),
+            ListIntrinsic::AddAll => self.list_add_all(id, arguments, span),
+            ListIntrinsic::Clear => self.list_clear(id, arguments, span),
             ListIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
                 self.clone_list(id, false, span)
@@ -671,94 +615,224 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 expect_no_arguments(arguments, span)?;
                 self.clone_list(id, true, span)
             }
-            ListIntrinsic::Contains => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, &needle.value)),
-                ))
-            }
-            ListIntrinsic::Get => {
-                let [index] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.list_get(id, &index.value, index.span)
-            }
-            ListIntrinsic::IndexOf => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                let index = elements
-                    .iter()
-                    .position(|value| self.values_equal(value, &needle.value))
-                    .map_or(-1, |index| i64::try_from(index).unwrap_or(i64::MAX));
-                Ok(Value::Integer(index))
-            }
-            ListIntrinsic::IsEmpty => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(elements.is_empty()))
-            }
-            ListIntrinsic::Remove => {
-                let [index] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let index_value = expect_integer(&index.value, index.span)?;
-                let size = match self.collection(id) {
-                    Collection::List { elements, .. } => elements.len(),
-                    _ => unreachable!(),
-                };
-                let index = checked_list_index(index_value, size, false, index.span)?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                Ok(elements.remove(index))
-            }
-            ListIntrinsic::Set => {
-                let [index, value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let index_value = expect_integer(&index.value, index.span)?;
-                let (element_type, size) = match self.collection(id) {
-                    Collection::List {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.len()),
-                    _ => unreachable!(),
-                };
-                let index = checked_list_index(index_value, size, false, index.span)?;
-                let value = typed_value(value.value.clone(), &element_type, value.span)?;
-                let Collection::List { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements[index] = value;
-                Ok(Value::Void)
-            }
-            ListIntrinsic::Size => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::List { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(elements.len(), span)?))
-            }
+            ListIntrinsic::Contains => self.list_contains(id, arguments, span),
+            ListIntrinsic::Get => self.list_get_argument(id, arguments, span),
+            ListIntrinsic::IndexOf => self.list_index_of(id, arguments, span),
+            ListIntrinsic::IsEmpty => self.list_is_empty(id, arguments, span),
+            ListIntrinsic::Remove => self.list_remove(id, arguments, span),
+            ListIntrinsic::Set => self.list_set(id, arguments, span),
+            ListIntrinsic::Size => self.list_size(id, arguments, span),
             ListIntrinsic::Sort => {
                 expect_no_arguments(arguments, span)?;
                 self.sort_list(id, span)
             }
+        }
+    }
+
+    fn list_add(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match arguments {
+            [value] => {
+                self.ensure_collection_mutable(id, span)?;
+                let element_type = self.list_type(id).clone();
+                let value = typed_value(value.value.clone(), &element_type, value.span)?;
+                let Collection::List { elements, .. } = self.collection_mut(id) else {
+                    unreachable!()
+                };
+                elements.push(value);
+                Ok(Value::Void)
+            }
+            [index, value] => self.list_insert(id, index, value, span),
+            _ => Err(invalid_call_arguments(span)),
+        }
+    }
+
+    fn list_insert(
+        &mut self,
+        id: CollectionId,
+        index: &EvaluatedArgument,
+        value: &EvaluatedArgument,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.ensure_collection_mutable(id, span)?;
+        let index_value = expect_integer(&index.value, index.span)?;
+        let (element_type, size) = self.list_type_and_size(id);
+        let index = checked_list_index(index_value, size, true, index.span)?;
+        let value = typed_value(value.value.clone(), &element_type, value.span)?;
+        let Collection::List { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements.insert(index, value);
+        Ok(Value::Void)
+    }
+
+    fn list_add_all(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [source] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
+        let source_elements = self.sequence_snapshot(source_id, source.span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let element_type = self.list_type(id).clone();
+        let values = source_elements
+            .into_iter()
+            .map(|value| typed_value(value, &element_type, source.span))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Collection::List { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements.extend(values);
+        Ok(Value::Void)
+    }
+
+    fn list_clear(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let Collection::List { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements.clear();
+        Ok(Value::Void)
+    }
+
+    fn list_contains(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [needle] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let Collection::List { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Boolean(
+            elements
+                .iter()
+                .any(|value| self.values_equal(value, &needle.value)),
+        ))
+    }
+
+    fn list_get_argument(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [index] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        self.list_get(id, &index.value, index.span)
+    }
+
+    fn list_index_of(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [needle] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let Collection::List { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        let index = elements
+            .iter()
+            .position(|value| self.values_equal(value, &needle.value))
+            .map_or(-1, |index| i64::try_from(index).unwrap_or(i64::MAX));
+        Ok(Value::Integer(index))
+    }
+
+    fn list_is_empty(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::List { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Boolean(elements.is_empty()))
+    }
+
+    fn list_remove(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [index] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        self.ensure_collection_mutable(id, span)?;
+        let index_value = expect_integer(&index.value, index.span)?;
+        let (_, size) = self.list_type_and_size(id);
+        let index = checked_list_index(index_value, size, false, index.span)?;
+        let Collection::List { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        Ok(elements.remove(index))
+    }
+
+    fn list_set(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [index, value] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        self.ensure_collection_mutable(id, span)?;
+        let index_value = expect_integer(&index.value, index.span)?;
+        let (element_type, size) = self.list_type_and_size(id);
+        let index = checked_list_index(index_value, size, false, index.span)?;
+        let value = typed_value(value.value.clone(), &element_type, value.span)?;
+        let Collection::List { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements[index] = value;
+        Ok(Value::Void)
+    }
+
+    fn list_size(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::List { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Integer(collection_size(elements.len(), span)?))
+    }
+
+    fn list_type_and_size(&self, id: CollectionId) -> (TypeName, usize) {
+        match self.collection(id) {
+            Collection::List {
+                element_type,
+                elements,
+                ..
+            } => (element_type.clone(), elements.len()),
+            _ => unreachable!(),
         }
     }
 
@@ -946,176 +1020,242 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match intrinsic {
-            SetIntrinsic::Add => {
-                let [value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.set_type(id).clone();
-                let value = typed_value(value.value.clone(), &element_type, value.span)?;
-                let changed = {
-                    let Collection::Set { elements, .. } = self.collection(id) else {
-                        unreachable!()
-                    };
-                    !elements
-                        .iter()
-                        .any(|existing| self.values_equal(existing, &value))
-                };
-                if changed {
-                    let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.push(value);
-                }
-                Ok(Value::Boolean(changed))
-            }
-            SetIntrinsic::AddAll => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let element_type = self.set_type(id).clone();
-                let mut current = match self.collection(id) {
-                    Collection::Set { elements, .. } => elements.clone(),
-                    _ => unreachable!(),
-                };
-                let original_len = current.len();
-                for value in source_elements {
-                    let value = typed_value(value, &element_type, source.span)?;
-                    if !current
-                        .iter()
-                        .any(|existing| self.values_equal(existing, &value))
-                    {
-                        current.push(value);
-                    }
-                }
-                let changed = current.len() != original_len;
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                *elements = current;
-                Ok(Value::Boolean(changed))
-            }
-            SetIntrinsic::Clear => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                elements.clear();
-                Ok(Value::Void)
-            }
+            SetIntrinsic::Add => self.set_add(id, arguments, span),
+            SetIntrinsic::AddAll => self.set_add_all(id, arguments, span),
+            SetIntrinsic::Clear => self.set_clear(id, arguments, span),
             SetIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
-                let (element_type, elements) = match self.collection(id) {
-                    Collection::Set {
-                        element_type,
-                        elements,
-                        ..
-                    } => (element_type.clone(), elements.clone()),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Set {
-                    element_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
+                self.clone_set(id)
             }
-            SetIntrinsic::Contains => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, &needle.value)),
-                ))
-            }
-            SetIntrinsic::ContainsAll => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source = self.sequence_snapshot(source_id, source.span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(source.iter().all(|needle| {
-                    elements
-                        .iter()
-                        .any(|value| self.values_equal(value, needle))
-                })))
-            }
-            SetIntrinsic::IsEmpty => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(elements.is_empty()))
-            }
-            SetIntrinsic::Remove => {
-                let [needle] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let position = {
-                    let Collection::Set { elements, .. } = self.collection(id) else {
-                        unreachable!()
-                    };
-                    elements
-                        .iter()
-                        .position(|value| self.values_equal(value, &needle.value))
-                };
-                if let Some(position) = position {
-                    let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    elements.remove(position);
-                    Ok(Value::Boolean(true))
-                } else {
-                    Ok(Value::Boolean(false))
-                }
-            }
-            SetIntrinsic::RemoveAll | SetIntrinsic::RetainAll => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let source = self.sequence_snapshot(source_id, source.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let current = match self.collection(id) {
-                    Collection::Set { elements, .. } => elements.clone(),
-                    _ => unreachable!(),
-                };
-                let retain_matches = intrinsic == SetIntrinsic::RetainAll;
-                let retained: Vec<Value> = current
-                    .iter()
-                    .filter(|value| {
-                        let found = source.iter().any(|needle| self.values_equal(value, needle));
-                        found == retain_matches
-                    })
-                    .cloned()
-                    .collect();
-                let changed = retained.len() != current.len();
-                let Collection::Set { elements, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                *elements = retained;
-                Ok(Value::Boolean(changed))
-            }
-            SetIntrinsic::Size => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Set { elements, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(elements.len(), span)?))
+            SetIntrinsic::Contains => self.set_contains(id, arguments, span),
+            SetIntrinsic::ContainsAll => self.set_contains_all(id, arguments, span),
+            SetIntrinsic::IsEmpty => self.set_is_empty(id, arguments, span),
+            SetIntrinsic::Remove => self.set_remove(id, arguments, span),
+            SetIntrinsic::RemoveAll => self.set_filter(id, arguments, false, span),
+            SetIntrinsic::RetainAll => self.set_filter(id, arguments, true, span),
+            SetIntrinsic::Size => self.set_size(id, arguments, span),
+        }
+    }
+
+    fn set_add(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [value] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        self.ensure_collection_mutable(id, span)?;
+        let element_type = self.set_type(id).clone();
+        let value = typed_value(value.value.clone(), &element_type, value.span)?;
+        let changed = {
+            let Collection::Set { elements, .. } = self.collection(id) else {
+                unreachable!()
+            };
+            !elements
+                .iter()
+                .any(|existing| self.values_equal(existing, &value))
+        };
+        if changed {
+            let Collection::Set { elements, .. } = self.collection_mut(id) else {
+                unreachable!()
+            };
+            elements.push(value);
+        }
+        Ok(Value::Boolean(changed))
+    }
+
+    fn set_add_all(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [source] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
+        let source_elements = self.sequence_snapshot(source_id, source.span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let element_type = self.set_type(id).clone();
+        let mut current = match self.collection(id) {
+            Collection::Set { elements, .. } => elements.clone(),
+            _ => unreachable!(),
+        };
+        let original_len = current.len();
+        for value in source_elements {
+            let value = typed_value(value, &element_type, source.span)?;
+            if !current
+                .iter()
+                .any(|existing| self.values_equal(existing, &value))
+            {
+                current.push(value);
             }
         }
+        let changed = current.len() != original_len;
+        let Collection::Set { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        *elements = current;
+        Ok(Value::Boolean(changed))
+    }
+
+    fn set_clear(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let Collection::Set { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements.clear();
+        Ok(Value::Void)
+    }
+
+    fn clone_set(&mut self, id: CollectionId) -> Result<Value, Diagnostic> {
+        let (element_type, elements) = match self.collection(id) {
+            Collection::Set {
+                element_type,
+                elements,
+                ..
+            } => (element_type.clone(), elements.clone()),
+            _ => unreachable!(),
+        };
+        Ok(self.allocate(Collection::Set {
+            element_type,
+            elements,
+            iteration_depth: 0,
+        }))
+    }
+
+    fn set_contains(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [needle] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        Ok(Value::Boolean(self.set_contains_value(id, &needle.value)))
+    }
+
+    fn set_contains_all(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [source] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
+        let source = self.sequence_snapshot(source_id, source.span)?;
+        Ok(Value::Boolean(
+            source
+                .iter()
+                .all(|needle| self.set_contains_value(id, needle)),
+        ))
+    }
+
+    fn set_is_empty(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::Set { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Boolean(elements.is_empty()))
+    }
+
+    fn set_remove(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [needle] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        self.ensure_collection_mutable(id, span)?;
+        let position = {
+            let Collection::Set { elements, .. } = self.collection(id) else {
+                unreachable!()
+            };
+            elements
+                .iter()
+                .position(|value| self.values_equal(value, &needle.value))
+        };
+        let Some(position) = position else {
+            return Ok(Value::Boolean(false));
+        };
+        let Collection::Set { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        elements.remove(position);
+        Ok(Value::Boolean(true))
+    }
+
+    fn set_filter(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        retain_matches: bool,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [source] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
+        let source = self.sequence_snapshot(source_id, source.span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let current = match self.collection(id) {
+            Collection::Set { elements, .. } => elements.clone(),
+            _ => unreachable!(),
+        };
+        let retained = current
+            .iter()
+            .filter(|value| {
+                let found = source.iter().any(|needle| self.values_equal(value, needle));
+                found == retain_matches
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let changed = retained.len() != current.len();
+        let Collection::Set { elements, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        *elements = retained;
+        Ok(Value::Boolean(changed))
+    }
+
+    fn set_size(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::Set { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Integer(collection_size(elements.len(), span)?))
+    }
+
+    fn set_contains_value(&self, id: CollectionId, needle: &Value) -> bool {
+        let Collection::Set { elements, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        elements
+            .iter()
+            .any(|value| self.values_equal(value, needle))
     }
 
     fn call_map(
@@ -1126,15 +1266,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match intrinsic {
-            MapIntrinsic::Clear => {
-                expect_no_arguments(arguments, span)?;
-                self.ensure_collection_mutable(id, span)?;
-                let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                    unreachable!()
-                };
-                entries.clear();
-                Ok(Value::Void)
-            }
+            MapIntrinsic::Clear => self.map_clear(id, arguments, span),
             MapIntrinsic::Clone => {
                 expect_no_arguments(arguments, span)?;
                 self.clone_map(id, false, span)
@@ -1143,147 +1275,233 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 expect_no_arguments(arguments, span)?;
                 self.clone_map(id, true, span)
             }
-            MapIntrinsic::ContainsKey => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let key = self.typed_map_key(id, key)?;
-                Ok(Value::Boolean(self.map_key_index(id, &key).is_some()))
-            }
-            MapIntrinsic::Get => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let key = self.typed_map_key(id, key)?;
-                let Collection::Map {
-                    value_type,
-                    entries,
-                    ..
-                } = self.collection(id)
-                else {
-                    unreachable!()
-                };
-                Ok(self
-                    .map_key_index(id, &key)
-                    .map(|index| entries[index].1.clone())
-                    .unwrap_or_else(|| Value::Null(Some(value_type.clone()))))
-            }
-            MapIntrinsic::IsEmpty => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Map { entries, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Boolean(entries.is_empty()))
-            }
-            MapIntrinsic::KeySet => {
-                expect_no_arguments(arguments, span)?;
-                let (key_type, elements) = match self.collection(id) {
-                    Collection::Map {
-                        key_type, entries, ..
-                    } => (
-                        key_type.clone(),
-                        entries.iter().map(|(key, _)| key.clone()).collect(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::Set {
-                    element_type: key_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
-            MapIntrinsic::Put => {
-                let [key, value] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let (key_type, value_type) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        ..
-                    } => (key_type.clone(), value_type.clone()),
-                    _ => unreachable!(),
-                };
-                let key = typed_value(key.value.clone(), &key_type, key.span)?;
-                let value = typed_value(value.value.clone(), &value_type, value.span)?;
-                self.ensure_collection_mutable(id, span)?;
-                Ok(self.map_put(id, key, value))
-            }
-            MapIntrinsic::PutAll => {
-                let [source] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
-                let (key_type, value_type) = match self.collection(id) {
-                    Collection::Map {
-                        key_type,
-                        value_type,
-                        ..
-                    } => (key_type.clone(), value_type.clone()),
-                    _ => unreachable!(),
-                };
-                self.ensure_collection_mutable(id, span)?;
-                let source_entries = match self.collection(source_id) {
-                    Collection::Map { entries, .. } => entries.clone(),
-                    Collection::List { elements, .. } => {
-                        let elements = elements.clone();
-                        self.sobject_map_entries(&key_type, elements, source.span)?
-                    }
-                    Collection::Set { .. } => return Err(invalid_runtime_operands(source.span)),
-                };
-                for (key, value) in source_entries {
-                    let key = typed_value(key, &key_type, source.span)?;
-                    let value = typed_value(value, &value_type, source.span)?;
-                    self.map_put(id, key, value);
-                }
-                Ok(Value::Void)
-            }
-            MapIntrinsic::Remove => {
-                let [key] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value_type = match self.collection(id) {
-                    Collection::Map { value_type, .. } => value_type.clone(),
-                    _ => unreachable!(),
-                };
-                let key = self.typed_map_key(id, key)?;
-                self.ensure_collection_mutable(id, span)?;
-                if let Some(index) = self.map_key_index(id, &key) {
-                    let Collection::Map { entries, .. } = self.collection_mut(id) else {
-                        unreachable!()
-                    };
-                    Ok(entries.remove(index).1)
-                } else {
-                    Ok(Value::Null(Some(value_type)))
-                }
-            }
-            MapIntrinsic::Size => {
-                expect_no_arguments(arguments, span)?;
-                let Collection::Map { entries, .. } = self.collection(id) else {
-                    unreachable!()
-                };
-                Ok(Value::Integer(collection_size(entries.len(), span)?))
-            }
-            MapIntrinsic::Values => {
-                expect_no_arguments(arguments, span)?;
-                let (value_type, elements) = match self.collection(id) {
-                    Collection::Map {
-                        value_type,
-                        entries,
-                        ..
-                    } => (
-                        value_type.clone(),
-                        entries.iter().map(|(_, value)| value.clone()).collect(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(self.allocate(Collection::List {
-                    element_type: value_type,
-                    elements,
-                    iteration_depth: 0,
-                }))
-            }
+            MapIntrinsic::ContainsKey => self.map_contains_key(id, arguments, span),
+            MapIntrinsic::Get => self.map_get(id, arguments, span),
+            MapIntrinsic::IsEmpty => self.map_is_empty(id, arguments, span),
+            MapIntrinsic::KeySet => self.map_key_set(id, arguments, span),
+            MapIntrinsic::Put => self.map_put_arguments(id, arguments, span),
+            MapIntrinsic::PutAll => self.map_put_all(id, arguments, span),
+            MapIntrinsic::Remove => self.map_remove(id, arguments, span),
+            MapIntrinsic::Size => self.map_size(id, arguments, span),
+            MapIntrinsic::Values => self.map_values(id, arguments, span),
         }
+    }
+
+    fn map_clear(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        self.ensure_collection_mutable(id, span)?;
+        let Collection::Map { entries, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        entries.clear();
+        Ok(Value::Void)
+    }
+
+    fn map_contains_key(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [key] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let key = self.typed_map_key(id, key)?;
+        Ok(Value::Boolean(self.map_key_index(id, &key).is_some()))
+    }
+
+    fn map_get(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [key] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let key = self.typed_map_key(id, key)?;
+        let Collection::Map {
+            value_type,
+            entries,
+            ..
+        } = self.collection(id)
+        else {
+            unreachable!()
+        };
+        Ok(self
+            .map_key_index(id, &key)
+            .map(|index| entries[index].1.clone())
+            .unwrap_or_else(|| Value::Null(Some(value_type.clone()))))
+    }
+
+    fn map_is_empty(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::Map { entries, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Boolean(entries.is_empty()))
+    }
+
+    fn map_key_set(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let (key_type, elements) = match self.collection(id) {
+            Collection::Map {
+                key_type, entries, ..
+            } => (
+                key_type.clone(),
+                entries.iter().map(|(key, _)| key.clone()).collect(),
+            ),
+            _ => unreachable!(),
+        };
+        Ok(self.allocate(Collection::Set {
+            element_type: key_type,
+            elements,
+            iteration_depth: 0,
+        }))
+    }
+
+    fn map_put_arguments(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [key, value] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let (key_type, value_type) = self.map_types(id);
+        let key = typed_value(key.value.clone(), &key_type, key.span)?;
+        let value = typed_value(value.value.clone(), &value_type, value.span)?;
+        self.ensure_collection_mutable(id, span)?;
+        Ok(self.map_put(id, key, value))
+    }
+
+    fn map_put_all(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [source] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let source_id = self.expect_collection_id(source.value.clone(), source.span)?;
+        let (key_type, value_type) = self.map_types(id);
+        self.ensure_collection_mutable(id, span)?;
+        let source_entries = self.map_put_all_entries(source_id, &key_type, source.span)?;
+        for (key, value) in source_entries {
+            let key = typed_value(key, &key_type, source.span)?;
+            let value = typed_value(value, &value_type, source.span)?;
+            self.map_put(id, key, value);
+        }
+        Ok(Value::Void)
+    }
+
+    fn map_put_all_entries(
+        &self,
+        source_id: CollectionId,
+        key_type: &TypeName,
+        span: Span,
+    ) -> Result<Vec<(Value, Value)>, Diagnostic> {
+        match self.collection(source_id) {
+            Collection::Map { entries, .. } => Ok(entries.clone()),
+            Collection::List { elements, .. } => {
+                self.sobject_map_entries(key_type, elements.clone(), span)
+            }
+            Collection::Set { .. } => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn map_remove(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [key] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let value_type = self.map_value_type(id);
+        let key = self.typed_map_key(id, key)?;
+        self.ensure_collection_mutable(id, span)?;
+        let Some(index) = self.map_key_index(id, &key) else {
+            return Ok(Value::Null(Some(value_type)));
+        };
+        let Collection::Map { entries, .. } = self.collection_mut(id) else {
+            unreachable!()
+        };
+        Ok(entries.remove(index).1)
+    }
+
+    fn map_size(
+        &self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let Collection::Map { entries, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        Ok(Value::Integer(collection_size(entries.len(), span)?))
+    }
+
+    fn map_values(
+        &mut self,
+        id: CollectionId,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let (value_type, elements) = match self.collection(id) {
+            Collection::Map {
+                value_type,
+                entries,
+                ..
+            } => (
+                value_type.clone(),
+                entries.iter().map(|(_, value)| value.clone()).collect(),
+            ),
+            _ => unreachable!(),
+        };
+        Ok(self.allocate(Collection::List {
+            element_type: value_type,
+            elements,
+            iteration_depth: 0,
+        }))
+    }
+
+    fn map_types(&self, id: CollectionId) -> (TypeName, TypeName) {
+        match self.collection(id) {
+            Collection::Map {
+                key_type,
+                value_type,
+                ..
+            } => (key_type.clone(), value_type.clone()),
+            _ => unreachable!(),
+        }
+    }
+
+    fn map_value_type(&self, id: CollectionId) -> TypeName {
+        let Collection::Map { value_type, .. } = self.collection(id) else {
+            unreachable!()
+        };
+        value_type.clone()
     }
 
     fn clone_map(&mut self, id: CollectionId, deep: bool, span: Span) -> Result<Value, Diagnostic> {
