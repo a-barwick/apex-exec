@@ -624,6 +624,85 @@ fn string_math_and_system_calls_cover_utf16_indices() {
 }
 
 #[test]
+fn string_instance_dispatch_preserves_helper_family_boundaries() {
+    let output = execute_source(
+        "String missing = null; \
+         System.debug('Alpha'.containsIgnoreCase('PH')); \
+         System.debug('left:right'.substringBefore(':')); \
+         System.debug('left:right'.substringAfter(':')); \
+         System.debug('[middle]'.substringBetween('[', ']')); \
+         System.debug('A😀B'.left(3)); \
+         System.debug('a,b,'.split(',').size()); \
+         System.debug('replace'.replace('place', 'turn')); \
+         System.debug('A1B2'.replaceAll('\\\\d', '-')); \
+         System.debug('value'.equals(missing));",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "true", "left", "right", "middle", "A😀", "2", "return", "A-B-", "false",
+        ]
+    );
+
+    let error = execute_source("System.debug('😀'.left(1));").unwrap_err();
+    assert_eq!(
+        error.message,
+        "String length splits a UTF-16 surrogate pair"
+    );
+}
+
+#[test]
+fn platform_value_rendering_preserves_stable_debug_text() {
+    let output = execute_source(
+        "Blob body = Blob.valueOf('ok'); \
+         HttpRequest request = new HttpRequest(); \
+         request.setMethod('POST'); \
+         request.setEndpoint('https://example.test'); \
+         Database.DmlOptions options = new Database.DmlOptions(); \
+         System.debug(body); System.debug(request); System.debug(options);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "Blob[2]",
+            "HttpRequest[POST https://example.test]",
+            "Database.DmlOptions",
+        ]
+    );
+}
+
+#[test]
+fn equality_cost_for_equal_lists_is_linear_in_their_elements() {
+    const ELEMENTS: usize = 512;
+    let mut interpreter = Interpreter::new();
+    let elements = (0..ELEMENTS)
+        .map(|value| Value::Integer(value as i64))
+        .collect();
+    let left = interpreter.allocate(Collection::List {
+        element_type: TypeName::Integer,
+        elements,
+        iteration_depth: 0,
+    });
+    let right = interpreter.allocate(Collection::List {
+        element_type: TypeName::Integer,
+        elements: (0..ELEMENTS)
+            .map(|value| Value::Integer(value as i64))
+            .collect(),
+        iteration_depth: 0,
+    });
+
+    let (equal, stats) = interpreter.values_equal_with_stats(&left, &right);
+
+    assert!(equal);
+    assert_eq!(stats.equality_pairs, 1);
+    assert_eq!(stats.equality_comparisons, ELEMENTS + 1);
+}
+
+#[test]
 fn reports_collection_bounds_null_and_negative_size_failures() {
     let bounds =
         execute_source("List<Integer> values = new List<Integer>{1}; System.debug(values[1]);")

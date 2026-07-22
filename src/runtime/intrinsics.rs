@@ -362,192 +362,260 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         span: Span,
     ) -> Result<Value, Diagnostic> {
         match intrinsic {
-            StringIntrinsic::Length => {
-                let [] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let length = i64::try_from(receiver.encode_utf16().count()).map_err(|_| {
-                    runtime_exception("StringException", "String length is too large", span)
-                })?;
-                Ok(Value::Integer(length))
-            }
+            StringIntrinsic::Length => self.string_length(&receiver, arguments, span),
             StringIntrinsic::Contains
             | StringIntrinsic::ContainsIgnoreCase
             | StringIntrinsic::StartsWith
             | StringIntrinsic::EndsWith
             | StringIntrinsic::Equals
             | StringIntrinsic::EqualsIgnoreCase
-            | StringIntrinsic::IndexOf => {
-                let [argument] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                if matches!(
-                    intrinsic,
-                    StringIntrinsic::Equals | StringIntrinsic::EqualsIgnoreCase
-                ) && matches!(argument.value, Value::Null(_))
-                {
-                    return Ok(Value::Boolean(false));
-                }
-                let argument = expect_string(&argument.value, argument.span)?;
-                match intrinsic {
-                    StringIntrinsic::Contains => Ok(Value::Boolean(receiver.contains(argument))),
-                    StringIntrinsic::ContainsIgnoreCase => Ok(Value::Boolean(
-                        receiver.to_lowercase().contains(&argument.to_lowercase()),
-                    )),
-                    StringIntrinsic::StartsWith => {
-                        Ok(Value::Boolean(receiver.starts_with(argument)))
-                    }
-                    StringIntrinsic::EndsWith => Ok(Value::Boolean(receiver.ends_with(argument))),
-                    StringIntrinsic::Equals => Ok(Value::Boolean(receiver == argument)),
-                    StringIntrinsic::EqualsIgnoreCase => Ok(Value::Boolean(
-                        receiver.to_lowercase() == argument.to_lowercase(),
-                    )),
-                    StringIntrinsic::IndexOf => {
-                        let index = receiver.find(argument).map_or(-1, |byte_index| {
-                            i64::try_from(receiver[..byte_index].encode_utf16().count())
-                                .expect("String index fits in i64 when String length does")
-                        });
-                        Ok(Value::Integer(index))
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            | StringIntrinsic::IndexOf => self.string_search(&receiver, intrinsic, arguments, span),
             StringIntrinsic::Substring => self.string_substring(&receiver, arguments, span),
             StringIntrinsic::SubstringBefore
             | StringIntrinsic::SubstringAfter
             | StringIntrinsic::SubstringAfterLast => {
-                let [separator] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let separator = expect_string(&separator.value, separator.span)?;
-                let value = match intrinsic {
-                    StringIntrinsic::SubstringBefore => receiver
-                        .find(separator)
-                        .map_or_else(|| receiver.clone(), |index| receiver[..index].to_owned()),
-                    StringIntrinsic::SubstringAfter => {
-                        receiver.find(separator).map_or_else(String::new, |index| {
-                            receiver[index + separator.len()..].to_owned()
-                        })
-                    }
-                    StringIntrinsic::SubstringAfterLast => {
-                        receiver.rfind(separator).map_or_else(String::new, |index| {
-                            receiver[index + separator.len()..].to_owned()
-                        })
-                    }
-                    _ => unreachable!(),
-                };
-                Ok(Value::String(value))
+                self.string_relative_substring(&receiver, intrinsic, arguments, span)
             }
             StringIntrinsic::SubstringBetween => {
-                let [opening, closing] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let opening = expect_string(&opening.value, opening.span)?;
-                let closing = expect_string(&closing.value, closing.span)?;
-                let Some(start) = receiver.find(opening).map(|index| index + opening.len()) else {
-                    return Ok(Value::Null(Some(TypeName::String)));
-                };
-                let Some(end) = receiver[start..].find(closing).map(|index| start + index) else {
-                    return Ok(Value::Null(Some(TypeName::String)));
-                };
-                Ok(Value::String(receiver[start..end].to_owned()))
+                self.string_substring_between(&receiver, arguments, span)
             }
-            StringIntrinsic::Left => {
-                let [length] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let length_span = length.span;
-                let length = nonnegative_usize(&length.value, length_span, "String length")?;
-                let utf16_length = receiver.encode_utf16().count();
-                let end = length.min(utf16_length);
-                let end_byte = utf16_byte_index(&receiver, end).ok_or_else(|| {
-                    runtime_exception(
-                        "StringException",
-                        "String length splits a UTF-16 surrogate pair",
-                        length_span,
-                    )
-                })?;
-                Ok(Value::String(receiver[..end_byte].to_owned()))
-            }
-            StringIntrinsic::Split => {
-                let ([pattern] | [pattern, _]) = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let pattern_span = pattern.span;
-                let pattern = expect_string(&pattern.value, pattern_span)?;
-                let regex = Regex::new(pattern).map_err(|error| {
-                    runtime_exception(
-                        "StringException",
-                        format!("invalid split regular expression: {error}"),
-                        pattern_span,
-                    )
-                })?;
-                let limit = arguments
-                    .get(1)
-                    .map(|argument| expect_integer(&argument.value, argument.span))
-                    .transpose()?
-                    .unwrap_or(0);
-                let mut pieces = if limit > 0 {
-                    regex
-                        .splitn(&receiver, usize::try_from(limit).unwrap_or(usize::MAX))
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                } else {
-                    regex
-                        .split(&receiver)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                };
-                if limit == 0 {
-                    while pieces.last().is_some_and(String::is_empty) {
-                        pieces.pop();
-                    }
-                }
-                Ok(self.allocate(Collection::List {
-                    element_type: TypeName::String,
-                    elements: pieces.into_iter().map(Value::String).collect(),
-                    iteration_depth: 0,
-                }))
-            }
+            StringIntrinsic::Left => self.string_left(&receiver, arguments, span),
+            StringIntrinsic::Split => self.string_split(&receiver, arguments, span),
             StringIntrinsic::Trim | StringIntrinsic::ToLowerCase | StringIntrinsic::ToUpperCase => {
-                let [] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let value = match intrinsic {
-                    StringIntrinsic::Trim => receiver.trim().to_owned(),
-                    StringIntrinsic::ToLowerCase => receiver.to_lowercase(),
-                    StringIntrinsic::ToUpperCase => receiver.to_uppercase(),
-                    _ => unreachable!(),
-                };
-                Ok(Value::String(value))
+                self.string_transform(&receiver, intrinsic, arguments, span)
             }
-            StringIntrinsic::Replace => {
-                let [target, replacement] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let target = expect_string(&target.value, target.span)?;
-                let replacement = expect_string(&replacement.value, replacement.span)?;
-                Ok(Value::String(receiver.replace(target, replacement)))
+            StringIntrinsic::Replace => self.string_replace(&receiver, arguments, span),
+            StringIntrinsic::ReplaceAll => self.string_replace_all(&receiver, arguments, span),
+        }
+    }
+
+    fn string_length(
+        &self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let length = i64::try_from(receiver.encode_utf16().count()).map_err(|_| {
+            runtime_exception("StringException", "String length is too large", span)
+        })?;
+        Ok(Value::Integer(length))
+    }
+
+    fn string_search(
+        &self,
+        receiver: &str,
+        intrinsic: StringIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [argument] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        if matches!(
+            intrinsic,
+            StringIntrinsic::Equals | StringIntrinsic::EqualsIgnoreCase
+        ) && matches!(argument.value, Value::Null(_))
+        {
+            return Ok(Value::Boolean(false));
+        }
+        let argument = expect_string(&argument.value, argument.span)?;
+        let value = match intrinsic {
+            StringIntrinsic::Contains => Value::Boolean(receiver.contains(argument)),
+            StringIntrinsic::ContainsIgnoreCase => {
+                Value::Boolean(receiver.to_lowercase().contains(&argument.to_lowercase()))
             }
-            StringIntrinsic::ReplaceAll => {
-                let [pattern, replacement] = arguments else {
-                    return Err(invalid_call_arguments(span));
-                };
-                let pattern_span = pattern.span;
-                let pattern = expect_string(&pattern.value, pattern_span)?;
-                let replacement = expect_string(&replacement.value, replacement.span)?;
-                let regex = Regex::new(pattern).map_err(|error| {
-                    runtime_exception(
-                        "StringException",
-                        format!("invalid replacement regular expression: {error}"),
-                        pattern_span,
-                    )
-                })?;
-                Ok(Value::String(
-                    regex.replace_all(&receiver, replacement).into_owned(),
-                ))
+            StringIntrinsic::StartsWith => Value::Boolean(receiver.starts_with(argument)),
+            StringIntrinsic::EndsWith => Value::Boolean(receiver.ends_with(argument)),
+            StringIntrinsic::Equals => Value::Boolean(receiver == argument),
+            StringIntrinsic::EqualsIgnoreCase => {
+                Value::Boolean(receiver.to_lowercase() == argument.to_lowercase())
+            }
+            StringIntrinsic::IndexOf => {
+                let index = receiver.find(argument).map_or(-1, |byte_index| {
+                    i64::try_from(receiver[..byte_index].encode_utf16().count())
+                        .expect("String index fits in i64 when String length does")
+                });
+                Value::Integer(index)
+            }
+            _ => unreachable!("caller selects search intrinsics"),
+        };
+        Ok(value)
+    }
+
+    fn string_relative_substring(
+        &self,
+        receiver: &str,
+        intrinsic: StringIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [separator] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let separator = expect_string(&separator.value, separator.span)?;
+        let value = match intrinsic {
+            StringIntrinsic::SubstringBefore => receiver
+                .find(separator)
+                .map_or_else(|| receiver.to_owned(), |index| receiver[..index].to_owned()),
+            StringIntrinsic::SubstringAfter => {
+                receiver.find(separator).map_or_else(String::new, |index| {
+                    receiver[index + separator.len()..].to_owned()
+                })
+            }
+            StringIntrinsic::SubstringAfterLast => {
+                receiver.rfind(separator).map_or_else(String::new, |index| {
+                    receiver[index + separator.len()..].to_owned()
+                })
+            }
+            _ => unreachable!("caller selects relative substring intrinsics"),
+        };
+        Ok(Value::String(value))
+    }
+
+    fn string_substring_between(
+        &self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [opening, closing] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let opening = expect_string(&opening.value, opening.span)?;
+        let closing = expect_string(&closing.value, closing.span)?;
+        let Some(start) = receiver.find(opening).map(|index| index + opening.len()) else {
+            return Ok(Value::Null(Some(TypeName::String)));
+        };
+        let Some(end) = receiver[start..].find(closing).map(|index| start + index) else {
+            return Ok(Value::Null(Some(TypeName::String)));
+        };
+        Ok(Value::String(receiver[start..end].to_owned()))
+    }
+
+    fn string_left(
+        &self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [length] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let length_span = length.span;
+        let length = nonnegative_usize(&length.value, length_span, "String length")?;
+        let utf16_length = receiver.encode_utf16().count();
+        let end = length.min(utf16_length);
+        let end_byte = utf16_byte_index(receiver, end).ok_or_else(|| {
+            runtime_exception(
+                "StringException",
+                "String length splits a UTF-16 surrogate pair",
+                length_span,
+            )
+        })?;
+        Ok(Value::String(receiver[..end_byte].to_owned()))
+    }
+
+    fn string_split(
+        &mut self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let ([pattern] | [pattern, _]) = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let pattern_span = pattern.span;
+        let pattern = expect_string(&pattern.value, pattern_span)?;
+        let regex = Regex::new(pattern).map_err(|error| {
+            runtime_exception(
+                "StringException",
+                format!("invalid split regular expression: {error}"),
+                pattern_span,
+            )
+        })?;
+        let limit = arguments
+            .get(1)
+            .map(|argument| expect_integer(&argument.value, argument.span))
+            .transpose()?
+            .unwrap_or(0);
+        let mut pieces = if limit > 0 {
+            regex
+                .splitn(receiver, usize::try_from(limit).unwrap_or(usize::MAX))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        } else {
+            regex.split(receiver).map(str::to_owned).collect::<Vec<_>>()
+        };
+        if limit == 0 {
+            while pieces.last().is_some_and(String::is_empty) {
+                pieces.pop();
             }
         }
+        Ok(self.allocate(Collection::List {
+            element_type: TypeName::String,
+            elements: pieces.into_iter().map(Value::String).collect(),
+            iteration_depth: 0,
+        }))
+    }
+
+    fn string_transform(
+        &self,
+        receiver: &str,
+        intrinsic: StringIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let value = match intrinsic {
+            StringIntrinsic::Trim => receiver.trim().to_owned(),
+            StringIntrinsic::ToLowerCase => receiver.to_lowercase(),
+            StringIntrinsic::ToUpperCase => receiver.to_uppercase(),
+            _ => unreachable!("caller selects String transformations"),
+        };
+        Ok(Value::String(value))
+    }
+
+    fn string_replace(
+        &self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [target, replacement] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let target = expect_string(&target.value, target.span)?;
+        let replacement = expect_string(&replacement.value, replacement.span)?;
+        Ok(Value::String(receiver.replace(target, replacement)))
+    }
+
+    fn string_replace_all(
+        &self,
+        receiver: &str,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [pattern, replacement] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let pattern_span = pattern.span;
+        let pattern = expect_string(&pattern.value, pattern_span)?;
+        let replacement = expect_string(&replacement.value, replacement.span)?;
+        let regex = Regex::new(pattern).map_err(|error| {
+            runtime_exception(
+                "StringException",
+                format!("invalid replacement regular expression: {error}"),
+                pattern_span,
+            )
+        })?;
+        Ok(Value::String(
+            regex.replace_all(receiver, replacement).into_owned(),
+        ))
     }
 
     fn string_substring(
