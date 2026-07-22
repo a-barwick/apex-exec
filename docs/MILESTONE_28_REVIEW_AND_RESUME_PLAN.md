@@ -213,8 +213,8 @@ package after review and integration.
 | M28-M1 | Frontend and coverage maintainability restoration | Complete (`e044cea`; review approved and integrated; fresh Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 37 downstream M2A–M5B debts against the unchanged baseline) | Clippy green after Q4C/Q4D integration at `73e82d1` | AST visitor, parser, coverage |
 | M28-M2A | Metadata import maintainability restoration | Complete (`a1c5141`; reviewed `fa82e55`/`1d40f3b` integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 32 downstream M2B–M5B debts) | M1 integrated at `e044cea` | Platform metadata |
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Complete (`898b88d`; reviewed `05db986`/`898b88d` integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 29 downstream M3A–M5B debts against the unchanged baseline) | M2A integrated at `a1c5141` | Platform database/schema/SQLite |
-| M28-M3A | Runtime call/member/construction restoration | Review (`codex/m28-m3a-runtime-core`; all three owned Lizard entries removed, 26 downstream M3B–M5B debts remain) | M2B integrated at `898b88d` | Runtime core |
-| M28-M3B | Runtime collection dispatch restoration | Blocked | M3A integrated | Runtime List/Set/Map intrinsics |
+| M28-M3A | Runtime call/member/construction restoration | Complete (`247db5c`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 26 downstream M3B–M5B debts against the unchanged baseline) | M2B integrated at `898b88d` | Runtime core |
+| M28-M3B | Runtime collection dispatch restoration | Ready | M3A integrated at `247db5c` | Runtime List/Set/Map intrinsics |
 | M28-M3C | Runtime String and value-graph restoration | Blocked | M3B integrated | Runtime String/value graph |
 | M28-M4 | Runtime platform dispatch decomposition | Blocked | M3C integrated | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Blocked | M4 integrated | `semantic/intrinsics.rs` |
