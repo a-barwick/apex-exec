@@ -7,8 +7,21 @@ use crate::{
         SoslQuery, SoslReturning, SoslScope,
     },
     diagnostic::Diagnostic,
+    span::Span,
     token::TokenKind,
 };
+
+struct SoqlTail {
+    where_clause: Option<SoqlCondition>,
+    access: SoqlAccess,
+    group_by: Vec<FieldPath>,
+    having: Option<SoqlCondition>,
+    order_by: Vec<SoqlOrderBy>,
+    limit: Option<SoqlValue>,
+    offset: Option<SoqlValue>,
+    all_rows: Option<Span>,
+    end: Span,
+}
 
 impl Parser {
     pub(super) fn parse_query_expression(&mut self) -> Result<Expression, Diagnostic> {
@@ -38,6 +51,23 @@ impl Parser {
         let select = self.parse_select_list()?;
         self.expect_keyword("from", "expected `FROM` after SOQL select list")?;
         let from = self.expect_identifier("expected an SObject type after `FROM`")?;
+        let tail = self.parse_soql_tail(from.span)?;
+        Ok(SoqlQuery {
+            select,
+            from,
+            where_clause: tail.where_clause,
+            access: tail.access,
+            group_by: tail.group_by,
+            having: tail.having,
+            order_by: tail.order_by,
+            limit: tail.limit,
+            offset: tail.offset,
+            all_rows: tail.all_rows.is_some(),
+            span: start.span.merge(tail.end),
+        })
+    }
+
+    fn parse_soql_tail(&mut self, from_span: Span) -> Result<SoqlTail, Diagnostic> {
         let where_clause = self.parse_optional_condition("where")?;
         let access = self.parse_optional_soql_access()?;
         let group_by = self.parse_optional_group_by()?;
@@ -45,20 +75,12 @@ impl Parser {
         let order_by = self.parse_optional_order_by()?;
         let limit = self.parse_optional_value_clause("limit")?;
         let offset = self.parse_optional_value_clause("offset")?;
-        let all_rows = if self.check_keyword("all") {
-            let start = self.advance().span;
-            let end = self.expect_keyword("rows", "expected `ROWS` after `ALL`")?;
-            Some(start.merge(end.span))
-        } else {
-            None
-        };
+        let all_rows = self.parse_optional_all_rows()?;
         let end = all_rows
             .or_else(|| offset.as_ref().map(SoqlValue::span))
             .or_else(|| limit.as_ref().map(SoqlValue::span))
-            .unwrap_or(from.span);
-        Ok(SoqlQuery {
-            select,
-            from,
+            .unwrap_or(from_span);
+        Ok(SoqlTail {
             where_clause,
             access,
             group_by,
@@ -66,9 +88,18 @@ impl Parser {
             order_by,
             limit,
             offset,
-            all_rows: all_rows.is_some(),
-            span: start.span.merge(end),
+            all_rows,
+            end,
         })
+    }
+
+    fn parse_optional_all_rows(&mut self) -> Result<Option<Span>, Diagnostic> {
+        if !self.check_keyword("all") {
+            return Ok(None);
+        }
+        let start = self.advance().span;
+        let end = self.expect_keyword("rows", "expected `ROWS` after `ALL`")?;
+        Ok(Some(start.merge(end.span)))
     }
 
     fn parse_optional_soql_access(&mut self) -> Result<SoqlAccess, Diagnostic> {
