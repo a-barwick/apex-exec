@@ -444,6 +444,39 @@ fn safe_navigation_handles_intrinsics_and_void_methods() {
 }
 
 #[test]
+fn member_dispatch_and_collection_copy_construction_evaluate_each_input_once() {
+    let output = execute_source(
+        "public class Factory { \
+             public static Integer receiverHits = 0; \
+             public static Integer argumentHits = 0; \
+             public static Integer sourceHits = 0; \
+             public Integer value; \
+             public Factory(Integer input) { value = input; } \
+             public static Factory make(Boolean present) { \
+                 receiverHits++; \
+                 return present ? new Factory(5) : null; \
+             } \
+             public static Integer suffix() { argumentHits++; return 2; } \
+             public static List<Integer> source() { \
+                 sourceHits++; \
+                 return new List<Integer>{1, 2}; \
+             } \
+             public Integer add(Integer suffix) { return value + suffix; } \
+         } \
+         Integer present = Factory.make(true)?.add(Factory.suffix()); \
+         Integer absent = Factory.make(false)?.add(Factory.suffix()) ?? 0; \
+         Integer member = Factory.make(true)?.value ?? 0; \
+         List<Integer> copied = new List<Integer>(Factory.source()); \
+         System.debug(present); System.debug(absent); System.debug(member); \
+         System.debug(copied.size()); System.debug(Factory.receiverHits); \
+         System.debug(Factory.argumentHits); System.debug(Factory.sourceHits);",
+    )
+    .unwrap();
+
+    assert_eq!(output, ["7", "0", "5", "2", "3", "1", "1"]);
+}
+
+#[test]
 fn instanceof_uses_runtime_identity_handles_generics_and_evaluates_once() {
     let output = execute_source(
         "public virtual class Parent {} \
