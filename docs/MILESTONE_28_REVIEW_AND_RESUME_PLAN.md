@@ -211,7 +211,7 @@ package after review and integration.
 | M28-Q4C | Remaining semantic Clippy cleanup | Complete (`2b27f17`; review approved; integrated with Q4D as `73e82d1`; fresh isolated-target Rust 1.88 format/check/full-test/Clippy pass) | Q4B integrated at `ea0881f` | Semantic and async contract helpers |
 | M28-Q4D | M21 test-only single-element-loop Clippy remediation | Complete (`dedeff97`; review approved; integrated as `73e82d1`; fresh isolated-target Rust 1.88 format/check/full-test/Clippy pass) | Q4C candidate verification at `2b27f17` | `tests/milestone21.rs`, finding/tracker documentation |
 | M28-M1 | Frontend and coverage maintainability restoration | Complete (`e044cea`; review approved and integrated; fresh Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 37 downstream M2A–M5B debts against the unchanged baseline) | Clippy green after Q4C/Q4D integration at `73e82d1` | AST visitor, parser, coverage |
-| M28-M2A | Metadata import maintainability restoration | Ready | M1 integrated at `e044cea` | Platform metadata |
+| M28-M2A | Metadata import maintainability restoration | Review (`fa82e55`; five owned entries removed; Rust 1.88 fmt/check/full-test/Clippy pass; Lizard reports exactly 32 downstream M2B–M5B debts) | M1 integrated at `e044cea` | Platform metadata |
 | M28-M2B | Database, schema, and SQLite maintainability restoration | Blocked | M2A integrated | Platform database/schema/SQLite |
 | M28-M3A | Runtime call/member/construction restoration | Blocked | M2B integrated | Runtime core |
 | M28-M3B | Runtime collection dispatch restoration | Blocked | M3A integrated | Runtime List/Set/Map intrinsics |
