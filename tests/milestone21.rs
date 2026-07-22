@@ -322,11 +322,10 @@ fn remaining_modifiers_and_multi_fields_fail_in_the_semantic_phase() {
 
     check("public class Example { transient Integer value; }").unwrap();
 
-    for source in ["public class Example { Integer first = 1, second; }"] {
-        parse(source).unwrap();
-        let error = check(source).unwrap_err();
-        assert!(error.message.contains("multi-declarator fields"));
-    }
+    let source = "public class Example { Integer first = 1, second; }";
+    parse(source).unwrap();
+    let error = check(source).unwrap_err();
+    assert!(error.message.contains("multi-declarator fields"));
 
     let fields = "public class Example { Integer first = 1, second; }";
     let program = parse(fields).unwrap();
