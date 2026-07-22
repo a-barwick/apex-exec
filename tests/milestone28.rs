@@ -2517,7 +2517,11 @@ fn rollup_summaries_compute_count_sum_min_and_max_with_one_child_scan() {
 
     let schema = SchemaCatalog::from_objects([invoice, line]).unwrap();
     let invoice_id = RecordId::generate("a10", 1).unwrap();
-    let mut records = vec![Record::new("Invoice__c", invoice_id.clone())];
+    let unmatched_invoice_id = RecordId::generate("a10", 2).unwrap();
+    let mut records = vec![
+        Record::new("Invoice__c", invoice_id.clone()),
+        Record::new("Invoice__c", unmatched_invoice_id.clone()),
+    ];
     for (sequence, amount, paid) in [(1, 10_i64, true), (2, 20, false), (3, 30, true)] {
         let mut record = Record::new(
             "InvoiceLine__c",
@@ -2562,12 +2566,28 @@ fn rollup_summaries_compute_count_sum_min_and_max_with_one_child_scan() {
     let QueryOutcome::Records(rows) = outcome else {
         panic!("roll-up query should return records");
     };
-    assert_eq!(rows.len(), 1);
-    let record = &rows[0].record;
+    assert_eq!(rows.len(), 2);
+    let record = &rows
+        .iter()
+        .find(|row| row.record.id() == &invoice_id)
+        .expect("invoice with matching child rows")
+        .record;
     assert_eq!(record.field("PaidLines__c"), Some(&DataValue::Integer(2)));
     assert_eq!(record.field("Total__c"), Some(&DataValue::Integer(60)));
     assert_eq!(record.field("Smallest__c"), Some(&DataValue::Integer(10)));
     assert_eq!(record.field("Largest__c"), Some(&DataValue::Integer(30)));
+    let empty_record = &rows
+        .iter()
+        .find(|row| row.record.id() == &unmatched_invoice_id)
+        .expect("invoice without matching child rows")
+        .record;
+    assert_eq!(
+        empty_record.field("PaidLines__c"),
+        Some(&DataValue::Integer(0))
+    );
+    assert_eq!(empty_record.field("Total__c"), Some(&DataValue::Integer(0)));
+    assert_eq!(empty_record.field("Smallest__c"), Some(&DataValue::Null));
+    assert_eq!(empty_record.field("Largest__c"), Some(&DataValue::Null));
     assert_eq!(
         database.last_query_object_scans(),
         2,

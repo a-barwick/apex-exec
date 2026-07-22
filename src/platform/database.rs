@@ -1247,16 +1247,41 @@ fn data_record_id(value: &DataValue) -> Option<RecordId> {
     }
 }
 
+#[derive(Clone)]
+struct RollupSummary {
+    field: String,
+    result_type: FieldType,
+    definition: SummaryDefinition,
+}
+
 fn hydrate_summary_fields<T: StorageTransaction>(
     schema: &SchemaCatalog,
     transaction: &mut T,
     parent_object: &str,
     parents: &mut [EvalRow],
 ) -> Result<usize, DatabaseError> {
+    let summaries = rollup_summaries(schema, parent_object)?;
+    if summaries.is_empty() || parents.is_empty() {
+        return Ok(0);
+    }
+    let children_by_object = scan_rollup_children(transaction, &summaries)?;
+    for summary in &summaries {
+        let children = children_by_object
+            .get(&summary.definition.child_object.to_ascii_lowercase())
+            .expect("summary child records were scanned");
+        hydrate_rollup_summary(schema, parent_object, parents, summary, children)?;
+    }
+    Ok(children_by_object.len())
+}
+
+fn rollup_summaries(
+    schema: &SchemaCatalog,
+    parent_object: &str,
+) -> Result<Vec<RollupSummary>, DatabaseError> {
     let object = schema
         .object(parent_object)
         .map_err(DatabaseError::schema)?;
-    let summaries = object
+    Ok(object
         .fields()
         .filter_map(|field| {
             let FieldType::Summary {
@@ -1266,118 +1291,143 @@ fn hydrate_summary_fields<T: StorageTransaction>(
             else {
                 return None;
             };
-            Some((
-                field.api_name().to_owned(),
-                result_type.as_ref().clone(),
-                definition.clone(),
-            ))
+            Some(RollupSummary {
+                field: field.api_name().to_owned(),
+                result_type: result_type.as_ref().clone(),
+                definition: definition.clone(),
+            })
         })
-        .collect::<Vec<_>>();
-    if summaries.is_empty() || parents.is_empty() {
-        return Ok(0);
-    }
+        .collect())
+}
 
+fn scan_rollup_children<T: StorageTransaction>(
+    transaction: &mut T,
+    summaries: &[RollupSummary],
+) -> Result<BTreeMap<String, Vec<Record>>, DatabaseError> {
     let mut children_by_object = BTreeMap::<String, Vec<Record>>::new();
-    for (_, _, definition) in &summaries {
-        let canonical = definition.child_object.to_ascii_lowercase();
+    for summary in summaries {
+        let canonical = summary.definition.child_object.to_ascii_lowercase();
         if let Entry::Vacant(entry) = children_by_object.entry(canonical) {
             entry.insert(
                 transaction
-                    .scan(&definition.child_object)
+                    .scan(&summary.definition.child_object)
                     .map_err(DatabaseError::storage)?,
             );
         }
     }
-    let scans = children_by_object.len();
+    Ok(children_by_object)
+}
+
+fn hydrate_rollup_summary(
+    schema: &SchemaCatalog,
+    parent_object: &str,
+    parents: &mut [EvalRow],
+    summary: &RollupSummary,
+    children: &[Record],
+) -> Result<(), DatabaseError> {
+    let initial = initial_rollup_value(summary.definition.operation);
     let parent_ids = parents
         .iter()
         .map(|parent| parent.record.id().to_string())
         .collect::<BTreeSet<_>>();
 
-    for (field, result_type, definition) in summaries {
-        let initial = match definition.operation {
-            SummaryOperation::Count | SummaryOperation::Sum => DataValue::Integer(0),
-            SummaryOperation::Min | SummaryOperation::Max => DataValue::Null,
+    let mut values = parent_ids
+        .iter()
+        .map(|id| (id.clone(), initial.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for child in children {
+        let Some(parent_id) = child
+            .field(&summary.definition.foreign_key_field)
+            .and_then(data_record_id)
+            .map(|id| id.to_string())
+        else {
+            continue;
         };
-        let mut values = parent_ids
-            .iter()
-            .map(|id| (id.clone(), initial.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let children = children_by_object
-            .get(&definition.child_object.to_ascii_lowercase())
-            .expect("summary child records were scanned");
-        for child in children {
-            let Some(parent_id) = child
-                .field(&definition.foreign_key_field)
-                .and_then(data_record_id)
-                .map(|id| id.to_string())
-            else {
-                continue;
-            };
-            let Some(current) = values.get_mut(&parent_id) else {
-                continue;
-            };
-            if !summary_filters_match(schema, &definition, child)? {
-                continue;
-            }
-            match definition.operation {
-                SummaryOperation::Count => {
-                    let DataValue::Integer(count) = current else {
-                        unreachable!("count roll-up accumulator is Integer")
-                    };
-                    *count = count.checked_add(1).ok_or_else(|| {
-                        DatabaseError::new(format!(
-                            "roll-up summary `{parent_object}.{field}` overflowed Integer"
-                        ))
-                    })?;
-                }
-                SummaryOperation::Sum => {
-                    let Some(DataValue::Integer(value)) = definition
-                        .summarized_field
-                        .as_deref()
-                        .and_then(|field| child.field(field))
-                    else {
-                        continue;
-                    };
-                    let DataValue::Integer(sum) = current else {
-                        unreachable!("sum roll-up accumulator is Integer")
-                    };
-                    *sum = sum.checked_add(*value).ok_or_else(|| {
-                        DatabaseError::new(format!(
-                            "roll-up summary `{parent_object}.{field}` overflowed Integer"
-                        ))
-                    })?;
-                }
-                SummaryOperation::Min | SummaryOperation::Max => {
-                    let Some(candidate) = definition
-                        .summarized_field
-                        .as_deref()
-                        .and_then(|field| child.field(field))
-                        .filter(|value| !matches!(value, DataValue::Null))
-                    else {
-                        continue;
-                    };
-                    let replace = matches!(current, DataValue::Null)
-                        || matches!(
-                            (definition.operation, compare_values(candidate, current)),
-                            (SummaryOperation::Min, Ordering::Less)
-                                | (SummaryOperation::Max, Ordering::Greater)
-                        );
-                    if replace {
-                        *current = candidate.clone();
-                    }
-                }
-            }
-        }
-        for parent in parents.iter_mut() {
-            let value = values
-                .remove(parent.record.id().as_str())
-                .unwrap_or(initial.clone());
-            debug_assert!(summary_value_matches(&result_type, &value));
-            parent.record.set_field(&field, value);
+        let Some(current) = values.get_mut(&parent_id) else {
+            continue;
+        };
+        if summary_filters_match(schema, &summary.definition, child)? {
+            update_rollup_value(parent_object, summary, child, current)?;
         }
     }
-    Ok(scans)
+    for parent in parents {
+        let value = values
+            .remove(parent.record.id().as_str())
+            .expect("roll-up values are initialized for every parent");
+        debug_assert!(summary_value_matches(&summary.result_type, &value));
+        parent.record.set_field(&summary.field, value);
+    }
+    Ok(())
+}
+
+fn initial_rollup_value(operation: SummaryOperation) -> DataValue {
+    match operation {
+        SummaryOperation::Count | SummaryOperation::Sum => DataValue::Integer(0),
+        SummaryOperation::Min | SummaryOperation::Max => DataValue::Null,
+    }
+}
+
+fn update_rollup_value(
+    parent_object: &str,
+    summary: &RollupSummary,
+    child: &Record,
+    current: &mut DataValue,
+) -> Result<(), DatabaseError> {
+    match summary.definition.operation {
+        SummaryOperation::Count => add_rollup_integer(parent_object, &summary.field, current, 1),
+        SummaryOperation::Sum => {
+            let Some(DataValue::Integer(value)) = summary
+                .definition
+                .summarized_field
+                .as_deref()
+                .and_then(|field| child.field(field))
+            else {
+                return Ok(());
+            };
+            add_rollup_integer(parent_object, &summary.field, current, *value)
+        }
+        SummaryOperation::Min | SummaryOperation::Max => {
+            let Some(candidate) = summary
+                .definition
+                .summarized_field
+                .as_deref()
+                .and_then(|field| child.field(field))
+                .filter(|value| !matches!(value, DataValue::Null))
+            else {
+                return Ok(());
+            };
+            let replace = matches!(current, DataValue::Null)
+                || matches!(
+                    (
+                        summary.definition.operation,
+                        compare_values(candidate, current)
+                    ),
+                    (SummaryOperation::Min, Ordering::Less)
+                        | (SummaryOperation::Max, Ordering::Greater)
+                );
+            if replace {
+                *current = candidate.clone();
+            }
+            Ok(())
+        }
+    }
+}
+
+fn add_rollup_integer(
+    parent_object: &str,
+    field: &str,
+    current: &mut DataValue,
+    amount: i64,
+) -> Result<(), DatabaseError> {
+    let DataValue::Integer(total) = current else {
+        unreachable!("count and sum roll-up accumulators are Integer")
+    };
+    *total = total.checked_add(amount).ok_or_else(|| {
+        DatabaseError::new(format!(
+            "roll-up summary `{parent_object}.{field}` overflowed Integer"
+        ))
+    })?;
+    Ok(())
 }
 
 fn summary_filters_match(

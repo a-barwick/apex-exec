@@ -501,35 +501,26 @@ fn migrate_field(
     object: &ObjectSchema,
     field: &FieldSchema,
 ) -> Result<(), SqliteError> {
-    let spec = field_spec(field);
+    let requested = FieldRegistrySpec::from_field(field);
     let existing = transaction
         .query_row(
             "SELECT field_type, nullable, COALESCE(target_object, ''),
                     COALESCE(relationship_name, ''),
                     COALESCE(controlling_field, ''),
                     COALESCE(computed_definition, '')
-             FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
+            FROM _apex_fields WHERE object_name = ?1 AND api_name = ?2",
             params![object.api_name(), field.api_name()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, bool>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            },
+            FieldRegistrySpec::from_row,
         )
         .optional()
         .map_err(SqliteError::database)?;
     if let Some(existing) = existing {
-        if existing != spec {
+        if existing != requested {
             return Err(SqliteError::IncompatibleMigration {
                 object: object.api_name().to_owned(),
                 field: field.api_name().to_owned(),
                 existing: format_field_spec(&existing),
-                requested: format_field_spec(&spec),
+                requested: format_field_spec(&requested),
             });
         }
         return Ok(());
@@ -557,12 +548,12 @@ fn migrate_field(
             params![
                 object.api_name(),
                 field.api_name(),
-                spec.0,
-                spec.1,
-                spec.2,
-                spec.3,
-                spec.4,
-                spec.5
+                requested.field_type,
+                requested.nullable,
+                requested.target_object,
+                requested.relationship_name,
+                requested.controlling_field,
+                requested.computed_definition
             ],
         )
         .map_err(SqliteError::database)?;
@@ -657,65 +648,50 @@ fn decode_field_type(
     }
 }
 
-fn field_spec(field: &FieldSchema) -> (String, bool, String, String, String, String) {
-    let relationship_name = field.relationship_name().unwrap_or_default().to_owned();
-    let (field_type, nullable, target_object, controlling_field, computed_definition) =
-        match field.data_type() {
-            FieldType::Boolean => (
-                "Boolean".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::Integer => (
-                "Integer".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::String => (
-                "String".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::Date => (
-                "Date".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::Datetime => (
-                "Datetime".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::Id => (
-                "Id".to_owned(),
-                field.is_nullable(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            FieldType::Reference { target_object } => (
-                "Reference".to_owned(),
-                field.is_nullable(),
-                target_object.clone(),
-                String::new(),
-                String::new(),
-            ),
+#[derive(Debug, PartialEq, Eq)]
+struct FieldRegistrySpec {
+    field_type: String,
+    nullable: bool,
+    target_object: String,
+    relationship_name: String,
+    controlling_field: String,
+    computed_definition: String,
+}
+
+impl FieldRegistrySpec {
+    fn from_field(field: &FieldSchema) -> Self {
+        let (target_object, controlling_field, computed_definition) =
+            Self::type_attributes(field.data_type());
+        Self {
+            field_type: field_type_registry_name(field.data_type()).to_owned(),
+            nullable: field.is_nullable(),
+            target_object,
+            relationship_name: field.relationship_name().unwrap_or_default().to_owned(),
+            controlling_field,
+            computed_definition,
+        }
+    }
+
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            field_type: row.get(0)?,
+            nullable: row.get(1)?,
+            target_object: row.get(2)?,
+            relationship_name: row.get(3)?,
+            controlling_field: row.get(4)?,
+            computed_definition: row.get(5)?,
+        })
+    }
+
+    fn type_attributes(field_type: &FieldType) -> (String, String, String) {
+        match field_type {
+            FieldType::Reference { target_object } => {
+                (target_object.clone(), String::new(), String::new())
+            }
             FieldType::MetadataRelationship {
                 target_metadata,
                 controlling_field,
             } => (
-                "MetadataRelationship".to_owned(),
-                field.is_nullable(),
                 target_metadata.clone(),
                 controlling_field.clone().unwrap_or_default(),
                 String::new(),
@@ -724,21 +700,13 @@ fn field_spec(field: &FieldSchema) -> (String, bool, String, String, String, Str
                 result_type,
                 definition,
             } => (
-                "Summary".to_owned(),
-                field.is_nullable(),
                 definition.child_object.clone(),
                 String::new(),
                 summary_definition_spec(result_type, definition),
             ),
-        };
-    (
-        field_type,
-        nullable,
-        target_object,
-        relationship_name,
-        controlling_field,
-        computed_definition,
-    )
+            _ => (String::new(), String::new(), String::new()),
+        }
+    }
 }
 
 fn summary_definition_spec(result_type: &FieldType, definition: &SummaryDefinition) -> String {
@@ -784,13 +752,22 @@ fn field_type_registry_name(field_type: &FieldType) -> &'static str {
     }
 }
 
-fn format_field_spec(spec: &(String, bool, String, String, String, String)) -> String {
-    if spec.2.is_empty() && spec.3.is_empty() && spec.4.is_empty() && spec.5.is_empty() {
-        format!("{} nullable={}", spec.0, spec.1)
+fn format_field_spec(spec: &FieldRegistrySpec) -> String {
+    if spec.target_object.is_empty()
+        && spec.relationship_name.is_empty()
+        && spec.controlling_field.is_empty()
+        && spec.computed_definition.is_empty()
+    {
+        format!("{} nullable={}", spec.field_type, spec.nullable)
     } else {
         format!(
             "{}({}) relationship={} controlling={} definition={} nullable={}",
-            spec.0, spec.2, spec.3, spec.4, spec.5, spec.1
+            spec.field_type,
+            spec.target_object,
+            spec.relationship_name,
+            spec.controlling_field,
+            spec.computed_definition,
+            spec.nullable
         )
     }
 }
@@ -1112,6 +1089,34 @@ mod tests {
                 .to_string()
                 .contains("cannot migrate `Mapping__mdt.TargetField__c`")
         );
+    }
+
+    #[test]
+    fn field_registry_specs_keep_scalar_and_relationship_attributes_distinct() {
+        let scalar =
+            FieldRegistrySpec::from_field(&FieldSchema::new("Name", FieldType::String, false));
+        assert_eq!(scalar.field_type, "String");
+        assert!(!scalar.nullable);
+        assert!(scalar.target_object.is_empty());
+        assert!(scalar.relationship_name.is_empty());
+        assert!(scalar.controlling_field.is_empty());
+        assert!(scalar.computed_definition.is_empty());
+
+        let relationship = FieldRegistrySpec::from_field(
+            &FieldSchema::new(
+                "OwnerId",
+                FieldType::Reference {
+                    target_object: "User".to_owned(),
+                },
+                true,
+            )
+            .with_relationship_name("Owner"),
+        );
+        assert_eq!(relationship.field_type, "Reference");
+        assert_eq!(relationship.target_object, "User");
+        assert_eq!(relationship.relationship_name, "Owner");
+        assert!(relationship.controlling_field.is_empty());
+        assert!(relationship.computed_definition.is_empty());
     }
 
     #[test]

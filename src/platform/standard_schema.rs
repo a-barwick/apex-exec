@@ -16,10 +16,31 @@ enum StandardField<'a> {
 }
 
 pub(super) fn standard_objects() -> Vec<ObjectSchema> {
+    let mut objects = core_standard_objects();
+    objects.extend(apex_standard_objects());
+    objects.extend(platform_standard_objects());
+    objects.extend(flow_standard_objects());
+    objects.extend(access_standard_objects());
+    objects
+}
+
+fn core_standard_objects() -> Vec<ObjectSchema> {
     use StandardField as F;
     vec![
         object("Account", &[F::Id("Id"), F::String("Name")]),
         object("AggregateResult", &[F::Id("Id")]),
+    ]
+}
+
+fn apex_standard_objects() -> Vec<ObjectSchema> {
+    let mut objects = apex_definition_objects();
+    objects.extend(apex_execution_objects());
+    objects
+}
+
+fn apex_definition_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "ApexClass",
             &[
@@ -54,6 +75,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 },
             ],
         ),
+    ]
+}
+
+fn apex_execution_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "ApexTrigger",
             &[
@@ -98,6 +125,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 },
             ],
         ),
+    ]
+}
+
+fn platform_standard_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "AuthSession",
             &[
@@ -144,6 +177,19 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 F::String("QualifiedApiName"),
             ],
         ),
+    ]
+}
+
+fn flow_standard_objects() -> Vec<ObjectSchema> {
+    let mut objects = flow_definition_objects();
+    objects.extend(flow_context_objects());
+    objects.extend(flow_organization_objects());
+    objects
+}
+
+fn flow_definition_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "FlowDefinitionView",
             &[
@@ -186,6 +232,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 F::String("Status"),
             ],
         ),
+    ]
+}
+
+fn flow_context_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "Group",
             &[
@@ -214,6 +266,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
             "Network",
             &[F::Id("Id"), F::String("Name"), F::String("UrlPathPrefix")],
         ),
+    ]
+}
+
+fn flow_organization_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "OmniProcess",
             &[
@@ -253,6 +311,19 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 F::Date("TrialExpirationDate"),
             ],
         ),
+    ]
+}
+
+fn access_standard_objects() -> Vec<ObjectSchema> {
+    let mut objects = permission_objects();
+    objects.extend(topic_objects());
+    objects.extend(user_objects());
+    objects
+}
+
+fn permission_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "PermissionSet",
             &[
@@ -290,6 +361,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 },
             ],
         ),
+    ]
+}
+
+fn topic_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object("Topic", &[F::Id("Id"), F::String("Name")]),
         object(
             "TopicAssignment",
@@ -303,6 +380,12 @@ pub(super) fn standard_objects() -> Vec<ObjectSchema> {
                 F::Id("EntityId"),
             ],
         ),
+    ]
+}
+
+fn user_objects() -> Vec<ObjectSchema> {
+    use StandardField as F;
+    vec![
         object(
             "User",
             &[
@@ -412,6 +495,7 @@ mod tests {
                 target_object: "Profile".to_owned(),
             }
         );
+        assert!(user.field("UnmodeledField__c").is_err());
     }
 
     #[test]
