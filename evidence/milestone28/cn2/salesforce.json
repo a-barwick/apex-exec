@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "nested-enum-equality-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN2EnumContainer.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/classes/M28CN2EqualityOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "different": true,
+        "same": true
+      }
+    }
+  ]
+}

@@ -284,7 +284,7 @@ package after review and integration.
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-1/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | C1 integrated at `f841099` | Enterprise evidence only |
 | M28-CN | One next-ranked compatibility family | Complete (integrated at `d2aefd2`; transient property semantics; reviewed; local and Salesforce differential evidence 2/2; post-slice census recorded) | CENSUS-1 complete | Semantic modifier and JSON serialization |
 | M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated at `d2aefd2` | Enterprise evidence only |
-| M28-CN2 | One next-ranked compatibility family | Ready (cross-type equality selected by CENSUS-2; implementation not started) | Latest census | Determined by fresh first blockers |
+| M28-CN2 | One next-ranked compatibility family | Active (`codex/m28-cn2-cross-type-equality`; cross-type equality selected by CENSUS-2) | Latest census | Determined by fresh first blockers |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |

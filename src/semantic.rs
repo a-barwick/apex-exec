@@ -6459,7 +6459,7 @@ impl Checker {
                 operator_span,
             ),
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                checked_equality_type(left_type, operator, right_type, operator_span)
+                self.checked_equality_type(left_type, operator, right_type, operator_span)
             }
             BinaryOperator::ExactEqual | BinaryOperator::ExactNotEqual => {
                 self.checked_exact_equality_type(left_type, operator, right_type, operator_span)
@@ -6488,6 +6488,32 @@ impl Checker {
         let comparable = match (&left, &right) {
             (ExpressionType::Value(left), ExpressionType::Value(right)) => {
                 self.is_subtype(left, right) || self.is_subtype(right, left)
+            }
+            (ExpressionType::Null, ExpressionType::Value(_))
+            | (ExpressionType::Value(_), ExpressionType::Null)
+            | (ExpressionType::Null, ExpressionType::Null) => true,
+            (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
+        };
+        if comparable {
+            Ok(ExpressionType::Value(TypeName::Boolean))
+        } else {
+            Err(invalid_binary_operands(operator, &left, &right, span))
+        }
+    }
+
+    fn checked_equality_type(
+        &self,
+        left: ExpressionType,
+        operator: BinaryOperator,
+        right: ExpressionType,
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let comparable = match (&left, &right) {
+            (ExpressionType::Value(left_value), ExpressionType::Value(right_value)) => {
+                self.same_type_identity(left_value, right_value)
+                    || left_value == &TypeName::Object
+                    || right_value == &TypeName::Object
+                    || (is_numeric_type(&left) && is_numeric_type(&right))
             }
             (ExpressionType::Null, ExpressionType::Value(_))
             | (ExpressionType::Value(_), ExpressionType::Null)
@@ -7368,31 +7394,6 @@ fn literal_expression_type(expression: &Expression) -> Option<Result<ExpressionT
         Expression::NullLiteral(..) => Ok(ExpressionType::Null),
         _ => return None,
     })
-}
-
-fn checked_equality_type(
-    left: ExpressionType,
-    operator: BinaryOperator,
-    right: ExpressionType,
-    span: Span,
-) -> Result<ExpressionType, Diagnostic> {
-    let comparable = match (&left, &right) {
-        (ExpressionType::Value(left_value), ExpressionType::Value(right_value)) => {
-            left_value == right_value
-                || left_value == &TypeName::Object
-                || right_value == &TypeName::Object
-                || (is_numeric_type(&left) && is_numeric_type(&right))
-        }
-        (ExpressionType::Null, ExpressionType::Value(_))
-        | (ExpressionType::Value(_), ExpressionType::Null)
-        | (ExpressionType::Null, ExpressionType::Null) => true,
-        (ExpressionType::Void, _) | (_, ExpressionType::Void) => false,
-    };
-    if comparable {
-        Ok(ExpressionType::Value(TypeName::Boolean))
-    } else {
-        Err(invalid_binary_operands(operator, &left, &right, span))
-    }
 }
 
 fn checked_boolean_type(
