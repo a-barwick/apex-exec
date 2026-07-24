@@ -219,7 +219,7 @@ package after review and integration.
 | M28-M4 | Runtime platform dispatch decomposition | Complete (`8419a40`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard clears all M4 debt and reports exactly 16 downstream M5A/M5B debts against the unchanged baseline) | M3C integrated at `ae85601` | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Complete (`ec14859`; independently reviewed and integrated; fresh Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard leaves exactly the eight declared M5B `semantic.rs` debts against the unchanged baseline) | M4 integrated at `3991343` | `semantic/intrinsics.rs` |
 | M28-M5B | Core semantic hotspot restoration | Complete (`f42b785`; independently reviewed and integrated; fresh Rust 1.88 format/check/full-test/Clippy and documentation validation pass; Lizard clears the final eight declared `semantic.rs` debts against the unchanged baseline) | M5A integrated | `semantic.rs` |
-| M28-V0 | Integrated quality-gate checkpoint | Ready | Q1-Q4C, M1-M5B | Verification and documentation |
+| M28-V0 | Integrated quality-gate checkpoint | Active (`codex/m28-v0-quality-gate` from `8e82681`) | Q1-Q4C, M1-M5B | Verification and documentation |
 | M28-C1 | `Id.getSObjectType` compatibility slice | Blocked | V0 complete | Typed ID/schema/runtime boundary |
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Blocked | C1 integrated | Enterprise evidence only |
 | M28-CN | One next-ranked compatibility family | Blocked | Latest census | Determined by fresh first blockers |
