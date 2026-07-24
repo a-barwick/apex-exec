@@ -165,42 +165,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     id_to_18(&id)
                 }))
             }
-            P::IdGetSObjectType => {
-                expect_no_arguments(arguments, span)?;
-                let id = match receiver {
-                    Some(Value::Id(value)) => value,
-                    Some(Value::Null(_)) => {
-                        return Err(runtime_exception(
-                            "NullPointerException",
-                            "attempt to de-reference a null value while calling `getSObjectType`",
-                            span,
-                        ));
-                    }
-                    _ => return Err(invalid_runtime_operands(span)),
-                };
-                let id = RecordId::parse(id.clone()).map_err(|error| {
-                    runtime_exception(
-                        "SObjectException",
-                        format!("Id.getSObjectType requires a valid Id: {error}"),
-                        span,
-                    )
-                })?;
-                let key_prefix = &id.as_str()[..3];
-                let Some(object_id) = self
-                    .program()
-                    .schema()
-                    .object_index_by_key_prefix(key_prefix)
-                else {
-                    return Err(runtime_exception(
-                        "SObjectException",
-                        format!("Id.getSObjectType cannot resolve key prefix `{key_prefix}`"),
-                        span,
-                    ));
-                };
-                Ok(self
-                    .store
-                    .allocate_platform(PlatformValue::SObjectType(object_id)))
-            }
+            P::IdGetSObjectType => self.call_id_get_sobject_type(receiver, arguments, span),
             P::BlobValueOf => {
                 let [value] = arguments else {
                     return Err(invalid_call_arguments(span));
@@ -671,6 +636,48 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .allocate_platform(PlatformValue::HttpResponse(response)))
             }
         }
+    }
+
+    fn call_id_get_sobject_type(
+        &mut self,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        expect_no_arguments(arguments, span)?;
+        let id = match receiver {
+            Some(Value::Id(value)) => value,
+            Some(Value::Null(_)) => {
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "attempt to de-reference a null value while calling `getSObjectType`",
+                    span,
+                ));
+            }
+            _ => return Err(invalid_runtime_operands(span)),
+        };
+        let id = RecordId::parse(id.clone()).map_err(|error| {
+            runtime_exception(
+                "SObjectException",
+                format!("Id.getSObjectType requires a valid Id: {error}"),
+                span,
+            )
+        })?;
+        let key_prefix = &id.as_str()[..3];
+        let Some(object_id) = self
+            .program()
+            .schema()
+            .object_index_by_key_prefix(key_prefix)
+        else {
+            return Err(runtime_exception(
+                "SObjectException",
+                format!("Id.getSObjectType cannot resolve key prefix `{key_prefix}`"),
+                span,
+            ));
+        };
+        Ok(self
+            .store
+            .allocate_platform(PlatformValue::SObjectType(object_id)))
     }
 
     fn call_date_intrinsic(
