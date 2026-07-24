@@ -1353,15 +1353,18 @@ fn transient_instance_fields_execute_normally_and_are_omitted_from_json() {
 public class SerializableState {
     public Integer retained = 7;
     public transient final String ephemeral = 'secret';
+    public transient String ephemeralProperty { get; set; }
 }
 
 SerializableState state = new SerializableState();
+state.ephemeralProperty = 'property-secret';
 System.debug(state.ephemeral);
+System.debug(state.ephemeralProperty);
 System.debug(JSON.serialize(state));
 "#,
     )
     .unwrap();
-    assert_eq!(output, ["secret", "{\"retained\":7}"]);
+    assert_eq!(output, ["secret", "property-secret", "{\"retained\":7}"]);
 
     let invalid_local = check("transient Integer localValue = 1;").unwrap_err();
     assert!(

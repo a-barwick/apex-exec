@@ -2882,9 +2882,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             field.name.spelling.clone(),
                             field.modifiers.contains(&crate::ast::Modifier::Transient),
                         ),
-                        crate::ast::ClassMember::Property(property) => {
-                            (property.name.spelling.clone(), false)
-                        }
+                        crate::ast::ClassMember::Property(property) => (
+                            property.name.spelling.clone(),
+                            property
+                                .modifiers
+                                .contains(&crate::ast::Modifier::Transient),
+                        ),
                         _ => unreachable!("instance slot metadata refers to a value member"),
                     };
                     if !transient {
