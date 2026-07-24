@@ -1660,6 +1660,16 @@ impl Checker {
                 )?;
                 TypeName::String
             }
+            P::IdGetSObjectType => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                TypeName::SObjectType
+            }
             P::VisualEditorDataRowGetLabel | P::VisualEditorDataRowGetValue => {
                 require_arity(
                     receiver_type,
@@ -2522,6 +2532,7 @@ fn scalar_instance_intrinsic(receiver_type: &TypeName, method: &str) -> Option<P
         }
         (TypeName::Id, "to15") => Some(P::IdTo15),
         (TypeName::Id, "to18") => Some(P::IdTo18),
+        (TypeName::Id, "getsobjecttype") => Some(P::IdGetSObjectType),
         (TypeName::Blob, "tostring") => Some(P::BlobToString),
         (TypeName::Blob, "size") => Some(P::BlobSize),
         _ => None,

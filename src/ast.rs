@@ -948,6 +948,7 @@ pub enum TypeName {
     AssertException,
     QueryException,
     DmlException,
+    SObjectException,
     NoAccessException,
     AsyncException,
     OrgCacheException,
@@ -1302,6 +1303,11 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         ty: TypeName::DmlException,
     },
     BuiltInTypeSpec {
+        apex_name: "SObjectException",
+        aliases: &["sobjectexception", "system.sobjectexception"],
+        ty: TypeName::SObjectException,
+    },
+    BuiltInTypeSpec {
         apex_name: "NoAccessException",
         aliases: &["noaccessexception", "system.noaccessexception"],
         ty: TypeName::NoAccessException,
@@ -1367,6 +1373,7 @@ impl TypeName {
                 | Self::AssertException
                 | Self::QueryException
                 | Self::DmlException
+                | Self::SObjectException
                 | Self::NoAccessException
                 | Self::AsyncException
                 | Self::OrgCacheException
@@ -1545,6 +1552,7 @@ mod tests {
             "AssertException",
             "QueryException",
             "DmlException",
+            "SObjectException",
             "NoAccessException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())

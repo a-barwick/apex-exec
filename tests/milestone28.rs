@@ -610,6 +610,74 @@ public class IdStringWideningDemo {
 }
 
 #[test]
+fn id_get_sobject_type_is_typed_bounded_and_catchable() {
+    let source = r#"
+public class IdGetSObjectTypeDemo {
+    private static Integer evaluations = 0;
+
+    private static Id accountId() {
+        String prefix = Schema.Account.SObjectType.getDescribe().getKeyPrefix();
+        return Id.valueOf(prefix + '000000000000');
+    }
+
+    private static Id nextId() {
+        evaluations++;
+        return accountId();
+    }
+
+    public static void run() {
+        Id knownId = accountId();
+        Schema.SObjectType accountType = knownId.getSObjectType();
+        System.debug(accountType.getName());
+
+        Id absent;
+        Schema.SObjectType absentType = absent?.getSObjectType();
+        System.debug(absentType == null);
+
+        String chainedName = nextId()?.getSObjectType()?.getName();
+        System.debug(evaluations + ':' + chainedName);
+
+        try {
+            Id unknown = Id.valueOf('999000000000001AAA');
+            unknown.getSObjectType();
+        } catch (System.SObjectException error) {
+            System.debug(error.getTypeName());
+        }
+
+        SObject row = new SObject('Account');
+        row.put('Id', 'not-an-id');
+        try {
+            Id malformed = row.Id;
+            malformed.getSObjectType();
+        } catch (System.SObjectException error) {
+            System.debug(error.getTypeName());
+        }
+
+        try {
+            absent.getSObjectType();
+        } catch (System.NullPointerException error) {
+            System.debug(error.getTypeName());
+        }
+    }
+}
+"#;
+    let root = test_project("IdGetSObjectTypeDemo", source, &[]);
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("IdGetSObjectTypeDemo.run").unwrap(),
+        [
+            "Account",
+            "true",
+            "1:Account",
+            "SObjectException",
+            "SObjectException",
+            "NullPointerException",
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn queueable_implementations_are_assignable_to_the_platform_interface_type() {
     let source = r#"
 public class QueueableParameterDemo {

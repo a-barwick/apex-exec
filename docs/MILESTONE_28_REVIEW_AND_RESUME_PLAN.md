@@ -34,7 +34,7 @@ project file was modified while collecting the evidence below.
 
 ## Reproduced evidence
 
-### Frozen enterprise funnel
+### Frozen enterprise funnel before C1
 
 The following command was rerun from the audited head:
 
@@ -64,7 +64,7 @@ The three deterministic measurements were 207,153 ms cold, 70 ms warm, and
 does not satisfy M29's restart-safe persistent-IR or dependency-scoped
 rechecking requirements.
 
-### Current first blockers
+### Baseline first blockers before C1
 
 | Impacted tests | First blocker | Representative source |
 |---:|---|---|
@@ -75,6 +75,36 @@ rechecking requirements.
 These counts total the raw denominator. They are only the first diagnostics in
 each required closure. After any blocker family is integrated, the complete
 funnel must be rerun before another feature slice is selected.
+
+### Post-C1 enterprise census
+
+After the C1 slice, the unchanged enterprise command was rerun three times and
+the sanitized result was checked in at
+[`evidence/milestone28/census-1/report.json`](../evidence/milestone28/census-1/report.json).
+The manifest and Salesforce snapshot hashes remain
+`c352505e5ade7662919f4f32fea230a72342e8dccfbf2bf4725b31ae4c47cbcd` and
+`1d0972ced93edca0053675229378fd805e4feae5596f60d60737a237df80ada0`.
+
+| Stage | Count | Denominator | Basis points |
+|---|---:|---:|---:|
+| Discovery | 1,159 | 1,159 | 10,000 |
+| Parse | 1,159 | 1,159 | 10,000 |
+| Check | 0 | 1,159 | 0 |
+| Execution | 0 | 1,159 | 0 |
+| Salesforce agreement | 0 | 1,159 | 0 |
+| Strict compatible | 0 | 1,159 | 0 |
+
+The cold, warm, and warm runs took 220,015 ms, 78 ms, and 75 ms. C1 removed
+the previous `Id.getSObjectType` first blocker. The new first-error census is:
+
+| Impacted tests | First blocker | Representative source |
+|---:|---|---|
+| 1,126 | `transient` property modifier is parsed but unsupported | `LogEntryHandler.cls` |
+| 18 | Unknown `Flow.Interview` | `LogBatchPurger.cls` |
+| 15 | Unknown `System` receiver for `System.FeatureManagement.checkPermission` | `LogBatchPurgeController.cls` |
+
+The next-ranked family is therefore `transient` property semantics. No work on
+that family has started.
 
 ### Verification matrix
 
@@ -219,10 +249,10 @@ package after review and integration.
 | M28-M4 | Runtime platform dispatch decomposition | Complete (`8419a40`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard clears all M4 debt and reports exactly 16 downstream M5A/M5B debts against the unchanged baseline) | M3C integrated at `ae85601` | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Complete (`ec14859`; independently reviewed and integrated; fresh Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard leaves exactly the eight declared M5B `semantic.rs` debts against the unchanged baseline) | M4 integrated at `3991343` | `semantic/intrinsics.rs` |
 | M28-M5B | Core semantic hotspot restoration | Complete (`f42b785`; independently reviewed and integrated; fresh Rust 1.88 format/check/full-test/Clippy and documentation validation pass; Lizard clears the final eight declared `semantic.rs` debts against the unchanged baseline) | M5A integrated | `semantic.rs` |
-| M28-V0 | Integrated quality-gate checkpoint | Complete (`ba92a42`; owner-authorized website dependency recovery cleared the audit without changing the allowance; fresh Rust 1.88 fmt/full locked test/North Star/Clippy, tooling 20/20, docs 75/113, Lizard ratchet at 37 recorded caps, actionlint/whitespace, clean website build/test/lint and editor smoke/audit, npm policy with 0 records, Cargo Audit 0.22.2, and Cargo Deny 0.20.2 advisories/bans/sources pass; Deny used the official macOS ARM release asset verified at SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3` and removed it after the check; full LLVM coverage JSON `/private/tmp/m28-v0-coverage.json`: 37,677/44,475 lines (84.7150%), 3,222/3,845 functions (83.7971%), and 54,459/64,638 regions (84.2523%); frozen M22 canonical inputs, source closure, denominator, and outcomes remain unchanged; C1 remains Blocked and has not started) | Q1-Q4C, M1-M5B | Verification and documentation |
-| M28-C1 | `Id.getSObjectType` compatibility slice | Blocked | V0 complete | Typed ID/schema/runtime boundary |
-| M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Blocked | C1 integrated | Enterprise evidence only |
-| M28-CN | One next-ranked compatibility family | Blocked | Latest census | Determined by fresh first blockers |
+| M28-V0 | Integrated quality-gate checkpoint | Complete (`ba92a42`; owner-authorized website dependency recovery cleared the audit without changing the allowance; fresh Rust 1.88 fmt/full locked test/North Star/Clippy, tooling 20/20, docs 75/113, Lizard ratchet at 37 recorded caps, actionlint/whitespace, clean website build/test/lint and editor smoke/audit, npm policy with 0 records, Cargo Audit 0.22.2, and Cargo Deny 0.20.2 advisories/bans/sources pass; Deny used the official macOS ARM release asset verified at SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3` and removed it after the check; full LLVM coverage JSON `/private/tmp/m28-v0-coverage.json`: 37,677/44,475 lines (84.7150%), 3,222/3,845 functions (83.7971%), and 54,459/64,638 regions (84.2523%); frozen M22 canonical inputs, source closure, denominator, and outcomes remain unchanged; C1 was blocked at the V0 capture and is now claimed on its dedicated task branch) | Q1-Q4C, M1-M5B | Verification and documentation |
+| M28-C1 | `Id.getSObjectType` compatibility slice | Complete (reviewed; local and Salesforce differential evidence 2/2; full Rust verification pass; enterprise census recorded) | V0 complete (`ba92a42`) | Typed ID/schema/runtime boundary |
+| M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-1/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | C1 integrated | Enterprise evidence only |
+| M28-CN | One next-ranked compatibility family | Ready (`transient` property semantics selected by CENSUS-1; implementation not started) | Latest census | Determined by fresh first blockers |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -418,7 +448,8 @@ surface. Implementation agents must not make those decisions.
 
 ## Immediate action
 
-Start only M28-M1. Before implementation, record its branch and **Active**
-status, reproduce its owned maintainability findings, and preserve the narrow
-frontend-and-coverage scope. All later packages remain blocked until M1 is
-reviewed and integrated.
+M28-C1 is reviewed and integrated from
+`codex/m28-c1-id-sobject-type`. Its focused local/Salesforce evidence matches
+2/2 selected dimensions, and the post-C1 enterprise census is recorded. The
+next package is ready for owner direction: `transient` property semantics.
+No implementation of that next family has started.

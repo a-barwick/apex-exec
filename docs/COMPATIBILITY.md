@@ -30,7 +30,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
 | `Datetime` | Yes | Yes | Yes | Simplified | UTC construction/parsing, epoch milliseconds, arithmetic, date/time projections, and formatting |
 | `Time` | Yes | Yes | Yes | Simplified | Millisecond construction/parsing, wrapping arithmetic, components, and formatting |
-| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character standalone values with checksum-aware `to15`/`to18` |
+| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character values with checksum-aware `to15`/`to18`; `getSObjectType()` resolves known catalog key prefixes and raises catchable `SObjectException` for malformed or unknown IDs |
 | `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Initializers remain checked and execute in source order |
@@ -430,7 +430,7 @@ produce a compile diagnostic naming the API and exact effective profile.
   components, and `format`.
 - `Decimal`: literals, mixed Integer operators, `valueOf`, `setScale`, `abs`,
   `scale`, and deterministic text conversion.
-- `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
+- `Id`: `valueOf`, `to15`, `to18`, and `getSObjectType`; `Blob`: `valueOf`, `toString`, and
   `size`; `EncodingUtil`: Base64 encode/decode.
 - `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`; structural
   serialization rejects cycles or exhausted traversal budgets with catchable
@@ -692,7 +692,15 @@ parses 1,159/1,159 frozen tests but still checks and strictly matches 0/1,159.
 Comparable and Stateful were implemented after that replay and have focused
 tests, but they have not received another full enterprise run. This is
 in-progress evidence, not an **Exact** claim or a milestone completion result.
-See `docs/MILESTONE_28_CHECKPOINT.md`.
+The post-C1 replay is recorded in
+`evidence/milestone28/census-1/report.json`: it parses 1,159/1,159 and checks
+0/1,159 across three deterministic runs. C1 removes `Id.getSObjectType` as the
+first blocker; the next first blocker is the unsupported `transient` modifier
+on a property, affecting 1,126 tests. `Flow.Interview` affects 18 tests and
+`System.FeatureManagement.checkPermission` affects 15. No next-family
+implementation has started. See `docs/MILESTONE_28_CHECKPOINT.md` for the
+historical stop point and `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the
+active queue.
 
 ## Platform surface
 
