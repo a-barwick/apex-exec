@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "transient-property-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CNTransientOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

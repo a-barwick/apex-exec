@@ -7076,7 +7076,7 @@ fn validate_modifier_set(
     span: Span,
     subject: &str,
 ) -> Result<(), Diagnostic> {
-    if modifiers.contains(&Modifier::Transient) && subject != "field" {
+    if modifiers.contains(&Modifier::Transient) && !matches!(subject, "field" | "property") {
         return Err(Diagnostic::new(
             format!(
                 "modifier `transient` on {subject} is parsed but unsupported by the active compatibility profile"

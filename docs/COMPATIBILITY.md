@@ -84,7 +84,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, source-ordered initializer blocks, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
-| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` fields execute normally and are omitted from JSON serialization, while non-field uses are rejected semantically |
+| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` fields and properties execute normally and are omitted from JSON serialization, while non-value-member uses are rejected semantically |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
 | Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, `SeeAllData=false`, deterministic `IsParallel` partitioning, method-only `@TestSetup`, lexical-test-only `@TestVisible` access, and correct `Test.isRunningTest()` mode; `SeeAllData=true` is explicit |
 | Non-test annotations | Yes | Partial | Partial | Simplified | `@SuppressWarnings` accepts exactly one positional String and is runtime-neutral. `@AuraEnabled` supports public/global fields and properties plus public/global static methods, with Boolean `cacheable`/`continuation` method options; it is runtime-neutral and does not imply Lightning behavior. Other names/effects remain lossless and explicitly unsupported |
@@ -698,9 +698,13 @@ The post-C1 replay is recorded in
 first blocker; the next first blocker is the unsupported `transient` modifier
 on a property, affecting 1,126 tests. `Flow.Interview` affects 18 tests and
 `System.FeatureManagement.checkPermission` affects 15. No next-family
-implementation has started. See `docs/MILESTONE_28_CHECKPOINT.md` for the
-historical stop point and `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the
-active queue.
+implementation has started at that checkpoint. The transient-property slice
+then matched compile and values against Salesforce 2/2; its post-slice replay
+is recorded in `evidence/milestone28/census-2/report.json`. The next first
+blocker is cross-type equality between `SourceMetadataType` and
+`LoggerStackTrace.SourceMetadataType`, affecting 1,126 tests. See
+`docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
+`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
 ## Platform surface
 
