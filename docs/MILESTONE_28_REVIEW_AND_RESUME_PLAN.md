@@ -218,7 +218,7 @@ package after review and integration.
 | M28-M3C | Runtime String and value-graph restoration | Complete (`ae85601`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard reports exactly 20 downstream M4/M5A/M5B debts against the unchanged baseline) | M3B integrated at `9c71d03` | Runtime String/value graph |
 | M28-M4 | Runtime platform dispatch decomposition | Complete (`8419a40`; reviewed and integrated; fresh SHA-isolated Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard clears all M4 debt and reports exactly 16 downstream M5A/M5B debts against the unchanged baseline) | M3C integrated at `ae85601` | `runtime/platform_intrinsics.rs` |
 | M28-M5A | Semantic platform dispatch decomposition | Complete (`ec14859`; independently reviewed and integrated; fresh Rust 1.88 fmt/check/full-test/Clippy and documentation validation pass; Lizard leaves exactly the eight declared M5B `semantic.rs` debts against the unchanged baseline) | M4 integrated at `3991343` | `semantic/intrinsics.rs` |
-| M28-M5B | Core semantic hotspot restoration | Active (`codex/m28-m5b-core-semantic`; base `343bf56`) | M5A integrated | `semantic.rs` |
+| M28-M5B | Core semantic hotspot restoration | Review (`codex/m28-m5b-core-semantic`; `f42b785`) | M5A integrated | `semantic.rs` |
 | M28-V0 | Integrated quality-gate checkpoint | Blocked | Q1-Q4C, M1-M5B | Verification and documentation |
 | M28-C1 | `Id.getSObjectType` compatibility slice | Blocked | V0 complete | Typed ID/schema/runtime boundary |
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Blocked | C1 integrated | Enterprise evidence only |
