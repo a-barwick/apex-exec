@@ -486,20 +486,26 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 
 M27 sharing and security profiles is complete. M28 measured enterprise
 compatibility closure is active. Its V0 integrated quality gate is complete;
-M28-C1 is under review on `codex/m28-c1-id-sobject-type` and adds the typed
-`Id.getSObjectType` boundary. Ten earlier bounded slices are checkpointed:
+M28-C1 is reviewed and integrated from `codex/m28-c1-id-sobject-type` and adds
+the typed `Id.getSObjectType` boundary. Its focused local/Salesforce
+differential evidence matches compile and values, 2/2 dimensions. Ten earlier
+bounded slices are checkpointed:
 typed SObject switch patterns, `@IsTest(IsParallel=...)`, metadata
 relationships, roll-up summaries, exact equality, `ALL ROWS` and undelete
 behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable sorting, and
 `Database.Stateful`.
 
-The latest frozen enterprise replay parses 1,159/1,159 tests and checks
-0/1,159. The current first blocker remains `Id.getSObjectType` for 1,126 tests,
-`Flow.Interview` for 18, and
-`System.FeatureManagement.checkPermission` for 15. The V0 quality gate cleared
-the recorded Rust, tooling, website, editor, dependency, documentation,
-maintainability, and coverage checks. The strict numerator therefore remains
-0/1,159, the 60% exit criterion is unmet, and M28 must not merge as complete.
+The post-C1 frozen enterprise census parses 1,159/1,159 tests and checks
+0/1,159 across three deterministic runs. C1 removes the prior
+`Id.getSObjectType` first blocker. The new first blockers are the unsupported
+`transient` property modifier for 1,126 tests, `Flow.Interview` for 18, and
+`System.FeatureManagement.checkPermission` for 15. The V0 quality gate
+cleared the recorded Rust, tooling, website, editor, dependency,
+documentation, maintainability, and coverage checks. The strict numerator
+therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
+merge as complete. The checked-in census is
+`evidence/milestone28/census-1/report.json`; no next-family implementation has
+started.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

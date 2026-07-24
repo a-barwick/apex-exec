@@ -799,7 +799,7 @@ impl SalesforceCli {
             .wait_with_output()
             .map_err(|error| format!("failed to wait for Salesforce CLI: {error}"))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        serde_json::from_str(&stdout).map_err(|error| {
+        parse_salesforce_json(&stdout).map_err(|error| {
             let stderr = String::from_utf8_lossy(&output.stderr);
             format!(
                 "Salesforce CLI returned invalid JSON (status {}): {error}; stderr: {}",
@@ -808,6 +808,11 @@ impl SalesforceCli {
             )
         })
     }
+}
+
+fn parse_salesforce_json(stdout: &str) -> Result<Value, serde_json::Error> {
+    let json_start = stdout.find(['{', '[']).unwrap_or(0);
+    serde_json::from_str(&stdout[json_start..])
 }
 
 fn parse_salesforce_deploy(name: &str, response: &Value) -> FixtureObservation {
@@ -881,9 +886,13 @@ fn salesforce_debug_output(logs: &str) -> Vec<String> {
             let message = message
                 .split_once("|DEBUG|")
                 .map_or(message, |(_, message)| message);
-            Some(message.trim().to_owned())
+            Some(decode_salesforce_debug_message(message.trim()))
         })
         .collect()
+}
+
+fn decode_salesforce_debug_message(message: &str) -> String {
+    message.replace("&#124;", "|")
 }
 
 fn parse_salesforce_queries(logs: &str) -> Vec<QueryObservation> {
@@ -1410,6 +1419,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_salesforce_json_after_cli_prompt() {
+        let response = parse_salesforce_json(
+            "Start typing Apex code. Press the Enter key after each line, then press CTRL+D when finished.\n{\"status\":0}",
+        )
+        .unwrap();
+        assert_eq!(response["status"], serde_json::json!(0));
+    }
+
+    #[test]
     fn normalizes_salesforce_execution_logs() {
         let response = serde_json::json!({
             "status": 0,
@@ -1424,7 +1442,8 @@ mod tests {
                     "12:00:00.0|DML_END|[2]\n",
                     "12:00:00.0|SOQL_EXECUTE_BEGIN|[3]|Aggregations:0|SELECT Id FROM Invoice__c\n",
                     "12:00:00.0|SOQL_EXECUTE_END|[3]|Rows:1\n",
-                    "12:00:00.0|USER_DEBUG|[4]|DEBUG|done\n"
+                    "12:00:00.0|USER_DEBUG|[4]|DEBUG|APEX_EXEC_ORACLE_VALUE&#124;encoded&#124;true\n",
+                    "12:00:00.0|USER_DEBUG|[5]|DEBUG|done\n"
                 )
             }
         });
@@ -1438,6 +1457,7 @@ mod tests {
         };
         apply_salesforce_execution(&mut observation, &response);
         assert_eq!(observation.values["count"], serde_json::json!(2));
+        assert_eq!(observation.values["encoded"], serde_json::json!(true));
         assert_eq!(observation.output, ["done"]);
         assert_eq!(observation.dml[0].operation, "insert");
         assert_eq!(observation.queries[0].objects, ["Invoice__c"]);

@@ -692,7 +692,15 @@ parses 1,159/1,159 frozen tests but still checks and strictly matches 0/1,159.
 Comparable and Stateful were implemented after that replay and have focused
 tests, but they have not received another full enterprise run. This is
 in-progress evidence, not an **Exact** claim or a milestone completion result.
-See `docs/MILESTONE_28_CHECKPOINT.md`.
+The post-C1 replay is recorded in
+`evidence/milestone28/census-1/report.json`: it parses 1,159/1,159 and checks
+0/1,159 across three deterministic runs. C1 removes `Id.getSObjectType` as the
+first blocker; the next first blocker is the unsupported `transient` modifier
+on a property, affecting 1,126 tests. `Flow.Interview` affects 18 tests and
+`System.FeatureManagement.checkPermission` affects 15. No next-family
+implementation has started. See `docs/MILESTONE_28_CHECKPOINT.md` for the
+historical stop point and `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the
+active queue.
 
 ## Platform surface
 
