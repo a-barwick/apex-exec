@@ -2146,48 +2146,48 @@ impl Checker {
     }
 
     fn is_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
-        if self.same_type_identity(actual, expected) || *expected == TypeName::Object {
-            return true;
+        self.builtin_subtype(actual, expected)
+            || self.collection_subtype(actual, expected)
+            || self.special_supertype(actual, expected)
+            || self.custom_class_subtype(actual, expected)
+    }
+
+    fn builtin_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        self.same_type_identity(actual, expected)
+            || *expected == TypeName::Object
+            || matches!(
+                (actual, expected),
+                (TypeName::Id, TypeName::String) | (TypeName::String, TypeName::Id)
+            )
+            || numeric_widening_subtype(actual, expected)
+    }
+
+    fn collection_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        match (actual, expected) {
+            (TypeName::List(actual), TypeName::List(expected)) => self.is_subtype(actual, expected),
+            (TypeName::List(actual) | TypeName::Set(actual), TypeName::Iterable(expected)) => {
+                self.same_type_identity(actual, expected)
+            }
+            _ => false,
         }
-        if matches!(
-            (actual, expected),
-            (TypeName::Id, TypeName::String) | (TypeName::String, TypeName::Id)
-        ) {
-            return true;
-        }
-        if let (TypeName::List(actual), TypeName::List(expected)) = (actual, expected)
-            && self.is_subtype(actual, expected)
-        {
-            return true;
-        }
-        if (*actual == TypeName::Integer
-            && matches!(
-                expected,
-                TypeName::Long | TypeName::Decimal | TypeName::Double
-            ))
-            || (*actual == TypeName::Long
-                && matches!(expected, TypeName::Decimal | TypeName::Double))
-            || (*actual == TypeName::Decimal && *expected == TypeName::Double)
-        {
-            return true;
-        }
-        if let (TypeName::List(actual) | TypeName::Set(actual), TypeName::Iterable(expected)) =
-            (actual, expected)
-        {
-            return self.same_type_identity(actual, expected);
-        }
-        if *expected == TypeName::Exception && self.is_exception_type(actual) {
-            return true;
-        }
-        if self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected) {
-            return true;
-        }
-        if let TypeName::Custom(actual) = actual
-            && let Some(class_id) = self.class_ids.get(&actual.canonical)
-            && self.class_implements_platform_contract(*class_id, expected)
-        {
-            return true;
-        }
+    }
+
+    fn special_supertype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        (*expected == TypeName::Exception && self.is_exception_type(actual))
+            || (self.is_sobject_type(actual) && self.is_dynamic_sobject_type(expected))
+            || self.custom_platform_contract_subtype(actual, expected)
+    }
+
+    fn custom_platform_contract_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
+        let TypeName::Custom(actual) = actual else {
+            return false;
+        };
+        self.class_ids
+            .get(&actual.canonical)
+            .is_some_and(|class_id| self.class_implements_platform_contract(*class_id, expected))
+    }
+
+    fn custom_class_subtype(&self, actual: &TypeName, expected: &TypeName) -> bool {
         let (TypeName::Custom(actual), TypeName::Custom(expected)) = (actual, expected) else {
             return false;
         };
@@ -2807,67 +2807,19 @@ impl Checker {
         arms: &[SwitchArm],
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let value_type = match self.expression_type(value)? {
-            ExpressionType::Value(ty)
-                if self.is_sobject_type(&ty) || self.is_dynamic_sobject_type(&ty) =>
-            {
-                ty
-            }
-            actual => {
-                return Err(Diagnostic::new(
-                    format!(
-                        "SObject type-pattern switch requires an SObject value, found {}",
-                        actual.name()
-                    ),
-                    value.span(),
-                ));
-            }
-        };
+        let value_type = self.sobject_switch_value_type(value)?;
         let mut seen_types = HashSet::new();
         let mut pattern_count = 0usize;
         for arm in arms {
             match &arm.labels {
                 SwitchLabels::TypePattern(pattern) => {
-                    self.validate_type(&pattern.ty, pattern.span)?;
-                    if !self.is_sobject_type(&pattern.ty) {
-                        return Err(Diagnostic::new(
-                            format!(
-                                "switch type pattern must name a concrete SObject, found {}",
-                                pattern.ty.apex_name()
-                            ),
-                            pattern.span,
-                        ));
-                    }
-                    let object_id = self
-                        .sobject_object_id(&pattern.ty)
-                        .expect("validated concrete SObject has a schema identity");
-                    if !self.is_dynamic_sobject_type(&value_type)
-                        && self.sobject_object_id(&value_type) != Some(object_id)
-                    {
-                        return Err(Diagnostic::new(
-                            format!(
-                                "{} cannot match switch value type {}",
-                                pattern.ty.apex_name(),
-                                value_type.apex_name()
-                            ),
-                            pattern.span,
-                        ));
-                    }
-                    self.switch_patterns
-                        .insert(pattern.span, ObjectTypeId::from_index(object_id));
-                    if !seen_types.insert(object_id) {
-                        return Err(Diagnostic::new(
-                            format!("duplicate switch type pattern `{}`", pattern.ty.apex_name()),
-                            pattern.span,
-                        ));
-                    }
+                    self.check_sobject_type_pattern_arm(
+                        &value_type,
+                        pattern,
+                        &arm.body,
+                        &mut seen_types,
+                    )?;
                     pattern_count += 1;
-                    self.with_scope(|checker| {
-                        checker
-                            .current_scope_mut()
-                            .insert(pattern.binding.canonical.clone(), pattern.ty.clone());
-                        checker.check_statement(&arm.body)
-                    })?;
                 }
                 SwitchLabels::Else(_) => self.check_statement(&arm.body)?,
                 SwitchLabels::Expressions(_) => {
@@ -2885,6 +2837,71 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    fn sobject_switch_value_type(&mut self, value: &Expression) -> Result<TypeName, Diagnostic> {
+        match self.expression_type(value)? {
+            ExpressionType::Value(ty)
+                if self.is_sobject_type(&ty) || self.is_dynamic_sobject_type(&ty) =>
+            {
+                Ok(ty)
+            }
+            actual => Err(Diagnostic::new(
+                format!(
+                    "SObject type-pattern switch requires an SObject value, found {}",
+                    actual.name()
+                ),
+                value.span(),
+            )),
+        }
+    }
+
+    fn check_sobject_type_pattern_arm(
+        &mut self,
+        value_type: &TypeName,
+        pattern: &crate::ast::SwitchTypePattern,
+        body: &Statement,
+        seen_types: &mut HashSet<usize>,
+    ) -> Result<(), Diagnostic> {
+        self.validate_type(&pattern.ty, pattern.span)?;
+        if !self.is_sobject_type(&pattern.ty) {
+            return Err(Diagnostic::new(
+                format!(
+                    "switch type pattern must name a concrete SObject, found {}",
+                    pattern.ty.apex_name()
+                ),
+                pattern.span,
+            ));
+        }
+        let object_id = self
+            .sobject_object_id(&pattern.ty)
+            .expect("validated concrete SObject has a schema identity");
+        if !self.is_dynamic_sobject_type(value_type)
+            && self.sobject_object_id(value_type) != Some(object_id)
+        {
+            return Err(Diagnostic::new(
+                format!(
+                    "{} cannot match switch value type {}",
+                    pattern.ty.apex_name(),
+                    value_type.apex_name()
+                ),
+                pattern.span,
+            ));
+        }
+        self.switch_patterns
+            .insert(pattern.span, ObjectTypeId::from_index(object_id));
+        if !seen_types.insert(object_id) {
+            return Err(Diagnostic::new(
+                format!("duplicate switch type pattern `{}`", pattern.ty.apex_name()),
+                pattern.span,
+            ));
+        }
+        self.with_scope(|checker| {
+            checker
+                .current_scope_mut()
+                .insert(pattern.binding.canonical.clone(), pattern.ty.clone());
+            checker.check_statement(body)
+        })
     }
 
     fn check_scalar_switch(
@@ -2970,23 +2987,44 @@ impl Checker {
         platform_enum: Option<crate::platform::PlatformEnumDescriptor>,
         label: &Expression,
     ) -> Result<ScalarSwitchKey, Diagnostic> {
-        if let Some(class_id) = enum_class
-            && let Expression::Variable(identifier) = label
+        if let Some(result) =
+            self.check_unqualified_enum_switch_label(value_type, enum_class, label)
         {
-            let ordinal = self.classes[class_id]
-                .enum_constants
-                .iter()
-                .position(|constant| constant.canonical == identifier.canonical)
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!(
-                            "unknown {} constant `{}`",
-                            value_type.apex_name(),
-                            identifier.spelling
-                        ),
-                        identifier.span,
-                    )
-                })?;
+            return result;
+        }
+        if let Some(result) =
+            self.check_unqualified_platform_enum_switch_label(value_type, platform_enum, label)
+        {
+            return result;
+        }
+        self.check_scalar_switch_label_type(value_type, label)?;
+        self.scalar_switch_key_for_checked_label(value_type, enum_class, platform_enum, label)
+    }
+
+    fn check_unqualified_enum_switch_label(
+        &mut self,
+        value_type: &TypeName,
+        enum_class: Option<usize>,
+        label: &Expression,
+    ) -> Option<Result<ScalarSwitchKey, Diagnostic>> {
+        let (Some(class_id), Expression::Variable(identifier)) = (enum_class, label) else {
+            return None;
+        };
+        let ordinal = self.classes[class_id]
+            .enum_constants
+            .iter()
+            .position(|constant| constant.canonical == identifier.canonical)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!(
+                        "unknown {} constant `{}`",
+                        value_type.apex_name(),
+                        identifier.spelling
+                    ),
+                    identifier.span,
+                )
+            });
+        Some(ordinal.map(|ordinal| {
             self.references.insert(
                 identifier.span,
                 ReferenceTarget::EnumConstant {
@@ -2996,39 +3034,64 @@ impl Checker {
             );
             self.expression_types
                 .insert(label.span(), ExpressionType::Value(value_type.clone()));
-            return Ok(ScalarSwitchKey::Enum { class_id, ordinal });
-        }
-        if let Some(descriptor) = platform_enum
-            && let Expression::Variable(identifier) = label
-        {
-            let value = descriptor.parse(&identifier.spelling).ok_or_else(|| {
-                Diagnostic::new(
-                    format!(
-                        "unknown {} constant `{}`",
-                        descriptor.apex_name(),
-                        identifier.spelling
-                    ),
-                    identifier.span,
-                )
-            })?;
+            ScalarSwitchKey::Enum { class_id, ordinal }
+        }))
+    }
+
+    fn check_unqualified_platform_enum_switch_label(
+        &mut self,
+        value_type: &TypeName,
+        platform_enum: Option<crate::platform::PlatformEnumDescriptor>,
+        label: &Expression,
+    ) -> Option<Result<ScalarSwitchKey, Diagnostic>> {
+        let (Some(descriptor), Expression::Variable(identifier)) = (platform_enum, label) else {
+            return None;
+        };
+        let value = descriptor.parse(&identifier.spelling).ok_or_else(|| {
+            Diagnostic::new(
+                format!(
+                    "unknown {} constant `{}`",
+                    descriptor.apex_name(),
+                    identifier.spelling
+                ),
+                identifier.span,
+            )
+        });
+        Some(value.map(|value| {
             self.references
                 .insert(identifier.span, ReferenceTarget::PlatformEnum(value));
             self.expression_types
                 .insert(label.span(), ExpressionType::Value(value_type.clone()));
-            return Ok(ScalarSwitchKey::PlatformEnum(value));
-        }
+            ScalarSwitchKey::PlatformEnum(value)
+        }))
+    }
 
+    fn check_scalar_switch_label_type(
+        &mut self,
+        value_type: &TypeName,
+        label: &Expression,
+    ) -> Result<(), Diagnostic> {
         let actual = self.expression_type(label)?;
-        if actual != ExpressionType::Null && !self.is_assignable(value_type, &actual) {
-            return Err(Diagnostic::new(
-                format!(
-                    "switch label {} does not match {}",
-                    actual.name(),
-                    value_type.apex_name()
-                ),
-                label.span(),
-            ));
+        if actual == ExpressionType::Null || self.is_assignable(value_type, &actual) {
+            return Ok(());
         }
+        Err(Diagnostic::new(
+            format!(
+                "switch label {} does not match {}",
+                actual.name(),
+                value_type.apex_name()
+            ),
+            label.span(),
+        ))
+    }
+
+    fn scalar_switch_key_for_checked_label(
+        &self,
+        value_type: &TypeName,
+        enum_class: Option<usize>,
+        platform_enum: Option<crate::platform::PlatformEnumDescriptor>,
+        label: &Expression,
+    ) -> Result<ScalarSwitchKey, Diagnostic> {
         match label {
             Expression::StringLiteral(value, _) if *value_type == TypeName::String => {
                 Ok(ScalarSwitchKey::String(value.clone()))
@@ -3699,18 +3762,7 @@ impl Checker {
         span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
         self.validate_type(ty, span)?;
-        let platform_constructor = match ty {
-            TypeName::Http => Some(PlatformConstructor::Http),
-            TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
-            TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
-            TypeName::DmlOptions => Some(PlatformConstructor::DmlOptions),
-            TypeName::VisualEditorDataRow => Some(PlatformConstructor::VisualEditorDataRow),
-            TypeName::VisualEditorDynamicPickListRows => {
-                Some(PlatformConstructor::VisualEditorDynamicPickListRows)
-            }
-            _ => None,
-        };
-        if let Some(constructor) = platform_constructor {
+        if let Some(constructor) = platform_constructor_for_type(ty) {
             return self.platform_constructor_type(ty, arguments, span, constructor);
         }
         let TypeName::Custom(name) = ty else {
@@ -3720,81 +3772,138 @@ impl Checker {
             ));
         };
         if let Some(object_id) = self.schema.object_index(hir::schema_api_name(name)) {
-            let mut fields = Vec::with_capacity(arguments.len());
-            let mut seen = HashSet::with_capacity(arguments.len());
-            for argument in arguments {
-                let Expression::Assignment {
-                    target: AssignmentTarget::Variable(field),
-                    operator: AssignmentOperator::Assign,
-                    value,
-                    ..
-                } = argument
-                else {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "SObject constructor for `{}` expects `field = value` arguments",
-                            name.spelling
-                        ),
-                        argument.span(),
-                    ));
-                };
-                let (field_id, field_type) = {
-                    let object = self
-                        .schema
-                        .object_at(object_id)
-                        .expect("schema object index is valid");
-                    let Some(field_id) = object.field_index(&field.spelling) else {
-                        return Err(Diagnostic::new(
-                            format!("unknown field `{}` on `{}`", field.spelling, name.spelling),
-                            field.span,
-                        ));
-                    };
-                    let field_type = apex_field_type(
-                        object
-                            .field_at(field_id)
-                            .expect("schema field index is valid")
-                            .data_type(),
-                    );
-                    (field_id, field_type)
-                };
-                if !seen.insert(field_id) {
-                    return Err(Diagnostic::new(
-                        format!("duplicate SObject constructor field `{}`", field.spelling),
-                        field.span,
-                    ));
-                }
-                let actual = self.expression_type_for_expected(value, &field_type)?;
-                self.require_assignable(&field_type, &actual, value.span())?;
-                fields.push(FieldId::from_index(field_id));
-            }
-            self.sobject_constructor_fields.insert(span, fields);
-            self.calls.insert(
-                span,
-                CallTarget::SObjectConstructor {
-                    object_id: Some(object_id),
-                },
-            );
-            return Ok(ExpressionType::Value(ty.clone()));
+            return self.typed_sobject_constructor_type(ty, name, arguments, span, object_id);
         }
         if name.canonical == "sobject" {
-            if arguments.len() != 1 {
-                return Err(Diagnostic::new(
-                    "dynamic SObject constructor expects one object API name",
-                    span,
-                ));
-            }
-            self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
-            self.calls
-                .insert(span, CallTarget::SObjectConstructor { object_id: None });
-            return Ok(ExpressionType::Value(ty.clone()));
+            return self.dynamic_sobject_constructor_type(ty, arguments, span);
         }
+        self.class_constructor_type(ty, name, arguments, span)
+    }
+
+    fn typed_sobject_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        name: &crate::ast::NamedType,
+        arguments: &[Expression],
+        span: Span,
+        object_id: usize,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let mut fields = Vec::with_capacity(arguments.len());
+        let mut seen = HashSet::with_capacity(arguments.len());
+        for argument in arguments {
+            fields
+                .push(self.typed_sobject_constructor_field(object_id, name, argument, &mut seen)?);
+        }
+        self.sobject_constructor_fields.insert(span, fields);
+        self.calls.insert(
+            span,
+            CallTarget::SObjectConstructor {
+                object_id: Some(object_id),
+            },
+        );
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn typed_sobject_constructor_field(
+        &mut self,
+        object_id: usize,
+        name: &crate::ast::NamedType,
+        argument: &Expression,
+        seen: &mut HashSet<usize>,
+    ) -> Result<FieldId, Diagnostic> {
+        let Expression::Assignment {
+            target: AssignmentTarget::Variable(field),
+            operator: AssignmentOperator::Assign,
+            value,
+            ..
+        } = argument
+        else {
+            return Err(Diagnostic::new(
+                format!(
+                    "SObject constructor for `{}` expects `field = value` arguments",
+                    name.spelling
+                ),
+                argument.span(),
+            ));
+        };
+        let (field_id, field_type) = self.sobject_constructor_field_type(object_id, name, field)?;
+        if !seen.insert(field_id) {
+            return Err(Diagnostic::new(
+                format!("duplicate SObject constructor field `{}`", field.spelling),
+                field.span,
+            ));
+        }
+        let actual = self.expression_type_for_expected(value, &field_type)?;
+        self.require_assignable(&field_type, &actual, value.span())?;
+        Ok(FieldId::from_index(field_id))
+    }
+
+    fn sobject_constructor_field_type(
+        &self,
+        object_id: usize,
+        object_name: &crate::ast::NamedType,
+        field: &Identifier,
+    ) -> Result<(usize, TypeName), Diagnostic> {
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("schema object index is valid");
+        let Some(field_id) = object.field_index(&field.spelling) else {
+            return Err(Diagnostic::new(
+                format!(
+                    "unknown field `{}` on `{}`",
+                    field.spelling, object_name.spelling
+                ),
+                field.span,
+            ));
+        };
+        Ok((
+            field_id,
+            apex_field_type(
+                object
+                    .field_at(field_id)
+                    .expect("schema field index is valid")
+                    .data_type(),
+            ),
+        ))
+    }
+
+    fn dynamic_sobject_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if arguments.len() != 1 {
+            return Err(Diagnostic::new(
+                "dynamic SObject constructor expects one object API name",
+                span,
+            ));
+        }
+        self.require_operand(&arguments[0], &TypeName::String, arguments[0].span())?;
+        self.calls
+            .insert(span, CallTarget::SObjectConstructor { object_id: None });
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn class_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        name: &crate::ast::NamedType,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
         let class_id = self.class_ids[&name.canonical];
-        let class = &self.classes[class_id];
         if self.class_is_custom_exception(class_id) {
             return self.new_custom_exception_type(class_id, ty, arguments, span);
         }
         self.validate_constructable_class(class_id, name, span)?;
-        let constructors = class
+        let constructors = self.class_constructors(class_id);
+        self.declared_class_constructor_type(ty, name, arguments, span, class_id, &constructors)
+    }
+
+    fn class_constructors(&self, class_id: usize) -> Vec<(ClassMemberId, ConstructorDeclaration)> {
+        self.classes[class_id]
             .members
             .iter()
             .enumerate()
@@ -3810,28 +3919,20 @@ impl Checker {
                     constructor.clone(),
                 ))
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn declared_class_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        name: &crate::ast::NamedType,
+        arguments: &[Expression],
+        span: Span,
+        class_id: usize,
+        constructors: &[(ClassMemberId, ConstructorDeclaration)],
+    ) -> Result<ExpressionType, Diagnostic> {
         if constructors.is_empty() {
-            for argument in arguments {
-                self.expression_type(argument)?;
-            }
-            if !arguments.is_empty() {
-                return Err(Diagnostic::new(
-                    format!(
-                        "default constructor for `{}` expects no arguments",
-                        name.spelling
-                    ),
-                    arguments[0].span(),
-                ));
-            }
-            self.calls.insert(
-                span,
-                CallTarget::Constructor {
-                    class_id,
-                    member_id: None,
-                },
-            );
-            return Ok(ExpressionType::Value(ty.clone()));
+            return self.default_class_constructor_type(ty, name, arguments, span, class_id);
         }
         let argument_types = arguments
             .iter()
@@ -3864,6 +3965,36 @@ impl Checker {
             CallTarget::Constructor {
                 class_id,
                 member_id: Some(selected.0.member_id),
+            },
+        );
+        Ok(ExpressionType::Value(ty.clone()))
+    }
+
+    fn default_class_constructor_type(
+        &mut self,
+        ty: &TypeName,
+        name: &crate::ast::NamedType,
+        arguments: &[Expression],
+        span: Span,
+        class_id: usize,
+    ) -> Result<ExpressionType, Diagnostic> {
+        for argument in arguments {
+            self.expression_type(argument)?;
+        }
+        if !arguments.is_empty() {
+            return Err(Diagnostic::new(
+                format!(
+                    "default constructor for `{}` expects no arguments",
+                    name.spelling
+                ),
+                arguments[0].span(),
+            ));
+        }
+        self.calls.insert(
+            span,
+            CallTarget::Constructor {
+                class_id,
+                member_id: None,
             },
         );
         Ok(ExpressionType::Value(ty.clone()))
@@ -3971,127 +4102,18 @@ impl Checker {
         if let Some(result) = self.schema_member_access_type(receiver, name, span, for_write) {
             return result;
         }
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("statuscode" | "system.statuscode")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "StatusCode constants are read-only",
-                    name.span,
-                ));
-            }
-            let status =
-                crate::platform::DmlStatus::from_apex_name(&name.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown StatusCode constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(span, MemberTarget::DmlStatus(status));
-            return Ok(ExpressionType::Value(TypeName::StatusCode));
-        }
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("accesslevel" | "system.accesslevel" | "database.accesslevel")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "AccessLevel constants are read-only",
-                    name.span,
-                ));
-            }
-            let access =
-                crate::platform::AccessLevel::from_apex_name(&name.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown AccessLevel constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(span, MemberTarget::AccessLevel(access));
-            return Ok(ExpressionType::Value(TypeName::AccessLevel));
-        }
-        if matches!(
-            qualified_expression_name(receiver).as_deref(),
-            Some("accesstype" | "system.accesstype")
-        ) {
-            if for_write {
-                return Err(Diagnostic::new(
-                    "AccessType constants are read-only",
-                    name.span,
-                ));
-            }
-            let access =
-                crate::platform::AccessType::from_apex_name(&name.spelling).ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("unknown AccessType constant `{}`", name.spelling),
-                        name.span,
-                    )
-                })?;
-            self.members.insert(span, MemberTarget::AccessType(access));
-            return Ok(ExpressionType::Value(TypeName::AccessType));
+        if let Some(result) =
+            self.platform_constant_member_access_type(receiver, name, span, for_write)
+        {
+            return result;
         }
         if let Some(result) = self.qualified_type_reference(receiver, name, span, for_write) {
             return result;
         }
-        if let Expression::Variable(identifier) = receiver
-            && identifier.canonical == "trigger"
+        if let Some(result) =
+            self.trigger_context_member_access_type(receiver, name, span, for_write)
         {
-            let Some(object_id) = self.current_trigger_object else {
-                return Err(Diagnostic::new(
-                    "Trigger context is only available inside a trigger",
-                    identifier.span,
-                ));
-            };
-            if for_write {
-                return Err(Diagnostic::new(
-                    format!("Trigger.{} is read-only", name.spelling),
-                    name.span,
-                ));
-            }
-            let object = self
-                .schema
-                .object_at(object_id)
-                .expect("current trigger object is valid");
-            let object_type = TypeName::Custom(crate::ast::NamedType::new(
-                object.api_name().to_owned(),
-                name.span,
-            ));
-            let (variable, ty) = match name.canonical.as_str() {
-                "new" => (
-                    TriggerContextVariable::New,
-                    TypeName::List(Box::new(object_type.clone())),
-                ),
-                "old" => (
-                    TriggerContextVariable::Old,
-                    TypeName::List(Box::new(object_type.clone())),
-                ),
-                "newmap" => (
-                    TriggerContextVariable::NewMap,
-                    TypeName::Map(Box::new(TypeName::String), Box::new(object_type.clone())),
-                ),
-                "oldmap" => (
-                    TriggerContextVariable::OldMap,
-                    TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
-                ),
-                "isexecuting" => (TriggerContextVariable::IsExecuting, TypeName::Boolean),
-                "isbefore" => (TriggerContextVariable::IsBefore, TypeName::Boolean),
-                "isafter" => (TriggerContextVariable::IsAfter, TypeName::Boolean),
-                "isinsert" => (TriggerContextVariable::IsInsert, TypeName::Boolean),
-                "isupdate" => (TriggerContextVariable::IsUpdate, TypeName::Boolean),
-                "isdelete" => (TriggerContextVariable::IsDelete, TypeName::Boolean),
-                "isundelete" => (TriggerContextVariable::IsUndelete, TypeName::Boolean),
-                "size" => (TriggerContextVariable::Size, TypeName::Integer),
-                _ => {
-                    return Err(Diagnostic::new(
-                        format!("unknown Trigger context variable `{}`", name.spelling),
-                        name.span,
-                    ));
-                }
-            };
-            self.members
-                .insert(span, MemberTarget::TriggerContext(variable));
-            return Ok(ExpressionType::Value(ty));
+            return result;
         }
         if let Some(result) = self.sobject_member_access_type(receiver, name, span, for_write) {
             return result;
@@ -4099,6 +4121,16 @@ impl Checker {
         if let Some(result) = self.dml_options_member_access_type(receiver, name, span) {
             return result;
         }
+        self.class_member_access_type(receiver, name, span, for_write)
+    }
+
+    fn class_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
         let (class_id, static_access) = self.member_receiver_class(receiver, name)?;
         if let Some(result) =
             self.enum_constant_type(class_id, static_access, name, span, for_write)
@@ -4116,6 +4148,28 @@ impl Checker {
                     name.span,
                 )
             })?;
+        let (is_static, current_owner) = self.validate_class_member_receiver_access(
+            receiver,
+            name,
+            class_id,
+            static_access,
+            for_write,
+            &member,
+        )?;
+        self.validate_class_member_value_access(name, for_write, &member, current_owner)?;
+        self.record_class_member_access(span, is_static, member.target, current_owner);
+        Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn validate_class_member_receiver_access(
+        &self,
+        receiver: &Expression,
+        name: &Identifier,
+        class_id: usize,
+        static_access: bool,
+        for_write: bool,
+        member: &ClassValueMember,
+    ) -> Result<(bool, bool), Diagnostic> {
         self.ensure_member_access(
             member.target,
             if for_write {
@@ -4139,14 +4193,26 @@ impl Checker {
                 name.span,
             ));
         }
-        let current_owner = if is_static {
-            static_access && self.current_class == Some(class_id)
-        } else {
-            matches!(receiver, Expression::Variable(identifier) if identifier.canonical == "this")
-        };
+        Ok((
+            is_static,
+            if is_static {
+                static_access && self.current_class == Some(class_id)
+            } else {
+                matches!(receiver, Expression::Variable(identifier) if identifier.canonical == "this")
+            },
+        ))
+    }
+
+    fn validate_class_member_value_access(
+        &self,
+        name: &Identifier,
+        for_write: bool,
+        member: &ClassValueMember,
+        current_owner: bool,
+    ) -> Result<(), Diagnostic> {
         if for_write
             && !member.writable
-            && !self.final_member_is_assignable_here(&member, current_owner)
+            && !self.final_member_is_assignable_here(member, current_owner)
         {
             return Err(Diagnostic::new(
                 format!("member `{}` is read-only", name.spelling),
@@ -4159,17 +4225,165 @@ impl Checker {
                 name.span,
             ));
         }
-        let property_storage = self.current_property == Some(member.target) && current_owner;
+        Ok(())
+    }
+
+    fn record_class_member_access(
+        &mut self,
+        span: Span,
+        is_static: bool,
+        member: ClassMemberId,
+        current_owner: bool,
+    ) {
+        let property_storage = self.current_property == Some(member) && current_owner;
         self.members.insert(
             span,
             match (is_static, property_storage) {
-                (true, true) => MemberTarget::StaticPropertyStorage(member.target),
-                (false, true) => MemberTarget::InstancePropertyStorage(member.target),
-                (true, false) => MemberTarget::Static(member.target),
-                (false, false) => MemberTarget::Instance(member.target),
+                (true, true) => MemberTarget::StaticPropertyStorage(member),
+                (false, true) => MemberTarget::InstancePropertyStorage(member),
+                (true, false) => MemberTarget::Static(member),
+                (false, false) => MemberTarget::Instance(member),
             },
         );
-        Ok(ExpressionType::Value(member.ty))
+    }
+
+    fn platform_constant_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        match qualified_expression_name(receiver)?.as_str() {
+            "statuscode" | "system.statuscode" => {
+                Some(self.status_code_member_access_type(name, span, for_write))
+            }
+            "accesslevel" | "system.accesslevel" | "database.accesslevel" => {
+                Some(self.access_level_member_access_type(name, span, for_write))
+            }
+            "accesstype" | "system.accesstype" => {
+                Some(self.access_type_member_access_type(name, span, for_write))
+            }
+            _ => None,
+        }
+    }
+
+    fn status_code_member_access_type(
+        &mut self,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "StatusCode constants are read-only",
+                name.span,
+            ));
+        }
+        let status =
+            crate::platform::DmlStatus::from_apex_name(&name.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown StatusCode constant `{}`", name.spelling),
+                    name.span,
+                )
+            })?;
+        self.members.insert(span, MemberTarget::DmlStatus(status));
+        Ok(ExpressionType::Value(TypeName::StatusCode))
+    }
+
+    fn access_level_member_access_type(
+        &mut self,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "AccessLevel constants are read-only",
+                name.span,
+            ));
+        }
+        let access =
+            crate::platform::AccessLevel::from_apex_name(&name.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown AccessLevel constant `{}`", name.spelling),
+                    name.span,
+                )
+            })?;
+        self.members.insert(span, MemberTarget::AccessLevel(access));
+        Ok(ExpressionType::Value(TypeName::AccessLevel))
+    }
+
+    fn access_type_member_access_type(
+        &mut self,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        if for_write {
+            return Err(Diagnostic::new(
+                "AccessType constants are read-only",
+                name.span,
+            ));
+        }
+        let access =
+            crate::platform::AccessType::from_apex_name(&name.spelling).ok_or_else(|| {
+                Diagnostic::new(
+                    format!("unknown AccessType constant `{}`", name.spelling),
+                    name.span,
+                )
+            })?;
+        self.members.insert(span, MemberTarget::AccessType(access));
+        Ok(ExpressionType::Value(TypeName::AccessType))
+    }
+
+    fn trigger_context_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let Expression::Variable(identifier) = receiver else {
+            return None;
+        };
+        if identifier.canonical != "trigger" {
+            return None;
+        }
+        Some(self.checked_trigger_context_member(name, span, for_write, identifier.span))
+    }
+
+    fn checked_trigger_context_member(
+        &mut self,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+        trigger_span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let Some(object_id) = self.current_trigger_object else {
+            return Err(Diagnostic::new(
+                "Trigger context is only available inside a trigger",
+                trigger_span,
+            ));
+        };
+        if for_write {
+            return Err(Diagnostic::new(
+                format!("Trigger.{} is read-only", name.spelling),
+                name.span,
+            ));
+        }
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("current trigger object is valid");
+        let object_type = TypeName::Custom(crate::ast::NamedType::new(
+            object.api_name().to_owned(),
+            name.span,
+        ));
+        let (variable, ty) = trigger_context_variable_type(name, object_type)?;
+        self.members
+            .insert(span, MemberTarget::TriggerContext(variable));
+        Ok(ExpressionType::Value(ty))
     }
 
     fn platform_enum_member_access_type(
@@ -4212,23 +4426,10 @@ impl Checker {
         span: Span,
         for_write: bool,
     ) -> Option<Result<ExpressionType, Diagnostic>> {
-        if let Expression::Variable(identifier) = receiver
-            && name.canonical == "sobjecttype"
-            && self.lookup(&identifier.canonical).is_none()
-            && !self.class_ids.contains_key(&identifier.canonical)
-            && self.current_class.is_none_or(|class_id| {
-                self.lexical_class_value_member(class_id, &identifier.canonical)
-                    .is_none()
-            })
-            && let Some(object_id) = self.schema.object_index(&identifier.spelling)
+        if let Some(result) =
+            self.unqualified_schema_sobject_type_member(receiver, name, span, for_write)
         {
-            return Some(self.checked_schema_member(
-                span,
-                name,
-                for_write,
-                hir::SchemaMemberTarget::SObjectType { object_id },
-                TypeName::SObjectType,
-            ));
+            return Some(result);
         }
         let owner = qualified_expression_name(receiver);
         if matches!(owner.as_deref(), Some("schema" | "schema.sobjecttype")) {
@@ -4254,56 +4455,7 @@ impl Checker {
         if let Some(MemberTarget::Schema(hir::SchemaMemberTarget::SObjectType { object_id })) =
             self.members.get(&receiver.span()).cloned()
         {
-            let result = match name.canonical.as_str() {
-                "sobjecttype" => self.checked_schema_member(
-                    span,
-                    name,
-                    for_write,
-                    hir::SchemaMemberTarget::SObjectType { object_id },
-                    TypeName::SObjectType,
-                ),
-                "fields" => self.checked_schema_member(
-                    span,
-                    name,
-                    for_write,
-                    hir::SchemaMemberTarget::DescribeFields,
-                    TypeName::SObjectFieldMap,
-                ),
-                "fieldsets" => self.checked_schema_member(
-                    span,
-                    name,
-                    for_write,
-                    hir::SchemaMemberTarget::DescribeFieldSets,
-                    TypeName::FieldSetMap,
-                ),
-                _ => {
-                    let object = self
-                        .schema
-                        .object_at(object_id)
-                        .expect("schema token object index is valid");
-                    let Some(field_id) = object.field_index(&name.spelling) else {
-                        return Some(Err(Diagnostic::new(
-                            format!(
-                                "unknown field token `{}.{}`",
-                                object.api_name(),
-                                name.spelling
-                            ),
-                            name.span,
-                        )));
-                    };
-                    self.checked_schema_member(
-                        span,
-                        name,
-                        for_write,
-                        hir::SchemaMemberTarget::SObjectField {
-                            object_id,
-                            field_id,
-                        },
-                        TypeName::SObjectField,
-                    )
-                }
-            };
-            return Some(result);
+            return Some(self.schema_sobject_type_token_member(object_id, name, span, for_write));
         }
         if matches!(
             self.members.get(&receiver.span()),
@@ -4319,6 +4471,103 @@ impl Checker {
                 TypeName::String,
             ));
         }
+        self.describe_schema_member(receiver_type, name, span, for_write)
+    }
+
+    fn unqualified_schema_sobject_type_member(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let Expression::Variable(identifier) = receiver else {
+            return None;
+        };
+        let unshadowed = self.lookup(&identifier.canonical).is_none()
+            && !self.class_ids.contains_key(&identifier.canonical)
+            && self.current_class.is_none_or(|class_id| {
+                self.lexical_class_value_member(class_id, &identifier.canonical)
+                    .is_none()
+            });
+        if name.canonical != "sobjecttype" || !unshadowed {
+            return None;
+        }
+        let object_id = self.schema.object_index(&identifier.spelling)?;
+        Some(self.checked_schema_member(
+            span,
+            name,
+            for_write,
+            hir::SchemaMemberTarget::SObjectType { object_id },
+            TypeName::SObjectType,
+        ))
+    }
+
+    fn schema_sobject_type_token_member(
+        &mut self,
+        object_id: usize,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let (target, ty) = match name.canonical.as_str() {
+            "sobjecttype" => (
+                hir::SchemaMemberTarget::SObjectType { object_id },
+                TypeName::SObjectType,
+            ),
+            "fields" => (
+                hir::SchemaMemberTarget::DescribeFields,
+                TypeName::SObjectFieldMap,
+            ),
+            "fieldsets" => (
+                hir::SchemaMemberTarget::DescribeFieldSets,
+                TypeName::FieldSetMap,
+            ),
+            _ => return self.schema_sobject_field_token_member(object_id, name, span, for_write),
+        };
+        self.checked_schema_member(span, name, for_write, target, ty)
+    }
+
+    fn schema_sobject_field_token_member(
+        &mut self,
+        object_id: usize,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("schema token object index is valid");
+        let Some(field_id) = object.field_index(&name.spelling) else {
+            return Err(Diagnostic::new(
+                format!(
+                    "unknown field token `{}.{}`",
+                    object.api_name(),
+                    name.spelling
+                ),
+                name.span,
+            ));
+        };
+        self.checked_schema_member(
+            span,
+            name,
+            for_write,
+            hir::SchemaMemberTarget::SObjectField {
+                object_id,
+                field_id,
+            },
+            TypeName::SObjectField,
+        )
+    }
+
+    fn describe_schema_member(
+        &mut self,
+        receiver_type: TypeName,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
         let (target, ty) = match (receiver_type, name.canonical.as_str()) {
             (TypeName::DescribeSObjectResult, "fields") => (
                 hir::SchemaMemberTarget::DescribeFields,
@@ -4911,26 +5160,7 @@ impl Checker {
         expression: &Expression,
     ) -> Result<ExpressionType, Diagnostic> {
         let actual = self.expression_type(expression)?;
-        let allowed = match &actual {
-            ExpressionType::Null => true,
-            ExpressionType::Value(source) => {
-                source == target
-                    || (matches!(source, TypeName::Integer | TypeName::Long)
-                        && matches!(target, TypeName::Integer | TypeName::Long))
-                    || (matches!(
-                        source,
-                        TypeName::Integer | TypeName::Long | TypeName::Decimal
-                    ) && *target == TypeName::Double)
-                    || *source == TypeName::Object
-                    || *target == TypeName::Object
-                    || (*source == TypeName::Exception && self.is_exception_type(target))
-                    || (*target == TypeName::Exception && self.is_exception_type(source))
-                    || self.is_subtype(source, target)
-                    || self.is_subtype(target, source)
-            }
-            ExpressionType::Void => false,
-        };
-        if allowed {
+        if self.cast_allowed(&actual, target) {
             Ok(ExpressionType::Value(target.clone()))
         } else {
             Err(Diagnostic::new(
@@ -4938,6 +5168,26 @@ impl Checker {
                 expression.span(),
             ))
         }
+    }
+
+    fn cast_allowed(&self, actual: &ExpressionType, target: &TypeName) -> bool {
+        match actual {
+            ExpressionType::Null => true,
+            ExpressionType::Value(source) => self.value_cast_allowed(source, target),
+            ExpressionType::Void => false,
+        }
+    }
+
+    fn value_cast_allowed(&self, source: &TypeName, target: &TypeName) -> bool {
+        source == target
+            || integral_cast(source, target)
+            || numeric_to_double_cast(source, target)
+            || *source == TypeName::Object
+            || *target == TypeName::Object
+            || (*source == TypeName::Exception && self.is_exception_type(target))
+            || (*target == TypeName::Exception && self.is_exception_type(source))
+            || self.is_subtype(source, target)
+            || self.is_subtype(target, source)
     }
 
     fn new_collection_type(
@@ -5712,86 +5962,122 @@ impl Checker {
         if !self.is_sobject_type(receiver_type) && !self.is_dynamic_sobject_type(receiver_type) {
             return None;
         }
-        Some((|| match method.canonical.as_str() {
-            "get" => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[1],
-                    arguments,
-                )?;
-                let field_type = self.expression_type(&arguments[0])?;
-                if !matches!(
-                    field_type,
-                    ExpressionType::Value(TypeName::String | TypeName::SObjectField)
-                ) {
-                    return Err(Diagnostic::new(
-                        "SObject.get expects a String or Schema.SObjectField",
-                        arguments[0].span(),
-                    ));
-                }
-                self.calls.insert(span, CallTarget::SObjectGet);
-                Ok(ExpressionType::Value(TypeName::Object))
-            }
-            "put" => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[2],
-                    arguments,
-                )?;
-                let field_type = self.expression_type(&arguments[0])?;
-                if !matches!(
-                    field_type,
-                    ExpressionType::Value(TypeName::String | TypeName::SObjectField)
-                ) {
-                    return Err(Diagnostic::new(
-                        "SObject.put expects a String or Schema.SObjectField",
-                        arguments[0].span(),
-                    ));
-                }
-                let value_type = self.expression_type(&arguments[1])?;
-                if value_type == ExpressionType::Void {
-                    return Err(Diagnostic::new(
-                        "SObject.put value cannot be void",
-                        arguments[1].span(),
-                    ));
-                }
-                self.calls.insert(span, CallTarget::SObjectPut);
-                Ok(ExpressionType::Void)
-            }
+        Some(match method.canonical.as_str() {
+            "get" => self.sobject_get_method_type(receiver_type, method, arguments, span),
+            "put" => self.sobject_put_method_type(receiver_type, method, arguments, span),
             "setoptions" => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[1],
-                    arguments,
-                )?;
-                self.require_operand(&arguments[0], &TypeName::DmlOptions, arguments[0].span())?;
-                self.calls.insert(span, CallTarget::SObjectSetOptions);
-                Ok(ExpressionType::Void)
+                self.sobject_set_options_method_type(receiver_type, method, arguments, span)
             }
             "getsobjecttype" => {
-                require_arity(
-                    receiver_type,
-                    &method.spelling,
-                    arguments.len(),
-                    &[0],
-                    arguments,
-                )?;
-                self.calls.insert(
-                    span,
-                    CallTarget::Intrinsic(hir::IntrinsicId::Platform(
-                        hir::PlatformIntrinsic::SObjectGetSObjectType,
-                    )),
-                );
-                Ok(ExpressionType::Value(TypeName::SObjectType))
+                self.sobject_get_sobject_type_method_type(receiver_type, method, arguments, span)
             }
             _ => Err(unknown_method(receiver_type, method)),
-        })())
+        })
+    }
+
+    fn sobject_get_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[1],
+            arguments,
+        )?;
+        self.require_sobject_field_argument(&arguments[0], "get")?;
+        self.calls.insert(span, CallTarget::SObjectGet);
+        Ok(ExpressionType::Value(TypeName::Object))
+    }
+
+    fn sobject_put_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[2],
+            arguments,
+        )?;
+        self.require_sobject_field_argument(&arguments[0], "put")?;
+        let value_type = self.expression_type(&arguments[1])?;
+        if value_type == ExpressionType::Void {
+            return Err(Diagnostic::new(
+                "SObject.put value cannot be void",
+                arguments[1].span(),
+            ));
+        }
+        self.calls.insert(span, CallTarget::SObjectPut);
+        Ok(ExpressionType::Void)
+    }
+
+    fn require_sobject_field_argument(
+        &mut self,
+        argument: &Expression,
+        method_name: &str,
+    ) -> Result<(), Diagnostic> {
+        let field_type = self.expression_type(argument)?;
+        if matches!(
+            field_type,
+            ExpressionType::Value(TypeName::String | TypeName::SObjectField)
+        ) {
+            return Ok(());
+        }
+        Err(Diagnostic::new(
+            format!("SObject.{method_name} expects a String or Schema.SObjectField"),
+            argument.span(),
+        ))
+    }
+
+    fn sobject_set_options_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[1],
+            arguments,
+        )?;
+        self.require_operand(&arguments[0], &TypeName::DmlOptions, arguments[0].span())?;
+        self.calls.insert(span, CallTarget::SObjectSetOptions);
+        Ok(ExpressionType::Void)
+    }
+
+    fn sobject_get_sobject_type_method_type(
+        &mut self,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ExpressionType, Diagnostic> {
+        require_arity(
+            receiver_type,
+            &method.spelling,
+            arguments.len(),
+            &[0],
+            arguments,
+        )?;
+        self.calls.insert(
+            span,
+            CallTarget::Intrinsic(hir::IntrinsicId::Platform(
+                hir::PlatformIntrinsic::SObjectGetSObjectType,
+            )),
+        );
+        Ok(ExpressionType::Value(TypeName::SObjectType))
     }
 
     fn security_decision_method_type(
@@ -7255,6 +7541,29 @@ fn numeric_type(kind: NumericKind) -> TypeName {
     }
 }
 
+fn numeric_widening_subtype(actual: &TypeName, expected: &TypeName) -> bool {
+    matches!(
+        (actual, expected),
+        (
+            TypeName::Integer,
+            TypeName::Long | TypeName::Decimal | TypeName::Double
+        ) | (TypeName::Long, TypeName::Decimal | TypeName::Double)
+            | (TypeName::Decimal, TypeName::Double)
+    )
+}
+
+fn integral_cast(source: &TypeName, target: &TypeName) -> bool {
+    matches!(source, TypeName::Integer | TypeName::Long)
+        && matches!(target, TypeName::Integer | TypeName::Long)
+}
+
+fn numeric_to_double_cast(source: &TypeName, target: &TypeName) -> bool {
+    matches!(
+        source,
+        TypeName::Integer | TypeName::Long | TypeName::Decimal
+    ) && *target == TypeName::Double
+}
+
 fn compound_binary_operator(operator: AssignmentOperator) -> BinaryOperator {
     match operator {
         AssignmentOperator::Assign => {
@@ -7387,6 +7696,56 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
         FieldType::Summary { result_type, .. } => apex_field_type(result_type),
         FieldType::Date => TypeName::Date,
         FieldType::Datetime => TypeName::Datetime,
+    }
+}
+
+fn platform_constructor_for_type(ty: &TypeName) -> Option<PlatformConstructor> {
+    match ty {
+        TypeName::Http => Some(PlatformConstructor::Http),
+        TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
+        TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
+        TypeName::DmlOptions => Some(PlatformConstructor::DmlOptions),
+        TypeName::VisualEditorDataRow => Some(PlatformConstructor::VisualEditorDataRow),
+        TypeName::VisualEditorDynamicPickListRows => {
+            Some(PlatformConstructor::VisualEditorDynamicPickListRows)
+        }
+        _ => None,
+    }
+}
+
+fn trigger_context_variable_type(
+    name: &Identifier,
+    object_type: TypeName,
+) -> Result<(TriggerContextVariable, TypeName), Diagnostic> {
+    match name.canonical.as_str() {
+        "new" => Ok((
+            TriggerContextVariable::New,
+            TypeName::List(Box::new(object_type)),
+        )),
+        "old" => Ok((
+            TriggerContextVariable::Old,
+            TypeName::List(Box::new(object_type)),
+        )),
+        "newmap" => Ok((
+            TriggerContextVariable::NewMap,
+            TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+        )),
+        "oldmap" => Ok((
+            TriggerContextVariable::OldMap,
+            TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+        )),
+        "isexecuting" => Ok((TriggerContextVariable::IsExecuting, TypeName::Boolean)),
+        "isbefore" => Ok((TriggerContextVariable::IsBefore, TypeName::Boolean)),
+        "isafter" => Ok((TriggerContextVariable::IsAfter, TypeName::Boolean)),
+        "isinsert" => Ok((TriggerContextVariable::IsInsert, TypeName::Boolean)),
+        "isupdate" => Ok((TriggerContextVariable::IsUpdate, TypeName::Boolean)),
+        "isdelete" => Ok((TriggerContextVariable::IsDelete, TypeName::Boolean)),
+        "isundelete" => Ok((TriggerContextVariable::IsUndelete, TypeName::Boolean)),
+        "size" => Ok((TriggerContextVariable::Size, TypeName::Integer)),
+        _ => Err(Diagnostic::new(
+            format!("unknown Trigger context variable `{}`", name.spelling),
+            name.span,
+        )),
     }
 }
 
