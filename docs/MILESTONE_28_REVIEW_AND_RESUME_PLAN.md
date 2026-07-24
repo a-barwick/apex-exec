@@ -284,7 +284,7 @@ package after review and integration.
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-1/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | C1 integrated at `f841099` | Enterprise evidence only |
 | M28-CN | One next-ranked compatibility family | Complete (integrated at `d2aefd2`; transient property semantics; reviewed; local and Salesforce differential evidence 2/2; post-slice census recorded) | CENSUS-1 complete | Semantic modifier and JSON serialization |
 | M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated at `d2aefd2` | Enterprise evidence only |
-| M28-CN2 | One next-ranked compatibility family | Active (`codex/m28-cn2-cross-type-equality`; cross-type equality selected by CENSUS-2) | Latest census | Determined by fresh first blockers |
+| M28-CN2 | One next-ranked compatibility family | Review (`2b7ddda`; nested-enum equality resolves through checked type identity; local/Salesforce evidence 2/2; full Rust, documentation, and Lizard gates pass) | Latest census | Determined by fresh first blockers |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -483,6 +483,8 @@ surface. Implementation agents must not make those decisions.
 M28-C1 is reviewed and integrated from
 `codex/m28-c1-id-sobject-type`. The transient-property package is implemented
 on `codex/m28-cn-transient-property` and integrated at `d2aefd2`, with matching
-local/Salesforce evidence and a recorded post-slice enterprise census. The
-next package is ready for owner direction: the cross-type equality check. No
-implementation of that next family has started.
+local/Salesforce evidence and a recorded post-slice enterprise census.
+M28-CN2 resolves the selected nested-enum equality family on
+`codex/m28-cn2-cross-type-equality` and is awaiting independent review. Do not
+run the next census or select another compatibility family until CN2 is
+reviewed and integrated.

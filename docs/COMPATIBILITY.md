@@ -704,7 +704,11 @@ is recorded in `evidence/milestone28/census-2/report.json`. The next first
 blocker is cross-type equality between `SourceMetadataType` and
 `LoggerStackTrace.SourceMetadataType`, affecting 1,126 tests. See
 `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
-`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
+`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue. The
+selected equality slice resolves equivalent nested-enum type spellings through
+the checked type-identity boundary and has 2/2 focused local/Salesforce
+dimensions; it remains in review until integrated, so the census is not yet
+superseded.
 
 ## Platform surface
 
