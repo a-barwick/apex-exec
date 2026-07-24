@@ -414,6 +414,19 @@ impl SchemaCatalog {
         self.objects.keys().position(|name| name == &canonical)
     }
 
+    /// Resolves a Salesforce three-character key prefix to the deterministic
+    /// schema object index used by the compiler and runtime.
+    ///
+    /// The catalog is ordered by canonical API name, so this scan has a
+    /// stable, finite cost bounded by the number of catalog objects.
+    pub fn object_index_by_key_prefix(&self, key_prefix: &str) -> Option<usize> {
+        self.objects
+            .values()
+            .enumerate()
+            .find(|(_, object)| object.key_prefix() == key_prefix)
+            .map(|(index, _)| index)
+    }
+
     pub fn object_at(&self, index: usize) -> Option<&ObjectSchema> {
         self.objects.values().nth(index)
     }
@@ -686,5 +699,25 @@ mod tests {
                 object: "Second__c".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn key_prefix_lookup_is_deterministic_and_bounded_by_catalog_size() {
+        let objects = (0..128).map(|index| {
+            ObjectSchema::with_key_prefix(
+                format!("M28Object{index:03}__c"),
+                format!("{index:02x}a"),
+            )
+            .unwrap()
+        });
+        let catalog = SchemaCatalog::from_objects(objects).unwrap();
+
+        let expected = catalog.object_index("M28Object127__c");
+        assert_eq!(
+            catalog.object_index_by_key_prefix("7fa"),
+            expected,
+            "prefix lookup should use the same stable object ordering"
+        );
+        assert_eq!(catalog.object_index_by_key_prefix("zzz"), None);
     }
 }

@@ -30,10 +30,13 @@ evaluate-once compound assignment. M20 completes nested declarations, enums,
 and type literals. M21 closes the pinned North Star grammar with lossless
 syntax and explicit checked-only dispositions where runtime behavior remains
 unsupported. All 14 lexer/parser indicators now pass as ordinary tests.
-M22 is the next milestone.
-The phase then carries that syntax foundation into a representative 60–80%
-enterprise test benchmark, broader metadata accounting, selected platform
-fidelity, and persistent incremental compiler work. See
+M22 through M27 then freeze and measure a representative enterprise benchmark,
+expand metadata and query/DML fidelity, bind platform behavior to effective API
+profiles, and complete sharing/security evidence. M28 is active: its V0 quality
+gate is complete and the current C1 slice implements typed `Id.getSObjectType`
+resolution, while the frozen 1,159-test replay remains at 0 strict matches
+until the next census. M29 continues the persistent incremental compiler work.
+See
 [the baseline audit](docs/PHASE_2_BASELINE.md) for the evidence and the
 important distinction between syntax progress and runtime compatibility.
 

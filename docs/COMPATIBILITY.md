@@ -30,7 +30,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
 | `Datetime` | Yes | Yes | Yes | Simplified | UTC construction/parsing, epoch milliseconds, arithmetic, date/time projections, and formatting |
 | `Time` | Yes | Yes | Yes | Simplified | Millisecond construction/parsing, wrapping arithmetic, components, and formatting |
-| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character standalone values with checksum-aware `to15`/`to18` |
+| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character values with checksum-aware `to15`/`to18`; `getSObjectType()` resolves known catalog key prefixes and raises catchable `SObjectException` for malformed or unknown IDs |
 | `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Initializers remain checked and execute in source order |
@@ -430,7 +430,7 @@ produce a compile diagnostic naming the API and exact effective profile.
   components, and `format`.
 - `Decimal`: literals, mixed Integer operators, `valueOf`, `setScale`, `abs`,
   `scale`, and deterministic text conversion.
-- `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
+- `Id`: `valueOf`, `to15`, `to18`, and `getSObjectType`; `Blob`: `valueOf`, `toString`, and
   `size`; `EncodingUtil`: Base64 encode/decode.
 - `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`; structural
   serialization rejects cycles or exhausted traversal budgets with catchable

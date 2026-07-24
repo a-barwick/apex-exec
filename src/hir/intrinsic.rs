@@ -153,6 +153,7 @@ pub enum PlatformIntrinsic {
     IdValueOf,
     IdTo15,
     IdTo18,
+    IdGetSObjectType,
     BlobValueOf,
     BlobToString,
     BlobSize,

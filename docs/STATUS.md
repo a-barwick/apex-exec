@@ -11,9 +11,10 @@ The pre-open-source audit and execution strategy are now captured in
 correctness criteria have passed. M18 — null-aware expressions, M19 — bitwise,
 shift, `Long`, and compound operators, M20 — nested declarations, enums, and
 type literals, and M21 — North Star grammar closure are complete.
-M22 through M25 are also complete: the enterprise denominator is frozen,
-query and partial-DML fidelity are expanded, and effective Salesforce API
-profiles now bind every project source and downstream result.
+M22 through M27 are also complete: the enterprise denominator is frozen,
+query and partial-DML fidelity are expanded, effective Salesforce API profiles
+now bind every project source and downstream result, and sharing/security
+behavior has live-reviewed evidence.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -484,21 +485,22 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 ## Immediate target
 
 M27 sharing and security profiles is complete. M28 measured enterprise
-compatibility closure is active on
-`codex/milestone-28-enterprise-compatibility`. Ten bounded slices are
-checkpointed: typed SObject switch patterns, `@IsTest(IsParallel=...)`,
-metadata relationships, roll-up summaries, exact equality, `ALL ROWS` and
-undelete behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable
-sorting, and `Database.Stateful`.
+compatibility closure is active. Its V0 integrated quality gate is complete;
+M28-C1 is under review on `codex/m28-c1-id-sobject-type` and adds the typed
+`Id.getSObjectType` boundary. Ten earlier bounded slices are checkpointed:
+typed SObject switch patterns, `@IsTest(IsParallel=...)`, metadata
+relationships, roll-up summaries, exact equality, `ALL ROWS` and undelete
+behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable sorting, and
+`Database.Stateful`.
 
 The latest frozen enterprise replay parses 1,159/1,159 tests and checks
-0/1,159. The current first blockers are `Id.getSObjectType` for 1,126 tests,
+0/1,159. The current first blocker remains `Id.getSObjectType` for 1,126 tests,
 `Flow.Interview` for 18, and
-`System.FeatureManagement.checkPermission` for 15. A subsequent integrated
-review found eight ordinary test failures, 28 warning-denied Clippy
-diagnostics, and 44 maintainability-ratchet regressions. The strict numerator
-therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
-merge as complete. The frozen handoff is in
+`System.FeatureManagement.checkPermission` for 15. The V0 quality gate cleared
+the recorded Rust, tooling, website, editor, dependency, documentation,
+maintainability, and coverage checks. The strict numerator therefore remains
+0/1,159, the 60% exit criterion is unmet, and M28 must not merge as complete.
+The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.
 
