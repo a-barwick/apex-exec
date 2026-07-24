@@ -12,10 +12,20 @@ use std::{
 mod intrinsic;
 
 pub use intrinsic::{
-    ExceptionIntrinsic, IntrinsicId, ListIntrinsic, MapIntrinsic, MathIntrinsic,
+    ExceptionIntrinsic, IntrinsicId, LimitIntrinsic, ListIntrinsic, MapIntrinsic, MathIntrinsic,
     PlatformConstructor, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
     SystemIntrinsic,
 };
+
+pub(crate) fn schema_api_name(name: &ast::NamedType) -> &str {
+    if name.canonical.starts_with("schema.") {
+        name.spelling
+            .split_once('.')
+            .map_or(name.spelling.as_str(), |(_, api_name)| api_name)
+    } else {
+        &name.spelling
+    }
+}
 
 /// The checked program consumed by execution.
 ///
@@ -29,12 +39,21 @@ pub struct Program {
     references: HashMap<Span, ReferenceTarget>,
     members: HashMap<Span, MemberTarget>,
     places: HashMap<Span, PlaceTarget>,
+    sobject_constructor_fields: HashMap<Span, Vec<FieldId>>,
     binary_operations: HashMap<Span, CheckedBinaryOperation>,
     unary_operations: HashMap<Span, CheckedUnaryOperation>,
     type_literals: HashMap<Span, ast::TypeName>,
+    switch_patterns: HashMap<Span, ObjectTypeId>,
     queries: HashMap<Span, CheckedQuery>,
     null_aware_queries: HashSet<Span>,
     async_contracts: HashMap<usize, AsyncClassContract>,
+    batchable_context_contracts: HashMap<usize, BatchableContextContract>,
+    finalizer_context_contracts: HashMap<usize, FinalizerContextContract>,
+    queueable_context_contracts: HashMap<usize, ClassMemberId>,
+    schedulable_context_contracts: HashMap<usize, ClassMemberId>,
+    http_callout_mock_contracts: HashMap<usize, ClassMemberId>,
+    callable_contracts: HashMap<usize, ClassMemberId>,
+    comparable_contracts: HashMap<usize, ClassMemberId>,
     class_metadata: Vec<ClassRuntimeMetadata>,
     schema: SchemaCatalog,
     profiles: SourceProfiles,
@@ -53,12 +72,21 @@ impl Program {
             references,
             members,
             places,
+            sobject_constructor_fields,
             binary_operations,
             unary_operations,
             type_literals,
+            switch_patterns,
             queries,
             null_aware_queries,
             async_contracts,
+            batchable_context_contracts,
+            finalizer_context_contracts,
+            queueable_context_contracts,
+            schedulable_context_contracts,
+            http_callout_mock_contracts,
+            callable_contracts,
+            comparable_contracts,
         } = facts;
         let class_metadata = build_class_metadata(&ast);
         Self {
@@ -68,12 +96,21 @@ impl Program {
             references,
             members,
             places,
+            sobject_constructor_fields,
             binary_operations,
             unary_operations,
             type_literals,
+            switch_patterns,
             queries,
             null_aware_queries,
             async_contracts,
+            batchable_context_contracts,
+            finalizer_context_contracts,
+            queueable_context_contracts,
+            schedulable_context_contracts,
+            http_callout_mock_contracts,
+            callable_contracts,
+            comparable_contracts,
             class_metadata,
             schema,
             profiles,
@@ -104,6 +141,12 @@ impl Program {
         self.places.get(&span).copied()
     }
 
+    pub(crate) fn sobject_constructor_fields(&self, span: Span) -> Option<&[FieldId]> {
+        self.sobject_constructor_fields
+            .get(&span)
+            .map(Vec::as_slice)
+    }
+
     pub(crate) fn binary_operation(&self, span: Span) -> Option<CheckedBinaryOperation> {
         self.binary_operations.get(&span).copied()
     }
@@ -116,6 +159,10 @@ impl Program {
         self.type_literals.get(&span)
     }
 
+    pub(crate) fn switch_pattern(&self, span: Span) -> Option<ObjectTypeId> {
+        self.switch_patterns.get(&span).copied()
+    }
+
     pub fn checked_query(&self, span: Span) -> Option<&CheckedQuery> {
         self.queries.get(&span)
     }
@@ -126,6 +173,40 @@ impl Program {
 
     pub fn async_contract(&self, class_id: usize) -> Option<&AsyncClassContract> {
         self.async_contracts.get(&class_id)
+    }
+
+    pub(crate) fn batchable_context_contract(
+        &self,
+        class_id: usize,
+    ) -> Option<&BatchableContextContract> {
+        self.batchable_context_contracts.get(&class_id)
+    }
+
+    pub(crate) fn finalizer_context_contract(
+        &self,
+        class_id: usize,
+    ) -> Option<&FinalizerContextContract> {
+        self.finalizer_context_contracts.get(&class_id)
+    }
+
+    pub(crate) fn queueable_context_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.queueable_context_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn schedulable_context_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.schedulable_context_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn http_callout_mock_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.http_callout_mock_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn callable_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.callable_contracts.get(&class_id).copied()
+    }
+
+    pub(crate) fn comparable_contract(&self, class_id: usize) -> Option<ClassMemberId> {
+        self.comparable_contracts.get(&class_id).copied()
     }
 
     pub(crate) fn class_metadata(&self, class_id: ClassId) -> &ClassRuntimeMetadata {
@@ -294,12 +375,21 @@ pub(crate) struct ProgramFacts {
     pub references: HashMap<Span, ReferenceTarget>,
     pub members: HashMap<Span, MemberTarget>,
     pub places: HashMap<Span, PlaceTarget>,
+    pub sobject_constructor_fields: HashMap<Span, Vec<FieldId>>,
     pub binary_operations: HashMap<Span, CheckedBinaryOperation>,
     pub unary_operations: HashMap<Span, CheckedUnaryOperation>,
     pub type_literals: HashMap<Span, ast::TypeName>,
+    pub switch_patterns: HashMap<Span, ObjectTypeId>,
     pub queries: HashMap<Span, CheckedQuery>,
     pub null_aware_queries: HashSet<Span>,
     pub async_contracts: HashMap<usize, AsyncClassContract>,
+    pub batchable_context_contracts: HashMap<usize, BatchableContextContract>,
+    pub finalizer_context_contracts: HashMap<usize, FinalizerContextContract>,
+    pub queueable_context_contracts: HashMap<usize, ClassMemberId>,
+    pub schedulable_context_contracts: HashMap<usize, ClassMemberId>,
+    pub http_callout_mock_contracts: HashMap<usize, ClassMemberId>,
+    pub callable_contracts: HashMap<usize, ClassMemberId>,
+    pub comparable_contracts: HashMap<usize, ClassMemberId>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -307,6 +397,21 @@ pub struct AsyncClassContract {
     pub queueable: Option<ClassMemberId>,
     pub batch: Option<BatchContract>,
     pub schedulable: Option<ClassMemberId>,
+    pub allows_callouts: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchableContextContract {
+    pub get_job_id: ClassMemberId,
+    pub get_child_job_id: ClassMemberId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizerContextContract {
+    pub get_async_apex_job_id: ClassMemberId,
+    pub get_exception: ClassMemberId,
+    pub get_result: ClassMemberId,
+    pub get_request_id: ClassMemberId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -315,6 +420,7 @@ pub struct BatchContract {
     pub execute: ClassMemberId,
     pub finish: ClassMemberId,
     pub scope_type: ast::TypeName,
+    pub stateful: bool,
 }
 
 impl Deref for Program {
@@ -365,10 +471,15 @@ pub enum CallTarget {
     },
     SObjectGet,
     SObjectPut,
+    SObjectSetOptions,
     DatabaseDml(DatabaseDmlTarget),
     DmlResultMethod(DmlResultMethod),
     DmlErrorMethod(DmlErrorMethod),
     SecurityDecisionMethod(SecurityDecisionMethod),
+    CustomMetadataMethod {
+        object_id: ObjectTypeId,
+        method: CustomMetadataMethod,
+    },
     DatabaseQuery {
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
@@ -389,10 +500,17 @@ pub enum SecurityDecisionMethod {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomMetadataMethod {
+    GetAll,
+    GetInstance,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DatabaseDmlTarget {
     pub operation: ast::DmlOperation,
     pub external_id: Option<(ObjectTypeId, FieldId)>,
     pub all_or_none_argument: Option<usize>,
+    pub dml_options_argument: Option<usize>,
     pub access_level_argument: Option<usize>,
     pub statement_access: Option<crate::platform::AccessLevel>,
 }
@@ -410,6 +528,12 @@ pub enum DmlErrorMethod {
     GetStatusCode,
     GetMessage,
     GetFields,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmlOptionField {
+    AllowFieldTruncation,
+    OptAllOrNone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -477,11 +601,15 @@ pub enum PlaceTarget {
     Local,
     InstanceMember(ClassMemberId),
     StaticMember(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
     ListIndex,
     SObjectField {
         object_id: ObjectTypeId,
         field_id: FieldId,
     },
+    DynamicSObjectId,
+    DmlOptionField(DmlOptionField),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -489,6 +617,7 @@ pub enum NumericKind {
     Integer,
     Long,
     Decimal,
+    Double,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,16 +652,24 @@ pub enum ReferenceTarget {
     Super(usize),
     InstanceMember(ClassMemberId),
     StaticMember(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
+    PlatformEnum(crate::platform::PlatformEnum),
+    EnumConstant { class_id: ClassId, ordinal: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberTarget {
     Instance(ClassMemberId),
     Static(ClassMemberId),
+    InstancePropertyStorage(ClassMemberId),
+    StaticPropertyStorage(ClassMemberId),
     SObjectField {
         object_id: usize,
         field_id: usize,
     },
+    DynamicSObjectId,
+    DmlOptionField(DmlOptionField),
     SObjectRelationship {
         object_id: usize,
         reference_field_id: usize,
@@ -547,6 +684,7 @@ pub enum MemberTarget {
     DmlStatus(crate::platform::DmlStatus),
     AccessLevel(crate::platform::AccessLevel),
     AccessType(crate::platform::AccessType),
+    PlatformEnum(crate::platform::PlatformEnum),
     EnumConstant {
         class_id: ClassId,
         ordinal: usize,
@@ -554,6 +692,16 @@ pub enum MemberTarget {
     TypeReference {
         class_id: ClassId,
     },
+    Schema(SchemaMemberTarget),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SchemaMemberTarget {
+    SObjectType { object_id: usize },
+    SObjectField { object_id: usize, field_id: usize },
+    DescribeFields,
+    DescribeFieldSets,
+    PicklistValue(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -589,6 +737,7 @@ pub struct CheckedSoqlQuery {
     pub order_by: Vec<CheckedOrderBy>,
     pub limit: Option<CheckedValue>,
     pub offset: Option<CheckedValue>,
+    pub all_rows: bool,
     pub result: QueryResultKind,
 }
 

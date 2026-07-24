@@ -70,6 +70,7 @@ impl ExecutionStore {
             fields: BTreeMap::new(),
             relationships: BTreeMap::new(),
             children: BTreeMap::new(),
+            dml_options: None,
         });
         Value::SObject(id)
     }

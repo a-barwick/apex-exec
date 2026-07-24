@@ -2,13 +2,14 @@ use crate::{
     ast::{
         AccessorKind, AssignmentOperator, AssignmentTarget, BinaryOperator, CatchClause,
         ClassMember, CollectionInitializer, Expression, Identifier, Modifier, PostfixOperator,
-        ReturnType, Statement, TypeName, UnaryOperator,
+        ReturnType, Statement, SwitchArm, SwitchLabels, TypeName, UnaryOperator,
     },
     diagnostic::Diagnostic,
     hir::{
         CallTarget, CheckedBinaryOperation, CheckedUnaryOperation, ClassId, ClassMemberId,
-        DatabaseDmlTarget, ExpressionType, FieldId, MemberTarget, NumericKind, ObjectTypeId,
-        PlaceTarget, Program, ReferenceTarget, SecurityDecisionMethod, TriggerContextVariable,
+        CustomMetadataMethod, DatabaseDmlTarget, DmlOptionField, ExpressionType, FieldId,
+        MemberTarget, NumericKind, ObjectTypeId, PlaceTarget, Program, ReferenceTarget,
+        SchemaMemberTarget, SecurityDecisionMethod, TriggerContextVariable,
     },
     platform::{DmlError as PlatformDmlError, DmlRowOutcome, FieldType},
     span::Span,
@@ -38,8 +39,9 @@ use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DE
 use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
-    LimitUsage, M11_ASYNC_PROFILE, PlatformHost, QueryEvent, QueryKind, RecordingHost,
-    TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
+    LimitUsage, M11_ASYNC_PROFILE, NetworkContext, PlatformHost, QueryEvent, QueryKind,
+    RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
+    TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 pub(crate) use instrumentation::{BranchHits, ExecutionTrace};
@@ -48,6 +50,27 @@ use instrumentation::{
     DebugSnapshotBuilder, InstrumentationPolicy, InstrumentationState, StatementInstrumentation,
 };
 use store::ExecutionStore;
+
+#[derive(Clone, Copy, Debug)]
+struct ApexDouble(f64);
+
+impl ApexDouble {
+    fn new(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+
+    fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for ApexDouble {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for ApexDouble {}
 
 /// Complete deterministic trace from one debugger launch.
 #[derive(Clone, Debug)]
@@ -89,6 +112,7 @@ enum Value {
     Integer(i64),
     Long(i64),
     Decimal(Decimal),
+    Double(ApexDouble),
     Date(NaiveDate),
     Datetime(DateTime<Utc>),
     Time(NaiveTime),
@@ -125,8 +149,33 @@ enum PlatformValue {
     Http,
     HttpRequest(HttpRequestData),
     HttpResponse(HttpResponseData),
+    DmlOptions(DmlOptionsValue),
+    VisualEditorDataRow {
+        label: String,
+        value: String,
+    },
+    VisualEditorDynamicPickListRows(Vec<PlatformValueId>),
     SObjectType(usize),
     DescribeSObject(usize),
+    SObjectField {
+        object_id: usize,
+        field_id: usize,
+    },
+    DescribeField {
+        object_id: usize,
+        field_id: usize,
+    },
+    SObjectFieldMap(usize),
+    FieldSetMap(usize),
+    FieldSet {
+        object_id: usize,
+        name: String,
+    },
+    FieldSetMember {
+        object_id: usize,
+        field_id: usize,
+    },
+    PicklistEntry(String),
     AsyncContext {
         ty: TypeName,
         job_id: String,
@@ -140,6 +189,12 @@ enum PlatformValue {
     DmlStatus(crate::platform::DmlStatus),
     AccessLevel(crate::platform::AccessLevel),
     AccessType(crate::platform::AccessType),
+    PlatformEnum(crate::platform::PlatformEnum),
+    CachePartition,
+    Request {
+        request_id: String,
+        quiddity: crate::platform::Quiddity,
+    },
     SecurityDecision {
         records: CollectionId,
         removed_fields: BTreeMap<String, Vec<String>>,
@@ -155,8 +210,18 @@ impl PlatformValue {
             Self::Http => TypeName::Http,
             Self::HttpRequest(_) => TypeName::HttpRequest,
             Self::HttpResponse(_) => TypeName::HttpResponse,
+            Self::DmlOptions(_) => TypeName::DmlOptions,
+            Self::VisualEditorDataRow { .. } => TypeName::VisualEditorDataRow,
+            Self::VisualEditorDynamicPickListRows(_) => TypeName::VisualEditorDynamicPickListRows,
             Self::SObjectType(_) => TypeName::SObjectType,
             Self::DescribeSObject(_) => TypeName::DescribeSObjectResult,
+            Self::SObjectField { .. } => TypeName::SObjectField,
+            Self::DescribeField { .. } => TypeName::DescribeFieldResult,
+            Self::SObjectFieldMap(_) => TypeName::SObjectFieldMap,
+            Self::FieldSetMap(_) => TypeName::FieldSetMap,
+            Self::FieldSet { .. } => TypeName::FieldSet,
+            Self::FieldSetMember { .. } => TypeName::FieldSetMember,
+            Self::PicklistEntry(_) => TypeName::PicklistEntry,
             Self::AsyncContext { ty, .. } => ty.clone(),
             Self::QueryLocator(_) => TypeName::QueryLocator,
             Self::DmlResult { ty, .. } => ty.clone(),
@@ -164,6 +229,9 @@ impl PlatformValue {
             Self::DmlStatus(_) => TypeName::StatusCode,
             Self::AccessLevel(_) => TypeName::AccessLevel,
             Self::AccessType(_) => TypeName::AccessType,
+            Self::PlatformEnum(value) => value.ty(),
+            Self::CachePartition => TypeName::CachePartition,
+            Self::Request { .. } => TypeName::Request,
             Self::SecurityDecision { .. } => TypeName::SObjectAccessDecision,
         }
     }
@@ -206,6 +274,13 @@ struct SObjectInstance {
     fields: BTreeMap<usize, Value>,
     relationships: BTreeMap<usize, SObjectId>,
     children: BTreeMap<String, CollectionId>,
+    dml_options: Option<DmlOptionsValue>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DmlOptionsValue {
+    allow_field_truncation: Option<bool>,
+    opt_all_or_none: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -241,6 +316,7 @@ enum Place {
     ClassMember {
         target: ClassMemberId,
         receiver: Option<ObjectId>,
+        property_storage: bool,
     },
     ListIndex {
         collection: CollectionId,
@@ -250,6 +326,13 @@ enum Place {
         receiver: SObjectId,
         object_id: usize,
         field_id: usize,
+    },
+    DynamicSObjectId {
+        receiver: SObjectId,
+    },
+    DmlOptionField {
+        receiver: PlatformValueId,
+        field: DmlOptionField,
     },
 }
 
@@ -289,6 +372,7 @@ enum AsyncWork {
 struct CurrentAsync {
     id: String,
     kind: AsyncJobKind,
+    allows_callouts: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +421,7 @@ pub struct Interpreter<'program, H = RecordingHost> {
     initialization_stack: Vec<usize>,
     async_queue: VecDeque<PendingAsyncJob>,
     current_async: Option<CurrentAsync>,
+    http_callout_mock: Option<ObjectId>,
     user_override: Option<UserContext>,
     next_async_sequence: u64,
 }
@@ -429,6 +514,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             initialization_stack: Vec::new(),
             async_queue: VecDeque::new(),
             current_async: None,
+            http_callout_mock: None,
             user_override: None,
             next_async_sequence: 1,
         }
@@ -769,7 +855,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         .initializer
                         .as_ref()
                         .expect("field initialization metadata requires an initializer");
-                    let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                    let value =
+                        typed_value(self.evaluate(initializer)?, &field.ty, initializer.span())?;
                     self.store
                         .static_slot_mut(&target)
                         .expect("static field was allocated")
@@ -880,10 +967,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }
                 Ok(Flow::Normal)
             }
-            Statement::Switch { span, .. } => Err(Diagnostic::new(
-                "unsupported switch statement escaped semantic validation",
-                *span,
-            )),
+            Statement::Switch { value, arms, .. } => self.execute_switch(value, arms),
             Statement::For {
                 initializer,
                 condition,
@@ -951,7 +1035,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 initializer,
                 ..
             } => {
-                let value = typed_value(self.evaluate(initializer)?, ty);
+                let value = typed_value(self.evaluate(initializer)?, ty, initializer.span())?;
                 self.bind_local(name, ty, value);
             }
             Statement::LocalDeclaration {
@@ -962,7 +1046,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                         || Ok(Value::Null(Some(ty.clone()))),
                         |initializer| {
                             self.evaluate(initializer)
-                                .map(|value| typed_value(value, ty))
+                                .and_then(|value| typed_value(value, ty, initializer.span()))
                         },
                     )?;
                     self.bind_local(&declarator.name, ty, value);
@@ -1118,6 +1202,55 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         })();
         self.scopes.pop();
         result
+    }
+
+    fn execute_switch(
+        &mut self,
+        expression: &Expression,
+        arms: &[SwitchArm],
+    ) -> Result<Flow, Diagnostic> {
+        let value = self.evaluate(expression)?;
+        for arm in arms {
+            match &arm.labels {
+                SwitchLabels::TypePattern(pattern) => {
+                    let Some(expected_object) = self.program().switch_pattern(pattern.span) else {
+                        return Err(Diagnostic::new(
+                            "SObject switch pattern is missing its checked target",
+                            pattern.span,
+                        ));
+                    };
+                    let matched = matches!(
+                        &value,
+                        Value::SObject(id)
+                            if self.store.sobject(*id).object_id == expected_object.index()
+                    );
+                    self.record_branch(pattern.span, matched);
+                    if matched {
+                        self.scopes.push(HashMap::new());
+                        self.bind_local(
+                            &pattern.binding,
+                            &pattern.ty,
+                            typed_value(value.clone(), &pattern.ty, pattern.span)?,
+                        );
+                        let result = self.execute_statement(&arm.body);
+                        self.scopes.pop();
+                        return result;
+                    }
+                }
+                SwitchLabels::Else(_) => return self.execute_statement(&arm.body),
+                SwitchLabels::Expressions(labels) => {
+                    for label in labels {
+                        let label_value = self.evaluate(label)?;
+                        let matched = self.values_equal(&value, &label_value);
+                        self.record_branch(label.span(), matched);
+                        if matched {
+                            return self.execute_statement(&arm.body);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Flow::Normal)
     }
 
     fn execute_for(
@@ -1323,7 +1456,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     name.canonical.clone(),
                     Slot {
                         ty: element_type.clone(),
-                        value: typed_value(element, element_type),
+                        value: typed_value(element, element_type, iterable.span())?,
                     },
                 );
                 match self.execute_statement(body)? {
@@ -1434,12 +1567,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     | CallTarget::EnumMethod { .. }
                     | CallTarget::SObjectGet
                     | CallTarget::SObjectPut
+                    | CallTarget::SObjectSetOptions
                     | CallTarget::DatabaseDml(_)
                     | CallTarget::DatabaseQuery { .. }
                     | CallTarget::AggregateResultGet
                     | CallTarget::DmlResultMethod(_)
                     | CallTarget::DmlErrorMethod(_)
-                    | CallTarget::SecurityDecisionMethod(_) => Err(Diagnostic::new(
+                    | CallTarget::SecurityDecisionMethod(_)
+                    | CallTarget::CustomMetadataMethod { .. } => Err(Diagnostic::new(
                         "constructor target attached to a method call",
                         *span,
                     )),
@@ -1484,6 +1619,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let value = self.evaluate(value)?;
                 Ok(Value::Boolean(if matches!(value, Value::Null(_)) {
                     profile.null_instanceof_result()
+                } else if let (Value::String(value), TypeName::Id) = (&value, target) {
+                    crate::platform::RecordId::parse(value.clone()).is_ok()
                 } else {
                     self.value_has_type(&value, target)
                 }))
@@ -1555,6 +1692,21 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ReferenceTarget::StaticMember(target) => {
                 self.read_class_member(target, None, identifier.span)
             }
+            ReferenceTarget::InstancePropertyStorage(target) => {
+                let receiver = self
+                    .current_receiver
+                    .ok_or_else(|| Diagnostic::new("missing instance receiver", identifier.span))?;
+                self.read_property_storage(target, Some(receiver), identifier.span)
+            }
+            ReferenceTarget::StaticPropertyStorage(target) => {
+                self.read_property_storage(target, None, identifier.span)
+            }
+            ReferenceTarget::PlatformEnum(value) => Ok(self
+                .store
+                .allocate_platform(PlatformValue::PlatformEnum(value))),
+            ReferenceTarget::EnumConstant { class_id, ordinal } => {
+                Ok(enum_value(class_id, ordinal))
+            }
         }
     }
 
@@ -1572,9 +1724,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Ok(self.null_short_circuit_value(span));
         };
 
-        let target = self.program().call_target(span);
+        let Some(target) = self.program().call_target(span) else {
+            return invalid_member_call(
+                "unresolved method call escaped semantic validation",
+                method.span,
+            );
+        };
         match target {
-            Some(CallTarget::Intrinsic(intrinsic)) => self.evaluate_intrinsic_call(
+            CallTarget::Intrinsic(intrinsic) => self.evaluate_intrinsic_call(
                 intrinsic,
                 receiver,
                 evaluated_receiver,
@@ -1582,60 +1739,126 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 arguments,
                 span,
             ),
-            Some(CallTarget::StaticMethod(target)) => {
-                self.evaluate_class_method(target, None, arguments, span, false)
-            }
-            Some(CallTarget::InstanceMethod(target)) => self.evaluate_object_method_call(
+            target => self.evaluate_resolved_method_call(
                 target,
                 receiver,
                 evaluated_receiver,
                 arguments,
                 span,
             ),
-            Some(CallTarget::SuperMethod(target)) => {
+        }
+    }
+
+    fn evaluate_resolved_method_call(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            target @ (CallTarget::StaticMethod(_)
+            | CallTarget::InstanceMethod(_)
+            | CallTarget::SuperMethod(_)) => self.evaluate_checked_class_method_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            target @ (CallTarget::SObjectGet
+            | CallTarget::SObjectPut
+            | CallTarget::SObjectSetOptions) => self.evaluate_sobject_method_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            CallTarget::CustomMetadataMethod { object_id, method } => {
+                self.evaluate_custom_metadata_method(object_id, method, arguments, span)
+            }
+            target @ (CallTarget::DatabaseDml(_)
+            | CallTarget::DatabaseQuery { .. }
+            | CallTarget::AggregateResultGet
+            | CallTarget::DmlResultMethod(_)
+            | CallTarget::DmlErrorMethod(_)
+            | CallTarget::SecurityDecisionMethod(_)) => self.evaluate_data_method_target(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            target @ CallTarget::EnumMethod { .. } => self.evaluate_checked_enum_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            CallTarget::TopLevelMethod(_)
+            | CallTarget::Constructor { .. }
+            | CallTarget::CustomExceptionConstructor { .. }
+            | CallTarget::SObjectConstructor { .. }
+            | CallTarget::PlatformConstructor(_) => {
+                invalid_member_call("invalid checked target for member call", span)
+            }
+            CallTarget::Intrinsic(_) => {
+                unreachable!("intrinsic targets are handled before dispatch")
+            }
+        }
+    }
+
+    fn evaluate_checked_class_method_call(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            CallTarget::StaticMethod(target) => {
+                self.evaluate_class_method(target, None, arguments, span, false)
+            }
+            CallTarget::InstanceMethod(target) => self.evaluate_object_method_call(
+                target,
+                receiver,
+                evaluated_receiver,
+                arguments,
+                span,
+            ),
+            CallTarget::SuperMethod(target) => {
                 let receiver = self
                     .current_receiver
                     .ok_or_else(|| Diagnostic::new("super call has no current receiver", span))?;
                 self.evaluate_class_method(target, Some(receiver), arguments, span, false)
             }
-            Some(CallTarget::SObjectGet) => {
+            _ => unreachable!("only class method targets use this helper"),
+        }
+    }
+
+    fn evaluate_sobject_method_call(
+        &mut self,
+        target: CallTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            CallTarget::SObjectGet => {
                 self.evaluate_sobject_get(receiver, evaluated_receiver, arguments, span)
             }
-            Some(CallTarget::SObjectPut) => {
+            CallTarget::SObjectPut => {
                 self.evaluate_sobject_put(receiver, evaluated_receiver, arguments, span)
             }
-            Some(
-                target @ (CallTarget::DatabaseDml(_)
-                | CallTarget::DatabaseQuery { .. }
-                | CallTarget::AggregateResultGet
-                | CallTarget::DmlResultMethod(_)
-                | CallTarget::DmlErrorMethod(_)
-                | CallTarget::SecurityDecisionMethod(_)),
-            ) => self.evaluate_data_method_target(
-                target,
-                receiver,
-                evaluated_receiver,
-                arguments,
-                span,
-            ),
-            Some(target @ CallTarget::EnumMethod { .. }) => self.evaluate_checked_enum_call(
-                target,
-                receiver,
-                evaluated_receiver,
-                arguments,
-                span,
-            ),
-            Some(
-                CallTarget::TopLevelMethod(_)
-                | CallTarget::Constructor { .. }
-                | CallTarget::CustomExceptionConstructor { .. }
-                | CallTarget::SObjectConstructor { .. }
-                | CallTarget::PlatformConstructor(_),
-            ) => invalid_member_call("invalid checked target for member call", span),
-            None => invalid_member_call(
-                "unresolved method call escaped semantic validation",
-                method.span,
-            ),
+            CallTarget::SObjectSetOptions => {
+                self.evaluate_sobject_set_options(receiver, evaluated_receiver, arguments, span)
+            }
+            _ => unreachable!("only SObject method targets use this helper"),
         }
     }
 
@@ -1676,6 +1899,42 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ),
             _ => unreachable!("only data method targets use this helper"),
+        }
+    }
+
+    fn evaluate_custom_metadata_method(
+        &mut self,
+        object_id: ObjectTypeId,
+        method: CustomMetadataMethod,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let object = self
+            .program()
+            .schema()
+            .object_at(object_id.index())
+            .expect("checked custom metadata object index is valid");
+        let object_type = TypeName::Custom(crate::ast::NamedType::new(
+            object.api_name().to_owned(),
+            span,
+        ));
+        match method {
+            CustomMetadataMethod::GetAll => {
+                if !arguments.is_empty() {
+                    return Err(invalid_runtime_operands(span));
+                }
+                Ok(self.store.allocate_collection(Collection::Map {
+                    key_type: TypeName::String,
+                    value_type: object_type,
+                    entries: Vec::new(),
+                }))
+            }
+            CustomMetadataMethod::GetInstance => {
+                let [_] = self.evaluate_arguments(arguments)?.as_slice() else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::Null(Some(object_type)))
+            }
         }
     }
 
@@ -1882,19 +2141,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid checked Database DML call", span));
         };
         let value = self.evaluate(value)?;
-        let all_or_none = match target.all_or_none_argument {
-            Some(index) => match self.evaluate(&arguments[index])? {
-                Value::Boolean(value) => value,
-                Value::Null(_) => {
-                    return Err(runtime_exception(
-                        "NullPointerException",
-                        "Database allOrNone argument is null",
-                        arguments[index].span(),
-                    ));
-                }
-                _ => return Err(invalid_runtime_operands(arguments[index].span())),
-            },
-            None => true,
+        let all_or_none = if let Some(index) = target.dml_options_argument {
+            let value = self.evaluate(&arguments[index])?;
+            self.runtime_dml_options(value, arguments[index].span())?
+                .opt_all_or_none
+                .unwrap_or(false)
+        } else {
+            match target.all_or_none_argument {
+                Some(index) => match self.evaluate(&arguments[index])? {
+                    Value::Boolean(value) => value,
+                    Value::Null(_) => {
+                        return Err(runtime_exception(
+                            "NullPointerException",
+                            "Database allOrNone argument is null",
+                            arguments[index].span(),
+                        ));
+                    }
+                    _ => return Err(invalid_runtime_operands(arguments[index].span())),
+                },
+                None => true,
+            }
         };
         let access = match target.access_level_argument {
             Some(index) => {
@@ -1932,6 +2198,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn runtime_dml_options(&self, value: Value, span: Span) -> Result<DmlOptionsValue, Diagnostic> {
+        let receiver = self.dml_options_id(value, span)?;
+        let PlatformValue::DmlOptions(options) = self.store.platform(receiver) else {
+            unreachable!("DmlOptions receiver was checked above")
+        };
+        Ok(*options)
+    }
+
     fn null_short_circuit_value(&self, span: Span) -> Value {
         match self.program().expression_type(span) {
             Some(ExpressionType::Value(ty)) => Value::Null(Some(ty.clone())),
@@ -1955,32 +2229,110 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Ok(self.null_short_circuit_value(span));
         };
         match target {
-            MemberTarget::Static(target) => self.read_class_member(target, None, span),
-            MemberTarget::Instance(target) => {
-                let receiver_value = match evaluated_receiver {
+            target @ (MemberTarget::Static(_)
+            | MemberTarget::Instance(_)
+            | MemberTarget::StaticPropertyStorage(_)
+            | MemberTarget::InstancePropertyStorage(_)) => {
+                self.evaluate_class_member_access(target, receiver, evaluated_receiver, span)
+            }
+            target @ (MemberTarget::SObjectField { .. } | MemberTarget::DynamicSObjectId) => {
+                self.evaluate_sobject_member_access(target, receiver, evaluated_receiver, span)
+            }
+            MemberTarget::DmlOptionField(field) => {
+                let receiver = match evaluated_receiver {
                     Some(receiver) => receiver,
                     None => self.evaluate(receiver)?,
                 };
-                let receiver = match receiver_value {
-                    Value::Object(receiver) => receiver,
-                    Value::Null(_) => {
-                        return Err(runtime_exception(
-                            "NullPointerException",
-                            "member access receiver is null",
-                            receiver.span(),
-                        ));
-                    }
-                    _ => return Err(invalid_runtime_operands(receiver.span())),
-                };
+                self.read_dml_option_field(receiver, field, span)
+            }
+            target @ (MemberTarget::SObjectRelationship { .. }
+            | MemberTarget::SObjectChildRelationship { .. }) => self
+                .evaluate_sobject_relationship_member(target, receiver, evaluated_receiver, span),
+            MemberTarget::Schema(target) => {
+                self.evaluate_schema_member(target, receiver, evaluated_receiver, span)
+            }
+            MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
+            target @ (MemberTarget::DmlStatus(_)
+            | MemberTarget::AccessLevel(_)
+            | MemberTarget::AccessType(_)
+            | MemberTarget::PlatformEnum(_)
+            | MemberTarget::EnumConstant { .. }
+            | MemberTarget::TypeReference { .. }) => self.evaluate_constant_member(target, span),
+        }
+    }
+
+    fn evaluate_class_member_access(
+        &mut self,
+        target: MemberTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            MemberTarget::Static(target) => self.read_class_member(target, None, span),
+            MemberTarget::StaticPropertyStorage(target) => {
+                self.read_property_storage(target, None, span)
+            }
+            MemberTarget::Instance(target) => {
+                let receiver =
+                    self.evaluate_object_member_receiver(receiver, evaluated_receiver)?;
                 self.read_class_member(target, Some(receiver), span)
             }
+            MemberTarget::InstancePropertyStorage(target) => {
+                let receiver =
+                    self.evaluate_object_member_receiver(receiver, evaluated_receiver)?;
+                self.read_property_storage(target, Some(receiver), span)
+            }
+            _ => unreachable!("only class member targets use this helper"),
+        }
+    }
+
+    fn evaluate_object_member_receiver(
+        &mut self,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+    ) -> Result<ObjectId, Diagnostic> {
+        let receiver_value = match evaluated_receiver {
+            Some(receiver) => receiver,
+            None => self.evaluate(receiver)?,
+        };
+        match receiver_value {
+            Value::Object(receiver) => Ok(receiver),
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "member access receiver is null",
+                receiver.span(),
+            )),
+            _ => Err(invalid_runtime_operands(receiver.span())),
+        }
+    }
+
+    fn evaluate_sobject_member_access(
+        &mut self,
+        target: MemberTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
+        match target {
             MemberTarget::SObjectField {
                 object_id,
                 field_id,
-            } => {
-                let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
-                self.read_sobject_field(receiver, object_id, field_id, span)
-            }
+            } => self.read_sobject_field(receiver, object_id, field_id, span),
+            MemberTarget::DynamicSObjectId => self.read_dynamic_sobject_id(receiver, span),
+            _ => unreachable!("only SObject field targets use this helper"),
+        }
+    }
+
+    fn evaluate_sobject_relationship_member(
+        &mut self,
+        target: MemberTarget,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
             MemberTarget::SObjectRelationship {
                 object_id,
                 reference_field_id,
@@ -2005,12 +2357,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 &relationship,
                 span,
             ),
-            MemberTarget::TriggerContext(variable) => self.trigger_context_value(variable, span),
-            target @ (MemberTarget::DmlStatus(_)
-            | MemberTarget::AccessLevel(_)
-            | MemberTarget::AccessType(_)
-            | MemberTarget::EnumConstant { .. }
-            | MemberTarget::TypeReference { .. }) => self.evaluate_constant_member(target, span),
+            _ => unreachable!("only SObject relationship targets use this helper"),
         }
     }
 
@@ -2027,6 +2374,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             MemberTarget::AccessType(access) => self
                 .store
                 .allocate_platform(PlatformValue::AccessType(access)),
+            MemberTarget::PlatformEnum(value) => self
+                .store
+                .allocate_platform(PlatformValue::PlatformEnum(value)),
             MemberTarget::EnumConstant { class_id, ordinal } => enum_value(class_id, ordinal),
             MemberTarget::TypeReference { class_id } => {
                 Value::TypeLiteral(TypeName::Custom(crate::ast::NamedType::new(
@@ -2038,6 +2388,46 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 )))
             }
             _ => unreachable!("only constant members use this helper"),
+        })
+    }
+
+    fn evaluate_schema_member(
+        &mut self,
+        target: SchemaMemberTarget,
+        expression: &Expression,
+        evaluated_receiver: Option<Value>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        Ok(match target {
+            SchemaMemberTarget::SObjectType { object_id } => self
+                .store
+                .allocate_platform(PlatformValue::SObjectType(object_id)),
+            SchemaMemberTarget::SObjectField {
+                object_id,
+                field_id,
+            } => self.store.allocate_platform(PlatformValue::SObjectField {
+                object_id,
+                field_id,
+            }),
+            SchemaMemberTarget::DescribeFields => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(expression)?,
+                };
+                let object_id = self.expect_any_schema_object(Some(receiver), span)?;
+                self.store
+                    .allocate_platform(PlatformValue::SObjectFieldMap(object_id))
+            }
+            SchemaMemberTarget::DescribeFieldSets => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(expression)?,
+                };
+                let object_id = self.expect_any_schema_object(Some(receiver), span)?;
+                self.store
+                    .allocate_platform(PlatformValue::FieldSetMap(object_id))
+            }
+            SchemaMemberTarget::PicklistValue(value) => Value::String(value),
         })
     }
 
@@ -2179,8 +2569,24 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return Err(Diagnostic::new("invalid checked SObject.get call", span));
         };
         let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
-        let field_name = match self.evaluate(field_name)? {
-            Value::String(value) => value,
+        let object_id = self.store.sobject(receiver).object_id;
+        let field_value = self.evaluate(field_name)?;
+        let field_id = match field_value {
+            Value::String(value) => self.sobject_field_id(object_id, &value, span)?,
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::SObjectField {
+                    object_id: field_object,
+                    field_id,
+                } if *field_object == object_id => *field_id,
+                PlatformValue::SObjectField { .. } => {
+                    return Err(runtime_exception(
+                        "SObjectException",
+                        "SObject field token belongs to a different object type",
+                        field_name.span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(field_name.span())),
+            },
             Value::Null(_) => {
                 return Err(runtime_exception(
                     "IllegalArgumentException",
@@ -2190,23 +2596,6 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             _ => return Err(invalid_runtime_operands(field_name.span())),
         };
-        let object_id = self.store.sobject(receiver).object_id;
-        let object = self
-            .program()
-            .schema()
-            .object_at(object_id)
-            .expect("runtime SObject schema index is valid");
-        let field_id = object.field_index(&field_name).ok_or_else(|| {
-            runtime_exception(
-                "IllegalArgumentException",
-                format!(
-                    "unknown field `{}` on SObject `{}`",
-                    field_name,
-                    object.api_name()
-                ),
-                span,
-            )
-        })?;
         self.read_sobject_field(receiver, object_id, field_id, span)
     }
 
@@ -2223,20 +2612,79 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
         let field_name_value = self.evaluate(field_name)?;
         let value = self.evaluate(value)?;
-        let Value::String(field_name) = field_name_value else {
-            return Err(runtime_exception(
-                "IllegalArgumentException",
-                "SObject field name must be a non-null String",
-                field_name.span(),
+        let object_id = self.store.sobject(receiver).object_id;
+        let field_id = match field_name_value {
+            Value::String(field_name) => self.sobject_field_id(object_id, &field_name, span)?,
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::SObjectField {
+                    object_id: field_object,
+                    field_id,
+                } if *field_object == object_id => *field_id,
+                PlatformValue::SObjectField { .. } => {
+                    return Err(runtime_exception(
+                        "SObjectException",
+                        "SObject field token belongs to a different object type",
+                        field_name.span(),
+                    ));
+                }
+                _ => return Err(invalid_runtime_operands(field_name.span())),
+            },
+            _ => {
+                return Err(runtime_exception(
+                    "IllegalArgumentException",
+                    "SObject field name must be a non-null String or Schema.SObjectField",
+                    field_name.span(),
+                ));
+            }
+        };
+        self.write_sobject_field(receiver, object_id, field_id, value, span)?;
+        Ok(Value::Void)
+    }
+
+    fn evaluate_sobject_set_options(
+        &mut self,
+        receiver: &Expression,
+        evaluated_receiver: Option<Value>,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [options] = arguments else {
+            return Err(Diagnostic::new(
+                "invalid checked SObject.setOptions call",
+                span,
             ));
         };
-        let object_id = self.store.sobject(receiver).object_id;
+        let receiver = self.evaluate_sobject_receiver(receiver, evaluated_receiver)?;
+        let options = match self.evaluate(options)? {
+            Value::Platform(id) => match self.store.platform(id) {
+                PlatformValue::DmlOptions(options) => *options,
+                _ => return Err(invalid_runtime_operands(options.span())),
+            },
+            Value::Null(_) => {
+                return Err(runtime_exception(
+                    "NullPointerException",
+                    "SObject.setOptions options are null",
+                    options.span(),
+                ));
+            }
+            _ => return Err(invalid_runtime_operands(options.span())),
+        };
+        self.store.sobject_mut(receiver).dml_options = Some(options);
+        Ok(Value::Void)
+    }
+
+    fn sobject_field_id(
+        &self,
+        object_id: usize,
+        field_name: &str,
+        span: Span,
+    ) -> Result<usize, Diagnostic> {
         let object = self
             .program()
             .schema()
             .object_at(object_id)
             .expect("runtime SObject schema index is valid");
-        let field_id = object.field_index(&field_name).ok_or_else(|| {
+        object.field_index(field_name).ok_or_else(|| {
             runtime_exception(
                 "IllegalArgumentException",
                 format!(
@@ -2246,9 +2694,110 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 ),
                 span,
             )
-        })?;
+        })
+    }
+
+    fn dynamic_sobject_id_field(
+        &self,
+        receiver: SObjectId,
+        span: Span,
+    ) -> Result<(usize, usize), Diagnostic> {
+        let object_id = self.store.sobject(receiver).object_id;
+        let field_id = self.sobject_field_id(object_id, "Id", span)?;
+        Ok((object_id, field_id))
+    }
+
+    fn read_dynamic_sobject_id(
+        &self,
+        receiver: SObjectId,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.dynamic_sobject_id_field(receiver, span)?;
+        match self.read_sobject_field(receiver, object_id, field_id, span)? {
+            Value::Id(value) | Value::String(value) => Ok(Value::Id(value)),
+            Value::Null(_) => Ok(Value::Null(Some(TypeName::Id))),
+            _ => Err(Diagnostic::new(
+                "runtime SObject Id storage has an invalid value type",
+                span,
+            )),
+        }
+    }
+
+    fn write_dynamic_sobject_id(
+        &mut self,
+        receiver: SObjectId,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let (object_id, field_id) = self.dynamic_sobject_id_field(receiver, span)?;
+        let value = match value {
+            Value::Id(value) | Value::String(value) => Value::String(value),
+            Value::Null(_) => Value::Null(Some(TypeName::String)),
+            _ => {
+                return Err(runtime_exception(
+                    "TypeException",
+                    "field `Id` expects Id",
+                    span,
+                ));
+            }
+        };
         self.write_sobject_field(receiver, object_id, field_id, value, span)?;
-        Ok(Value::Void)
+        self.read_dynamic_sobject_id(receiver, span)
+    }
+
+    fn dml_options_id(&self, value: Value, span: Span) -> Result<PlatformValueId, Diagnostic> {
+        match value {
+            Value::Platform(id)
+                if matches!(self.store.platform(id), PlatformValue::DmlOptions(_)) =>
+            {
+                Ok(id)
+            }
+            Value::Null(_) => Err(runtime_exception(
+                "NullPointerException",
+                "Database.DmlOptions receiver is null",
+                span,
+            )),
+            _ => Err(invalid_runtime_operands(span)),
+        }
+    }
+
+    fn read_dml_option_field(
+        &self,
+        receiver: Value,
+        field: DmlOptionField,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let receiver = self.dml_options_id(receiver, span)?;
+        let PlatformValue::DmlOptions(options) = self.store.platform(receiver) else {
+            unreachable!("DmlOptions receiver was checked above")
+        };
+        let value = match field {
+            DmlOptionField::AllowFieldTruncation => options.allow_field_truncation,
+            DmlOptionField::OptAllOrNone => options.opt_all_or_none,
+        };
+        Ok(value.map_or(Value::Null(Some(TypeName::Boolean)), Value::Boolean))
+    }
+
+    fn write_dml_option_field(
+        &mut self,
+        receiver: PlatformValueId,
+        field: DmlOptionField,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let value = match value {
+            Value::Boolean(value) => Some(value),
+            Value::Null(_) => None,
+            _ => return Err(invalid_runtime_operands(span)),
+        };
+        let PlatformValue::DmlOptions(options) = self.store.platform_mut(receiver) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match field {
+            DmlOptionField::AllowFieldTruncation => options.allow_field_truncation = value,
+            DmlOptionField::OptAllOrNone => options.opt_all_or_none = value,
+        }
+        Ok(value.map_or(Value::Null(Some(TypeName::Boolean)), Value::Boolean))
     }
 
     fn evaluate_sobject_receiver(
@@ -2326,6 +2875,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .object_at(object_id)
             .and_then(|object| object.field_at(field_id))
             .expect("checked SObject field index is valid");
+        if matches!(field.data_type(), FieldType::Summary { .. })
+            || field.api_name().eq_ignore_ascii_case("IsDeleted")
+        {
+            return Err(runtime_exception(
+                "SObjectException",
+                format!("field `{}` is read-only", field.api_name()),
+                span,
+            ));
+        }
         let field_type = apex_field_type(field.data_type());
         if !self.value_has_type(&value, &field_type) {
             return Err(runtime_exception(
@@ -2339,7 +2897,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         }
-        let value = typed_value(value, &field_type);
+        let value = typed_value(value, &field_type, span)?;
         self.store
             .sobject_mut(receiver)
             .fields
@@ -2417,7 +2975,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let member = self.classes()[target.class_id].members[target.member_id].clone();
         match member {
             ClassMember::Field(field) => {
-                let value = typed_value(value, &field.ty);
+                let value = typed_value(value, &field.ty, span)?;
                 if field.modifiers.contains(&Modifier::Static) {
                     self.store
                         .static_slot_mut(&target)
@@ -2442,6 +3000,72 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    fn read_property_storage(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
+        let ClassMember::Property(property) =
+            &self.classes()[target.class_id].members[target.member_id]
+        else {
+            return Err(Diagnostic::new(
+                "property storage target is not a property",
+                span,
+            ));
+        };
+        if property.modifiers.contains(&Modifier::Static) {
+            Ok(self
+                .store
+                .static_slot(&target)
+                .expect("property storage exists")
+                .value
+                .clone())
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            Ok(self.store.object(receiver).fields[&target].value.clone())
+        }
+    }
+
+    fn write_property_storage(
+        &mut self,
+        target: ClassMemberId,
+        receiver: Option<ObjectId>,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        self.ensure_class_initialized(target.class_id, span)?;
+        let ClassMember::Property(property) =
+            &self.classes()[target.class_id].members[target.member_id]
+        else {
+            return Err(Diagnostic::new(
+                "property storage target is not a property",
+                span,
+            ));
+        };
+        let ty = property.ty.clone();
+        let is_static = property.modifiers.contains(&Modifier::Static);
+        let value = typed_value(value, &ty, span)?;
+        if is_static {
+            self.store
+                .static_slot_mut(&target)
+                .expect("property storage exists")
+                .value = value.clone();
+        } else {
+            let receiver =
+                receiver.ok_or_else(|| Diagnostic::new("missing property receiver", span))?;
+            self.store
+                .object_mut(receiver)
+                .fields
+                .get_mut(&target)
+                .expect("property storage exists")
+                .value = value.clone();
+        }
+        Ok(value)
+    }
+
     fn write_class_property(
         &mut self,
         target: ClassMemberId,
@@ -2450,7 +3074,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let value = typed_value(value, &property.ty);
+        let value = typed_value(value, &property.ty, span)?;
         let accessor = property
             .accessors
             .iter()
@@ -2541,19 +3165,43 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        if !arguments.is_empty() {
-            return Err(Diagnostic::new(
-                "platform constructor received unexpected arguments",
-                span,
-            ));
-        }
         let value = match constructor {
-            crate::hir::PlatformConstructor::Http => PlatformValue::Http,
+            crate::hir::PlatformConstructor::Http => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::Http
+            }
             crate::hir::PlatformConstructor::HttpRequest => {
+                require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpRequest(HttpRequestData::default())
             }
             crate::hir::PlatformConstructor::HttpResponse => {
+                require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+            crate::hir::PlatformConstructor::DmlOptions => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::DmlOptions(DmlOptionsValue::default())
+            }
+            crate::hir::PlatformConstructor::VisualEditorDataRow => {
+                let evaluated = self.evaluate_arguments(arguments)?;
+                let [label, value] = evaluated.as_slice() else {
+                    return Err(Diagnostic::new(
+                        "VisualEditor.DataRow constructor requires two arguments",
+                        span,
+                    ));
+                };
+                let (Value::String(label), Value::String(value)) = (&label.value, &value.value)
+                else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                PlatformValue::VisualEditorDataRow {
+                    label: label.clone(),
+                    value: value.clone(),
+                }
+            }
+            crate::hir::PlatformConstructor::VisualEditorDynamicPickListRows => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::VisualEditorDynamicPickListRows(Vec::new())
             }
         };
         Ok(self.store.allocate_platform(value))
@@ -2565,35 +3213,62 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         arguments: &[Expression],
         span: Span,
     ) -> Result<Value, Diagnostic> {
-        let object_id = if let Some(object_id) = object_id {
-            if !arguments.is_empty() {
+        if let Some(object_id) = object_id {
+            let fields = self
+                .program()
+                .sobject_constructor_fields(span)
+                .ok_or_else(|| Diagnostic::new("unresolved SObject constructor fields", span))?
+                .to_vec();
+            if fields.len() != arguments.len() {
                 return Err(Diagnostic::new(
-                    "typed SObject constructor received unexpected arguments",
+                    "typed SObject constructor field count mismatch",
                     span,
                 ));
             }
-            object_id
-        } else {
-            let [object_name] = arguments else {
-                return Err(Diagnostic::new(
-                    "dynamic SObject constructor requires one API name",
-                    span,
-                ));
+            let receiver = self.store.allocate_sobject(object_id);
+            let receiver_id = match &receiver {
+                Value::SObject(receiver_id) => *receiver_id,
+                _ => unreachable!("SObject allocation always returns an SObject value"),
             };
-            let Value::String(object_name) = self.evaluate(object_name)? else {
-                return Err(invalid_runtime_operands(object_name.span()));
-            };
-            self.program()
-                .schema()
-                .object_index(&object_name)
-                .ok_or_else(|| {
-                    runtime_exception(
-                        "IllegalArgumentException",
-                        format!("unknown SObject `{object_name}`"),
-                        span,
-                    )
-                })?
+            for (argument, field_id) in arguments.iter().zip(fields) {
+                let Expression::Assignment { value, .. } = argument else {
+                    return Err(Diagnostic::new(
+                        "invalid typed SObject constructor field",
+                        argument.span(),
+                    ));
+                };
+                let value = self.evaluate(value)?;
+                self.write_sobject_field(
+                    receiver_id,
+                    object_id,
+                    field_id.index(),
+                    value,
+                    argument.span(),
+                )?;
+            }
+            return Ok(receiver);
+        }
+
+        let [object_name] = arguments else {
+            return Err(Diagnostic::new(
+                "dynamic SObject constructor requires one API name",
+                span,
+            ));
         };
+        let Value::String(object_name) = self.evaluate(object_name)? else {
+            return Err(invalid_runtime_operands(object_name.span()));
+        };
+        let object_id = self
+            .program()
+            .schema()
+            .object_index(&object_name)
+            .ok_or_else(|| {
+                runtime_exception(
+                    "IllegalArgumentException",
+                    format!("unknown SObject `{object_name}`"),
+                    span,
+                )
+            })?;
         Ok(self.store.allocate_sobject(object_id))
     }
 
@@ -2711,15 +3386,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .iter()
             .zip(current_arguments)
             .map(|(parameter, argument)| {
-                (
+                Ok((
                     parameter.name.canonical.clone(),
                     Slot {
                         ty: parameter.ty.clone(),
-                        value: typed_value(argument.value.clone(), &parameter.ty),
+                        value: typed_value(argument.value.clone(), &parameter.ty, argument.span)?,
                     },
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<HashMap<_, _>, Diagnostic>>()?;
         let caller_scopes = std::mem::replace(&mut self.scopes, vec![scope]);
         let saved_receiver = self.current_receiver.replace(object);
         let saved_declaring = self.current_declaring_class.replace(class_id);
@@ -2779,7 +3454,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                             .initializer
                             .as_ref()
                             .expect("field initialization metadata requires an initializer");
-                        let value = typed_value(self.evaluate(initializer)?, &field.ty);
+                        let value = typed_value(
+                            self.evaluate(initializer)?,
+                            &field.ty,
+                            initializer.span(),
+                        )?;
                         self.store
                             .object_mut(object)
                             .fields
@@ -3000,11 +3679,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         let mut method_scope = HashMap::new();
         for (parameter, argument) in parameters.iter().zip(arguments) {
+            let value = typed_value(argument.value, &parameter.ty, argument.span)?;
             method_scope.insert(
                 parameter.name.canonical.clone(),
                 Slot {
                     ty: parameter.ty.clone(),
-                    value: typed_value(argument.value, &parameter.ty),
+                    value,
                 },
             );
         }
@@ -3033,7 +3713,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match outcome {
             Ok(Flow::Return(value)) => match (return_type, value) {
                 (ReturnType::Void, None) => Ok(Value::Void),
-                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                (ReturnType::Value(ty), Some(value)) => typed_value(value, ty, span),
                 _ => Err(Diagnostic::new(
                     "invalid callable return escaped semantic validation",
                     span,
@@ -3120,11 +3800,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 
         let mut method_scope = HashMap::new();
         for (parameter, argument) in method.parameters.iter().zip(arguments) {
+            let value = typed_value(argument.value, &parameter.ty, argument.span)?;
             method_scope.insert(
                 parameter.name.canonical.clone(),
                 Slot {
                     ty: parameter.ty.clone(),
-                    value: typed_value(argument.value, &parameter.ty),
+                    value,
                 },
             );
         }
@@ -3144,7 +3825,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         match outcome {
             Ok(Flow::Return(value)) => match (&method.return_type, value) {
                 (ReturnType::Void, None) => Ok(Value::Void),
-                (ReturnType::Value(ty), Some(value)) => Ok(typed_value(value, ty)),
+                (ReturnType::Value(ty), Some(value)) => typed_value(value, ty, span),
                 _ => Err(Diagnostic::new(
                     "invalid method return escaped semantic validation",
                     method.name.span,
@@ -3175,6 +3856,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         match (&value, target) {
             (Value::Integer(value), TypeName::Long) => return Ok(Value::Long(*value)),
+            (Value::Integer(_) | Value::Long(_) | Value::Decimal(_), TypeName::Double) => {
+                return typed_value(value, target, span);
+            }
             (Value::Long(value), TypeName::Integer) => {
                 return i32::try_from(*value)
                     .map(|value| Value::Integer(i64::from(value)))
@@ -3187,6 +3871,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     });
             }
             _ => {}
+        }
+        if let Some(result) = self.cast_list_value(&value, target, span) {
+            return result;
         }
         if self.value_has_type(&value, target) || matches!(target, TypeName::Object) {
             return Ok(value);
@@ -3201,6 +3888,49 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ),
             span,
         ))
+    }
+
+    fn cast_list_value(
+        &mut self,
+        value: &Value,
+        target: &TypeName,
+        span: Span,
+    ) -> Option<Result<Value, Diagnostic>> {
+        let (Value::Collection(collection), TypeName::List(target_element)) = (value, target)
+        else {
+            return None;
+        };
+        let invalid_index = match self.collection(*collection) {
+            Collection::List { elements, .. } => elements.iter().position(|element| {
+                !matches!(element, Value::Null(_)) && !self.value_has_type(element, target_element)
+            }),
+            _ => {
+                return Some(Err(runtime_exception(
+                    "TypeException",
+                    format!(
+                        "invalid conversion from runtime type {} to {}",
+                        self.collection_type(*collection).apex_name(),
+                        target.apex_name()
+                    ),
+                    span,
+                )));
+            }
+        };
+        if let Some(index) = invalid_index {
+            return Some(Err(runtime_exception(
+                "TypeException",
+                format!(
+                    "List element at index {index} is not compatible with {}",
+                    target_element.apex_name()
+                ),
+                span,
+            )));
+        }
+        let Collection::List { element_type, .. } = self.collection_mut(*collection) else {
+            unreachable!("List collection was checked above")
+        };
+        *element_type = (**target_element).clone();
+        Some(Ok(value.clone()))
     }
 
     fn evaluate_assignment(
@@ -3296,12 +4026,45 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             PlaceTarget::StaticMember(target) => Ok(Place::ClassMember {
                 target,
                 receiver: None,
+                property_storage: false,
+            }),
+            PlaceTarget::InstancePropertyStorage(target) => {
+                let mut place = self.resolve_instance_member_place(syntax, target, span)?;
+                let Place::ClassMember {
+                    property_storage, ..
+                } = &mut place
+                else {
+                    unreachable!("instance member resolution creates a class member place")
+                };
+                *property_storage = true;
+                Ok(place)
+            }
+            PlaceTarget::StaticPropertyStorage(target) => Ok(Place::ClassMember {
+                target,
+                receiver: None,
+                property_storage: true,
             }),
             PlaceTarget::ListIndex => self.resolve_list_index_place(syntax, span),
             PlaceTarget::SObjectField {
                 object_id,
                 field_id,
             } => self.resolve_sobject_field_place(syntax, object_id, field_id, span),
+            PlaceTarget::DynamicSObjectId => {
+                let PlaceSyntax::Member { receiver, .. } = syntax else {
+                    return Err(Diagnostic::new("invalid SObject Id place syntax", span));
+                };
+                let receiver = self.evaluate_sobject_receiver(receiver, None)?;
+                Ok(Place::DynamicSObjectId { receiver })
+            }
+            PlaceTarget::DmlOptionField(field) => {
+                let PlaceSyntax::Member { receiver, .. } = syntax else {
+                    return Err(Diagnostic::new("invalid DmlOptions place syntax", span));
+                };
+                let receiver_span = receiver.span();
+                let receiver = self.evaluate(receiver)?;
+                let receiver = self.dml_options_id(receiver, receiver_span)?;
+                Ok(Place::DmlOptionField { receiver, field })
+            }
         }
     }
 
@@ -3333,6 +4096,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         Ok(Place::ClassMember {
             target,
             receiver: Some(receiver),
+            property_storage: false,
         })
     }
 
@@ -3381,8 +4145,16 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn read_place(&mut self, place: &Place, span: Span) -> Result<Value, Diagnostic> {
         match place {
             Place::Local(identifier) => self.lookup(identifier).map(|slot| slot.value.clone()),
-            Place::ClassMember { target, receiver } => {
-                self.read_class_member(*target, *receiver, span)
+            Place::ClassMember {
+                target,
+                receiver,
+                property_storage,
+            } => {
+                if *property_storage {
+                    self.read_property_storage(*target, *receiver, span)
+                } else {
+                    self.read_class_member(*target, *receiver, span)
+                }
             }
             Place::ListIndex { collection, index } => {
                 let Collection::List { elements, .. } = self.collection(*collection) else {
@@ -3395,6 +4167,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => self.read_sobject_field(*receiver, *object_id, *field_id, span),
+            Place::DynamicSObjectId { receiver } => self.read_dynamic_sobject_id(*receiver, span),
+            Place::DmlOptionField { receiver, field } => {
+                self.read_dml_option_field(Value::Platform(*receiver), *field, span)
+            }
         }
     }
 
@@ -3406,15 +4182,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<Value, Diagnostic> {
         match place {
             Place::Local(identifier) => self.assign_variable(identifier, value),
-            Place::ClassMember { target, receiver } => {
-                self.write_class_member(*target, *receiver, value, span)
+            Place::ClassMember {
+                target,
+                receiver,
+                property_storage,
+            } => {
+                if *property_storage {
+                    self.write_property_storage(*target, *receiver, value, span)
+                } else {
+                    self.write_class_member(*target, *receiver, value, span)
+                }
             }
             Place::ListIndex { collection, index } => {
                 let element_type = match self.collection(*collection) {
                     Collection::List { element_type, .. } => element_type.clone(),
                     _ => return Err(invalid_runtime_operands(span)),
                 };
-                let value = typed_value(value, &element_type);
+                let value = typed_value(value, &element_type, span)?;
                 let Collection::List { elements, .. } = self.collection_mut(*collection) else {
                     unreachable!("List place was resolved above")
                 };
@@ -3426,6 +4210,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 object_id,
                 field_id,
             } => self.write_sobject_field(*receiver, *object_id, *field_id, value, span),
+            Place::DynamicSObjectId { receiver } => {
+                self.write_dynamic_sobject_id(*receiver, value, span)
+            }
+            Place::DmlOptionField { receiver, field } => {
+                self.write_dml_option_field(*receiver, *field, value, span)
+            }
         }
     }
 
@@ -3517,6 +4307,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         if arguments.is_empty() {
             return self.allocate_empty_collection(ty, span);
         }
+        let (source_id, source_span) = self.collection_constructor_source(arguments, span)?;
+        self.construct_collection_copy(ty, source_id, source_span, span)
+    }
+
+    fn collection_constructor_source(
+        &self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<(CollectionId, Span), Diagnostic> {
         let [source] = arguments else {
             return Err(Diagnostic::new(
                 "invalid collection constructor arguments escaped semantic validation",
@@ -3533,14 +4332,23 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             return Err(invalid_runtime_operands(source.span));
         };
+        Ok((source_id, source.span))
+    }
 
+    fn construct_collection_copy(
+        &mut self,
+        ty: &TypeName,
+        source_id: CollectionId,
+        source_span: Span,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
         match ty {
             TypeName::List(element_type) => {
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
+                let source_elements = self.sequence_snapshot(source_id, source_span)?;
                 let elements = source_elements
                     .into_iter()
-                    .map(|value| typed_value(value, element_type))
-                    .collect();
+                    .map(|value| typed_value(value, element_type, source_span))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate(Collection::List {
                     element_type: (**element_type).clone(),
                     elements,
@@ -3548,10 +4356,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 }))
             }
             TypeName::Set(element_type) => {
-                let source_elements = self.sequence_snapshot(source_id, source.span)?;
+                let source_elements = self.sequence_snapshot(source_id, source_span)?;
                 let mut elements = Vec::new();
                 for value in source_elements {
-                    let value = typed_value(value, element_type);
+                    let value = typed_value(value, element_type, source_span)?;
                     if !elements
                         .iter()
                         .any(|existing| self.values_equal(existing, &value))
@@ -3565,17 +4373,26 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     iteration_depth: 0,
                 }))
             }
-            TypeName::Map(key_type, value_type) => {
-                let Collection::Map { entries, .. } = self.collection(source_id) else {
-                    return Err(invalid_runtime_operands(source.span));
-                };
-                let entries = entries.clone();
-                Ok(self.allocate(Collection::Map {
-                    key_type: (**key_type).clone(),
-                    value_type: (**value_type).clone(),
-                    entries,
-                }))
-            }
+            TypeName::Map(key_type, value_type) => match self.collection(source_id) {
+                Collection::Map { entries, .. } => {
+                    let entries = entries.clone();
+                    Ok(self.allocate(Collection::Map {
+                        key_type: (**key_type).clone(),
+                        value_type: (**value_type).clone(),
+                        entries,
+                    }))
+                }
+                Collection::List { elements, .. } => {
+                    let elements = elements.clone();
+                    let entries = self.sobject_map_entries(key_type, elements, source_span)?;
+                    Ok(self.allocate(Collection::Map {
+                        key_type: (**key_type).clone(),
+                        value_type: (**value_type).clone(),
+                        entries,
+                    }))
+                }
+                Collection::Set { .. } => Err(invalid_runtime_operands(source_span)),
+            },
             _ => Err(Diagnostic::new(
                 "primitive construction escaped semantic validation",
                 span,
@@ -3624,8 +4441,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             TypeName::List(element_type) => {
                 let elements = values
                     .into_iter()
-                    .map(|argument| typed_value(argument.value, element_type))
-                    .collect();
+                    .map(|argument| typed_value(argument.value, element_type, argument.span))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate(Collection::List {
                     element_type: (**element_type).clone(),
                     elements,
@@ -3635,7 +4452,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             TypeName::Set(element_type) => {
                 let mut elements = Vec::new();
                 for argument in values {
-                    let value = typed_value(argument.value, element_type);
+                    let value = typed_value(argument.value, element_type, argument.span)?;
                     if !elements
                         .iter()
                         .any(|existing| self.values_equal(existing, &value))
@@ -3667,8 +4484,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         let mut entries: Vec<(Value, Value)> = Vec::new();
         for (key, value) in values {
-            let key = typed_value(key, key_type);
-            let value = typed_value(value, value_type);
+            let key = typed_value(key, key_type, span)?;
+            let value = typed_value(value, value_type, span)?;
             if let Some(index) = entries
                 .iter()
                 .position(|(existing, _)| self.values_equal(existing, &key))
@@ -3683,6 +4500,52 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             value_type: (**value_type).clone(),
             entries,
         }))
+    }
+
+    fn sobject_map_entries(
+        &self,
+        key_type: &TypeName,
+        elements: Vec<Value>,
+        span: Span,
+    ) -> Result<Vec<(Value, Value)>, Diagnostic> {
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(elements.len()).map_err(|_| {
+            runtime_exception("ListException", "collection size is too large", span)
+        })?;
+        let mut seen_ids = BTreeSet::new();
+        for (index, value) in elements.into_iter().enumerate() {
+            let Value::SObject(sobject_id) = value else {
+                if matches!(value, Value::Null(_)) {
+                    return Err(runtime_exception(
+                        "ListException",
+                        format!("Null row at index: {index}"),
+                        span,
+                    ));
+                }
+                return Err(invalid_runtime_operands(span));
+            };
+            let Value::Id(record_id) = self.read_dynamic_sobject_id(sobject_id, span)? else {
+                return Err(runtime_exception(
+                    "ListException",
+                    format!("Row with null Id at index: {index}"),
+                    span,
+                ));
+            };
+            let identity = record_id
+                .get(..15)
+                .expect("validated Salesforce IDs contain at least 15 bytes")
+                .to_owned();
+            if !seen_ids.insert(identity) {
+                return Err(runtime_exception(
+                    "ListException",
+                    format!("Row with duplicate Id at index: {index}"),
+                    span,
+                ));
+            }
+            let key = typed_value(Value::Id(record_id), key_type, span)?;
+            entries.push((key, Value::SObject(sobject_id)));
+        }
+        Ok(entries)
     }
 
     fn evaluate_index(
@@ -3826,6 +4689,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             BinaryOperator::NotEqual => {
                 Ok(Value::Boolean(!self.operator_values_equal(&left, &right)))
             }
+            BinaryOperator::ExactEqual => Ok(Value::Boolean(
+                self.operator_values_identical(&left, &right),
+            )),
+            BinaryOperator::ExactNotEqual => Ok(Value::Boolean(
+                !self.operator_values_identical(&left, &right),
+            )),
             BinaryOperator::Add
             | BinaryOperator::Subtract
             | BinaryOperator::Multiply
@@ -3887,7 +4756,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         value: Value,
     ) -> Result<Value, Diagnostic> {
         let ty = self.lookup(identifier)?.ty.clone();
-        let value = typed_value(value, &ty);
+        let value = typed_value(value, &ty, identifier.span)?;
         self.lookup_mut(identifier)?.value = value.clone();
         Ok(value)
     }
@@ -4015,20 +4884,30 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Integer(_) => matches!(target, TypeName::Integer),
             Value::Long(_) => matches!(target, TypeName::Long),
             Value::Decimal(_) => matches!(target, TypeName::Decimal),
+            Value::Double(_) => matches!(target, TypeName::Double),
             Value::Date(_) => matches!(target, TypeName::Date),
             Value::Datetime(_) => matches!(target, TypeName::Datetime),
             Value::Time(_) => matches!(target, TypeName::Time),
-            Value::Id(_) => matches!(target, TypeName::Id),
+            Value::Id(_) => matches!(target, TypeName::Id | TypeName::String),
             Value::Platform(id) => self.store.platform(*id).ty() == *target,
             Value::Collection(id) => self.collection_type(*id) == *target,
             Value::Object(id) => {
+                let class_id = self.store.object(*id).class_id;
+                if matches!(target, TypeName::Callable) {
+                    return self.program().callable_contract(class_id).is_some();
+                }
+                if matches!(target, TypeName::Queueable) {
+                    return self
+                        .program()
+                        .async_contract(class_id)
+                        .is_some_and(|contract| contract.queueable.is_some());
+                }
                 let TypeName::Custom(target) = target else {
                     return false;
                 };
                 let target_id = self.runtime_class_id(target);
-                target_id.is_some_and(|target_id| {
-                    self.runtime_class_is_or_inherits(self.store.object(*id).class_id, target_id)
-                })
+                target_id
+                    .is_some_and(|target_id| self.runtime_class_is_or_inherits(class_id, target_id))
             }
             Value::Enum { class_id, .. } => {
                 matches!(
@@ -4048,7 +4927,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .object_at(self.store.sobject(*id).object_id)
                     .expect("runtime SObject schema index is valid");
                 target.canonical == "sobject"
-                    || actual.api_name().eq_ignore_ascii_case(&target.spelling)
+                    || actual
+                        .api_name()
+                        .eq_ignore_ascii_case(crate::hir::schema_api_name(target))
             }
             Value::AggregateResult(_) => matches!(target, TypeName::AggregateResult),
             Value::Exception(exception) => self.exception_matches(exception, target),
@@ -4064,6 +4945,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             Value::Integer(_) => TypeName::Integer.apex_name(),
             Value::Long(_) => TypeName::Long.apex_name(),
             Value::Decimal(_) => TypeName::Decimal.apex_name(),
+            Value::Double(_) => TypeName::Double.apex_name(),
             Value::Date(_) => TypeName::Date.apex_name(),
             Value::Datetime(_) => TypeName::Datetime.apex_name(),
             Value::Time(_) => TypeName::Time.apex_name(),
@@ -4180,14 +5062,63 @@ fn runtime_exception(exception_type: &str, message: impl Into<String>, span: Spa
     Diagnostic::runtime_exception(exception_type, message, span)
 }
 
-fn typed_value(value: Value, ty: &TypeName) -> Value {
-    match value {
+fn require_no_constructor_arguments(
+    arguments: &[Expression],
+    span: Span,
+) -> Result<(), Diagnostic> {
+    if arguments.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            "platform constructor received unexpected arguments",
+            span,
+        ))
+    }
+}
+
+fn typed_value(value: Value, ty: &TypeName, span: Span) -> Result<Value, Diagnostic> {
+    Ok(match value {
         Value::Null(_) => Value::Null(Some(ty.clone())),
+        Value::String(value) if *ty == TypeName::Id => {
+            crate::platform::RecordId::parse(value.clone()).map_err(|_| {
+                runtime_exception("StringException", format!("Invalid id: {value}"), span)
+            })?;
+            Value::Id(value)
+        }
         Value::Integer(value) if *ty == TypeName::Long => Value::Long(value),
         Value::Integer(value) | Value::Long(value) if *ty == TypeName::Decimal => {
             Value::Decimal(Decimal::from(value))
         }
+        Value::Integer(value) | Value::Long(value) if *ty == TypeName::Double => {
+            Value::Double(ApexDouble(value as f64))
+        }
+        Value::Decimal(value) if *ty == TypeName::Double => value
+            .normalize()
+            .to_string()
+            .parse::<f64>()
+            .ok()
+            .and_then(ApexDouble::new)
+            .map_or(Value::Decimal(value), Value::Double),
+        Value::Id(value) if *ty == TypeName::String => Value::String(value),
         value => value,
+    })
+}
+
+fn double_value(value: &Value, span: Span) -> Result<f64, Diagnostic> {
+    match value {
+        Value::Integer(value) | Value::Long(value) => Ok(*value as f64),
+        Value::Decimal(value) => value
+            .normalize()
+            .to_string()
+            .parse::<f64>()
+            .map_err(|_| invalid_runtime_operands(span)),
+        Value::Double(value) => Ok(value.get()),
+        Value::Null(_) => Err(runtime_exception(
+            "NullPointerException",
+            "operator cannot be applied to null at runtime",
+            span,
+        )),
+        _ => Err(invalid_runtime_operands(span)),
     }
 }
 
@@ -4212,6 +5143,22 @@ fn compare_values(
     comparison: impl FnOnce(Ordering) -> bool,
 ) -> Result<Value, Diagnostic> {
     let ordering = match (&left, &right) {
+        (Value::String(left), Value::String(right)) => {
+            left.to_lowercase().cmp(&right.to_lowercase())
+        }
+        (Value::String(_), Value::Null(Some(TypeName::String))) => Ordering::Greater,
+        (Value::Null(Some(TypeName::String)), Value::String(_)) => Ordering::Less,
+        (Value::Null(Some(TypeName::String)), Value::Null(Some(TypeName::String))) => {
+            Ordering::Equal
+        }
+        (
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),
+            Value::Integer(_) | Value::Long(_) | Value::Decimal(_) | Value::Double(_),
+        ) if matches!(left, Value::Double(_)) || matches!(right, Value::Double(_)) => {
+            double_value(&left, span)?
+                .partial_cmp(&double_value(&right, span)?)
+                .ok_or_else(|| invalid_runtime_operands(span))?
+        }
         (
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_),
             Value::Integer(_) | Value::Long(_) | Value::Decimal(_),
@@ -4235,7 +5182,11 @@ fn apex_field_type(field_type: &FieldType) -> TypeName {
     match field_type {
         FieldType::Boolean => TypeName::Boolean,
         FieldType::Integer => TypeName::Integer,
-        FieldType::String | FieldType::Id | FieldType::Reference { .. } => TypeName::String,
+        FieldType::String
+        | FieldType::Id
+        | FieldType::Reference { .. }
+        | FieldType::MetadataRelationship { .. } => TypeName::String,
+        FieldType::Summary { result_type, .. } => apex_field_type(result_type),
         FieldType::Date => TypeName::Date,
         FieldType::Datetime => TypeName::Datetime,
     }

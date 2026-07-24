@@ -81,3 +81,13 @@ apex-exec enterprise run <manifest.json> \
 
 The Salesforce snapshot must be frozen before the final command is run against
 the candidate.
+
+## M28 checkpoint
+
+M28 continues to use the exact M22 manifest, sealed Salesforce outcomes,
+1,159-test denominator, and strict-numerator definition. No blocker slice may
+alter candidate source, exclusions, or expected outcomes. The latest completed
+replay parses 1,159/1,159 tests but remains 0/1,159 strict; later Comparable
+and Stateful slices have focused tests but no completed full replay. The
+current evidence, resume commands, and explicit limitations are recorded in
+`docs/MILESTONE_28_CHECKPOINT.md`.

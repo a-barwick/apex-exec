@@ -203,9 +203,18 @@ pub struct AnnotationArgument {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnnotationKind {
-    IsTest { see_all_data: Option<bool> },
+    IsTest {
+        see_all_data: Option<bool>,
+        is_parallel: Option<bool>,
+    },
     TestSetup,
     Future,
+    AuraEnabled {
+        cacheable: Option<bool>,
+        continuation: Option<bool>,
+    },
+    SuppressWarnings,
+    TestVisible,
     Other,
 }
 
@@ -220,6 +229,13 @@ impl AnnotationKind {
 
     pub fn is_future(self) -> bool {
         matches!(self, Self::Future)
+    }
+
+    pub fn test_parallelism(self) -> Option<bool> {
+        match self {
+            Self::IsTest { is_parallel, .. } => is_parallel,
+            _ => None,
+        }
     }
 }
 
@@ -267,9 +283,21 @@ pub struct SwitchArm {
     pub span: Span,
 }
 
+/// A typed `switch when` label that binds a concrete SObject pattern.
+///
+/// Kept behind `SwitchLabels::TypePattern`'s boxed boundary so scalar switch
+/// labels do not inherit the storage cost of a full `TypeName`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SwitchTypePattern {
+    pub ty: TypeName,
+    pub binding: Identifier,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SwitchLabels {
     Expressions(Vec<Expression>),
+    TypePattern(Box<SwitchTypePattern>),
     Else(Span),
 }
 
@@ -536,6 +564,7 @@ pub struct SoqlQuery {
     pub order_by: Vec<SoqlOrderBy>,
     pub limit: Option<SoqlValue>,
     pub offset: Option<SoqlValue>,
+    pub all_rows: bool,
     pub span: Span,
 }
 
@@ -805,6 +834,8 @@ pub enum BinaryOperator {
     GreaterEqual,
     Equal,
     NotEqual,
+    ExactEqual,
+    ExactNotEqual,
     BitwiseAnd,
     BitwiseOr,
     BitwiseXor,
@@ -856,6 +887,7 @@ pub enum TypeName {
     Integer,
     Long,
     Decimal,
+    Double,
     Date,
     Datetime,
     Time,
@@ -867,9 +899,21 @@ pub enum TypeName {
     Http,
     HttpRequest,
     HttpResponse,
+    HttpCalloutMock,
+    Callable,
+    Queueable,
     QueueableContext,
     BatchableContext,
+    FinalizerContext,
+    ParentJobResult,
+    Quiddity,
+    TriggerOperation,
+    LoggingLevel,
+    CacheVisibility,
+    CachePartition,
+    Request,
     QueryLocator,
+    DmlOptions,
     SaveResult,
     UpsertResult,
     DeleteResult,
@@ -882,6 +926,17 @@ pub enum TypeName {
     SchedulableContext,
     SObjectType,
     DescribeSObjectResult,
+    SObjectField,
+    DescribeFieldResult,
+    SObjectFieldMap,
+    FieldSetMap,
+    FieldSet,
+    FieldSetMember,
+    PicklistEntry,
+    VisualEditorDataRow,
+    VisualEditorDynamicPickListRows,
+    SoapType,
+    DisplayType,
     Exception,
     NullPointerException,
     ListException,
@@ -893,8 +948,11 @@ pub enum TypeName {
     AssertException,
     QueryException,
     DmlException,
+    SObjectException,
     NoAccessException,
     AsyncException,
+    OrgCacheException,
+    SessionCacheException,
     AggregateResult,
     Type,
     Custom(NamedType),
@@ -904,63 +962,401 @@ pub enum TypeName {
     Iterable(Box<TypeName>),
 }
 
+struct BuiltInTypeSpec {
+    apex_name: &'static str,
+    aliases: &'static [&'static str],
+    ty: TypeName,
+}
+
+const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
+    BuiltInTypeSpec {
+        apex_name: "String",
+        aliases: &["string", "system.string"],
+        ty: TypeName::String,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Boolean",
+        aliases: &["boolean", "system.boolean"],
+        ty: TypeName::Boolean,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Integer",
+        aliases: &["integer", "system.integer"],
+        ty: TypeName::Integer,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Long",
+        aliases: &["long", "system.long"],
+        ty: TypeName::Long,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Decimal",
+        aliases: &["decimal", "system.decimal"],
+        ty: TypeName::Decimal,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Double",
+        aliases: &["double", "system.double"],
+        ty: TypeName::Double,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Date",
+        aliases: &["date", "system.date"],
+        ty: TypeName::Date,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Datetime",
+        aliases: &["datetime", "system.datetime"],
+        ty: TypeName::Datetime,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Time",
+        aliases: &["time", "system.time"],
+        ty: TypeName::Time,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Id",
+        aliases: &["id", "system.id"],
+        ty: TypeName::Id,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Blob",
+        aliases: &["blob", "system.blob"],
+        ty: TypeName::Blob,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Object",
+        aliases: &["object", "system.object"],
+        ty: TypeName::Object,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Pattern",
+        aliases: &["pattern", "system.pattern"],
+        ty: TypeName::Pattern,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Matcher",
+        aliases: &["matcher", "system.matcher"],
+        ty: TypeName::Matcher,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Http",
+        aliases: &["http", "system.http"],
+        ty: TypeName::Http,
+    },
+    BuiltInTypeSpec {
+        apex_name: "HttpRequest",
+        aliases: &["httprequest", "system.httprequest"],
+        ty: TypeName::HttpRequest,
+    },
+    BuiltInTypeSpec {
+        apex_name: "HttpResponse",
+        aliases: &["httpresponse", "system.httpresponse"],
+        ty: TypeName::HttpResponse,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.HttpCalloutMock",
+        aliases: &["httpcalloutmock", "system.httpcalloutmock"],
+        ty: TypeName::HttpCalloutMock,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.Callable",
+        aliases: &["callable", "system.callable"],
+        ty: TypeName::Callable,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.Queueable",
+        aliases: &["queueable", "system.queueable"],
+        ty: TypeName::Queueable,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.QueueableContext",
+        aliases: &["queueablecontext", "system.queueablecontext"],
+        ty: TypeName::QueueableContext,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.BatchableContext",
+        aliases: &["batchablecontext", "database.batchablecontext"],
+        ty: TypeName::BatchableContext,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.FinalizerContext",
+        aliases: &["finalizercontext", "system.finalizercontext"],
+        ty: TypeName::FinalizerContext,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.ParentJobResult",
+        aliases: &["parentjobresult", "system.parentjobresult"],
+        ty: TypeName::ParentJobResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.Quiddity",
+        aliases: &["quiddity", "system.quiddity"],
+        ty: TypeName::Quiddity,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.TriggerOperation",
+        aliases: &["triggeroperation", "system.triggeroperation"],
+        ty: TypeName::TriggerOperation,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.LoggingLevel",
+        aliases: &["logginglevel", "system.logginglevel"],
+        ty: TypeName::LoggingLevel,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Cache.Visibility",
+        aliases: &["cache.visibility"],
+        ty: TypeName::CacheVisibility,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Cache.Partition",
+        aliases: &["cache.partition"],
+        ty: TypeName::CachePartition,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.Request",
+        aliases: &["request", "system.request"],
+        ty: TypeName::Request,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.QueryLocator",
+        aliases: &["querylocator", "database.querylocator"],
+        ty: TypeName::QueryLocator,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.DmlOptions",
+        aliases: &["dmloptions", "database.dmloptions"],
+        ty: TypeName::DmlOptions,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.SaveResult",
+        aliases: &["saveresult", "database.saveresult"],
+        ty: TypeName::SaveResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.UpsertResult",
+        aliases: &["upsertresult", "database.upsertresult"],
+        ty: TypeName::UpsertResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.DeleteResult",
+        aliases: &["deleteresult", "database.deleteresult"],
+        ty: TypeName::DeleteResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.UndeleteResult",
+        aliases: &["undeleteresult", "database.undeleteresult"],
+        ty: TypeName::UndeleteResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Database.Error",
+        aliases: &["error", "database.error"],
+        ty: TypeName::DatabaseError,
+    },
+    BuiltInTypeSpec {
+        apex_name: "StatusCode",
+        aliases: &["statuscode", "system.statuscode"],
+        ty: TypeName::StatusCode,
+    },
+    BuiltInTypeSpec {
+        apex_name: "AccessLevel",
+        aliases: &["accesslevel", "system.accesslevel", "database.accesslevel"],
+        ty: TypeName::AccessLevel,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.AccessType",
+        aliases: &["accesstype", "system.accesstype"],
+        ty: TypeName::AccessType,
+    },
+    BuiltInTypeSpec {
+        apex_name: "SObjectAccessDecision",
+        aliases: &["sobjectaccessdecision", "system.sobjectaccessdecision"],
+        ty: TypeName::SObjectAccessDecision,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.SchedulableContext",
+        aliases: &["schedulablecontext", "system.schedulablecontext"],
+        ty: TypeName::SchedulableContext,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.SObjectType",
+        aliases: &["sobjecttype", "schema.sobjecttype"],
+        ty: TypeName::SObjectType,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.DescribeSObjectResult",
+        aliases: &["describesobjectresult", "schema.describesobjectresult"],
+        ty: TypeName::DescribeSObjectResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.SObjectField",
+        aliases: &["sobjectfield", "schema.sobjectfield"],
+        ty: TypeName::SObjectField,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.DescribeFieldResult",
+        aliases: &["describefieldresult", "schema.describefieldresult"],
+        ty: TypeName::DescribeFieldResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.SObjectFieldMap",
+        aliases: &["sobjectfieldmap", "schema.sobjectfieldmap"],
+        ty: TypeName::SObjectFieldMap,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.FieldSetMap",
+        aliases: &["fieldsetmap", "schema.fieldsetmap"],
+        ty: TypeName::FieldSetMap,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.FieldSet",
+        aliases: &["fieldset", "schema.fieldset"],
+        ty: TypeName::FieldSet,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.FieldSetMember",
+        aliases: &["fieldsetmember", "schema.fieldsetmember"],
+        ty: TypeName::FieldSetMember,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.PicklistEntry",
+        aliases: &["picklistentry", "schema.picklistentry"],
+        ty: TypeName::PicklistEntry,
+    },
+    BuiltInTypeSpec {
+        apex_name: "VisualEditor.DataRow",
+        aliases: &["visualeditor.datarow"],
+        ty: TypeName::VisualEditorDataRow,
+    },
+    BuiltInTypeSpec {
+        apex_name: "VisualEditor.DynamicPickListRows",
+        aliases: &["visualeditor.dynamicpicklistrows"],
+        ty: TypeName::VisualEditorDynamicPickListRows,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.SoapType",
+        aliases: &["soaptype", "schema.soaptype"],
+        ty: TypeName::SoapType,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Schema.DisplayType",
+        aliases: &["displaytype", "schema.displaytype"],
+        ty: TypeName::DisplayType,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Exception",
+        aliases: &["exception", "system.exception"],
+        ty: TypeName::Exception,
+    },
+    BuiltInTypeSpec {
+        apex_name: "NullPointerException",
+        aliases: &["nullpointerexception", "system.nullpointerexception"],
+        ty: TypeName::NullPointerException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "ListException",
+        aliases: &["listexception", "system.listexception"],
+        ty: TypeName::ListException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "MathException",
+        aliases: &["mathexception", "system.mathexception"],
+        ty: TypeName::MathException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "TypeException",
+        aliases: &["typeexception", "system.typeexception"],
+        ty: TypeName::TypeException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "StringException",
+        aliases: &["stringexception", "system.stringexception"],
+        ty: TypeName::StringException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "IllegalArgumentException",
+        aliases: &[
+            "illegalargumentexception",
+            "system.illegalargumentexception",
+        ],
+        ty: TypeName::IllegalArgumentException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "FinalException",
+        aliases: &["finalexception", "system.finalexception"],
+        ty: TypeName::FinalException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "AssertException",
+        aliases: &["assertexception", "system.assertexception"],
+        ty: TypeName::AssertException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "QueryException",
+        aliases: &["queryexception", "system.queryexception"],
+        ty: TypeName::QueryException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "DmlException",
+        aliases: &["dmlexception", "system.dmlexception"],
+        ty: TypeName::DmlException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "SObjectException",
+        aliases: &["sobjectexception", "system.sobjectexception"],
+        ty: TypeName::SObjectException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "NoAccessException",
+        aliases: &["noaccessexception", "system.noaccessexception"],
+        ty: TypeName::NoAccessException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "AsyncException",
+        aliases: &["asyncexception", "system.asyncexception"],
+        ty: TypeName::AsyncException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Cache.Org.OrgCacheException",
+        aliases: &["cache.org.orgcacheexception"],
+        ty: TypeName::OrgCacheException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Cache.Session.SessionCacheException",
+        aliases: &["cache.session.sessioncacheexception"],
+        ty: TypeName::SessionCacheException,
+    },
+    BuiltInTypeSpec {
+        apex_name: "AggregateResult",
+        aliases: &["aggregateresult", "system.aggregateresult"],
+        ty: TypeName::AggregateResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.Type",
+        aliases: &["type", "system.type"],
+        ty: TypeName::Type,
+    },
+];
+
 impl TypeName {
     pub fn from_apex_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "string" => Some(Self::String),
-            "boolean" => Some(Self::Boolean),
-            "integer" => Some(Self::Integer),
-            "long" => Some(Self::Long),
-            "decimal" => Some(Self::Decimal),
-            "date" => Some(Self::Date),
-            "datetime" => Some(Self::Datetime),
-            "time" => Some(Self::Time),
-            "id" => Some(Self::Id),
-            "blob" => Some(Self::Blob),
-            "object" => Some(Self::Object),
-            "pattern" => Some(Self::Pattern),
-            "matcher" => Some(Self::Matcher),
-            "http" => Some(Self::Http),
-            "httprequest" => Some(Self::HttpRequest),
-            "httpresponse" => Some(Self::HttpResponse),
-            "queueablecontext" | "system.queueablecontext" => Some(Self::QueueableContext),
-            "batchablecontext" | "database.batchablecontext" => Some(Self::BatchableContext),
-            "querylocator" | "database.querylocator" => Some(Self::QueryLocator),
-            "saveresult" | "database.saveresult" => Some(Self::SaveResult),
-            "upsertresult" | "database.upsertresult" => Some(Self::UpsertResult),
-            "deleteresult" | "database.deleteresult" => Some(Self::DeleteResult),
-            "undeleteresult" | "database.undeleteresult" => Some(Self::UndeleteResult),
-            "error" | "database.error" => Some(Self::DatabaseError),
-            "statuscode" | "system.statuscode" => Some(Self::StatusCode),
-            "accesslevel" | "system.accesslevel" | "database.accesslevel" => {
-                Some(Self::AccessLevel)
-            }
-            "accesstype" | "system.accesstype" => Some(Self::AccessType),
-            "sobjectaccessdecision" | "system.sobjectaccessdecision" => {
-                Some(Self::SObjectAccessDecision)
-            }
-            "schedulablecontext" | "system.schedulablecontext" => Some(Self::SchedulableContext),
-            "sobjecttype" | "schema.sobjecttype" => Some(Self::SObjectType),
-            "describesobjectresult" | "schema.describesobjectresult" => {
-                Some(Self::DescribeSObjectResult)
-            }
-            "exception" => Some(Self::Exception),
-            "nullpointerexception" => Some(Self::NullPointerException),
-            "listexception" => Some(Self::ListException),
-            "mathexception" => Some(Self::MathException),
-            "typeexception" => Some(Self::TypeException),
-            "stringexception" => Some(Self::StringException),
-            "illegalargumentexception" => Some(Self::IllegalArgumentException),
-            "finalexception" => Some(Self::FinalException),
-            "assertexception" => Some(Self::AssertException),
-            "queryexception" => Some(Self::QueryException),
-            "dmlexception" => Some(Self::DmlException),
-            "noaccessexception" => Some(Self::NoAccessException),
-            "asyncexception" => Some(Self::AsyncException),
-            "aggregateresult" => Some(Self::AggregateResult),
-            "type" | "system.type" => Some(Self::Type),
-            _ => None,
-        }
+        Self::built_in_type_spec(name).map(|spec| spec.ty.clone())
+    }
+
+    fn built_in_type_spec(name: &str) -> Option<&'static BuiltInTypeSpec> {
+        BUILTIN_TYPE_SPECS.iter().find(|spec| {
+            spec.aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(name))
+        })
+    }
+
+    fn built_in_apex_name(&self) -> Option<&'static str> {
+        BUILTIN_TYPE_SPECS
+            .iter()
+            .find(|spec| spec.ty == *self)
+            .map(|spec| spec.apex_name)
     }
 
     pub fn is_exception(&self) -> bool {
@@ -977,59 +1373,19 @@ impl TypeName {
                 | Self::AssertException
                 | Self::QueryException
                 | Self::DmlException
+                | Self::SObjectException
                 | Self::NoAccessException
                 | Self::AsyncException
+                | Self::OrgCacheException
+                | Self::SessionCacheException
         )
     }
 
     pub fn apex_name(&self) -> String {
+        if let Some(name) = self.built_in_apex_name() {
+            return name.to_owned();
+        }
         match self {
-            Self::String => "String".to_owned(),
-            Self::Boolean => "Boolean".to_owned(),
-            Self::Integer => "Integer".to_owned(),
-            Self::Long => "Long".to_owned(),
-            Self::Decimal => "Decimal".to_owned(),
-            Self::Date => "Date".to_owned(),
-            Self::Datetime => "Datetime".to_owned(),
-            Self::Time => "Time".to_owned(),
-            Self::Id => "Id".to_owned(),
-            Self::Blob => "Blob".to_owned(),
-            Self::Object => "Object".to_owned(),
-            Self::Pattern => "Pattern".to_owned(),
-            Self::Matcher => "Matcher".to_owned(),
-            Self::Http => "Http".to_owned(),
-            Self::HttpRequest => "HttpRequest".to_owned(),
-            Self::HttpResponse => "HttpResponse".to_owned(),
-            Self::QueueableContext => "System.QueueableContext".to_owned(),
-            Self::BatchableContext => "Database.BatchableContext".to_owned(),
-            Self::QueryLocator => "Database.QueryLocator".to_owned(),
-            Self::SaveResult => "Database.SaveResult".to_owned(),
-            Self::UpsertResult => "Database.UpsertResult".to_owned(),
-            Self::DeleteResult => "Database.DeleteResult".to_owned(),
-            Self::UndeleteResult => "Database.UndeleteResult".to_owned(),
-            Self::DatabaseError => "Database.Error".to_owned(),
-            Self::StatusCode => "StatusCode".to_owned(),
-            Self::AccessLevel => "AccessLevel".to_owned(),
-            Self::AccessType => "System.AccessType".to_owned(),
-            Self::SObjectAccessDecision => "SObjectAccessDecision".to_owned(),
-            Self::SchedulableContext => "System.SchedulableContext".to_owned(),
-            Self::SObjectType => "Schema.SObjectType".to_owned(),
-            Self::DescribeSObjectResult => "Schema.DescribeSObjectResult".to_owned(),
-            Self::Exception => "Exception".to_owned(),
-            Self::NullPointerException => "NullPointerException".to_owned(),
-            Self::ListException => "ListException".to_owned(),
-            Self::MathException => "MathException".to_owned(),
-            Self::TypeException => "TypeException".to_owned(),
-            Self::StringException => "StringException".to_owned(),
-            Self::IllegalArgumentException => "IllegalArgumentException".to_owned(),
-            Self::FinalException => "FinalException".to_owned(),
-            Self::AssertException => "AssertException".to_owned(),
-            Self::QueryException => "QueryException".to_owned(),
-            Self::DmlException => "DmlException".to_owned(),
-            Self::NoAccessException => "NoAccessException".to_owned(),
-            Self::AsyncException => "AsyncException".to_owned(),
-            Self::AggregateResult => "AggregateResult".to_owned(),
-            Self::Type => "System.Type".to_owned(),
             Self::Custom(name) => name.spelling.clone(),
             Self::List(element) => format!("List<{}>", element.apex_name()),
             Self::Set(element) => format!("Set<{}>", element.apex_name()),
@@ -1037,6 +1393,7 @@ impl TypeName {
                 format!("Map<{},{}>", key.apex_name(), value.apex_name())
             }
             Self::Iterable(element) => format!("Iterable<{}>", element.apex_name()),
+            _ => unreachable!("every unit TypeName variant has a built-in type spec"),
         }
     }
 }
@@ -1195,6 +1552,7 @@ mod tests {
             "AssertException",
             "QueryException",
             "DmlException",
+            "SObjectException",
             "NoAccessException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
@@ -1205,5 +1563,26 @@ mod tests {
 
         assert_eq!(TypeName::from_apex_name("OBJECT"), Some(TypeName::Object));
         assert!(!TypeName::Object.is_exception());
+    }
+
+    #[test]
+    fn built_in_type_specs_preserve_aliases_and_non_builtin_rendering() {
+        for (alias, expected) in [
+            ("sYsTeM.sTrInG", TypeName::String),
+            ("DATABASE.ACCESSLEVEL", TypeName::AccessLevel),
+            ("Cache.Org.OrgCacheException", TypeName::OrgCacheException),
+            ("Schema.DescribeFieldResult", TypeName::DescribeFieldResult),
+        ] {
+            assert_eq!(TypeName::from_apex_name(alias), Some(expected));
+        }
+
+        assert_eq!(
+            TypeName::HttpCalloutMock.apex_name(),
+            "System.HttpCalloutMock"
+        );
+        assert_eq!(TypeName::AccessLevel.apex_name(), "AccessLevel");
+        let custom = TypeName::Custom(NamedType::new("Domain.Widget".to_owned(), Span::new(0, 13)));
+        let generic = TypeName::Map(Box::new(TypeName::String), Box::new(custom));
+        assert_eq!(generic.apex_name(), "Map<String,Domain.Widget>");
     }
 }

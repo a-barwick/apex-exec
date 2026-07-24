@@ -1205,6 +1205,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .map(|value| self.query_usize(value, span))
                 .transpose()?
                 .unwrap_or(0),
+            all_rows: query.all_rows,
             count_scalar: query.result == QueryResultKind::Count,
             now_millis,
         })
@@ -1535,11 +1536,34 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn value_to_data(&self, value: &Value, span: Span) -> Result<DataValue, Diagnostic> {
         match value {
             Value::String(value) => Ok(DataValue::String(value.clone())),
+            Value::Id(value) => Ok(DataValue::String(value.clone())),
             Value::Boolean(value) => Ok(DataValue::Boolean(*value)),
             Value::Integer(value) => Ok(DataValue::Integer(*value)),
             Value::Date(value) => Ok(DataValue::Date(date_to_epoch_days(*value, span)?)),
             Value::Datetime(value) => Ok(DataValue::Datetime(value.timestamp_millis())),
             Value::Null(_) => Ok(DataValue::Null),
+            Value::SObject(id) => {
+                let instance = self.store.sobject(*id);
+                let object = self
+                    .program()
+                    .schema()
+                    .object_at(instance.object_id)
+                    .expect("runtime SObject schema index is valid");
+                let field_id = object
+                    .field_index("Id")
+                    .expect("schema-backed SObjects contain an Id field");
+                match instance.fields.get(&field_id) {
+                    Some(Value::String(value) | Value::Id(value)) => {
+                        Ok(DataValue::String(value.clone()))
+                    }
+                    Some(Value::Null(_)) | None => Ok(DataValue::Null),
+                    Some(_) => Err(runtime_exception(
+                        "QueryException",
+                        "SObject query bind has a non-Id value in its Id field",
+                        span,
+                    )),
+                }
+            }
             _ => Err(runtime_exception(
                 "QueryException",
                 "query bind evaluated to an unsupported value",

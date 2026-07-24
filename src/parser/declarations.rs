@@ -503,62 +503,7 @@ impl Parser {
             let start = self.advance().span;
             let name = self.expect_identifier("expected an annotation name after `@`")?;
             let (arguments, parenthesized) = self.parse_annotation_arguments()?;
-            let kind = match name.canonical.as_str() {
-                "istest" => {
-                    let see_all_data = match arguments.as_slice() {
-                        [] if !parenthesized => None,
-                        [] => {
-                            return Err(Diagnostic::new(
-                                "expected `SeeAllData` in `@IsTest` annotation",
-                                name.span,
-                            ));
-                        }
-                        [argument] => {
-                            if argument.name.as_ref().map(|name| name.canonical.as_str())
-                                != Some("seealldata")
-                            {
-                                return Err(Diagnostic::new(
-                                    "only `SeeAllData` is supported in `@IsTest`",
-                                    argument.span,
-                                ));
-                            }
-                            let Expression::BooleanLiteral(value, _) = argument.value else {
-                                return Err(Diagnostic::new(
-                                    "`SeeAllData` requires a Boolean literal",
-                                    argument.value.span(),
-                                ));
-                            };
-                            Some(value)
-                        }
-                        _ => {
-                            return Err(Diagnostic::new(
-                                "only `SeeAllData` is supported in `@IsTest`",
-                                arguments[1].span,
-                            ));
-                        }
-                    };
-                    AnnotationKind::IsTest { see_all_data }
-                }
-                "testsetup" => {
-                    if parenthesized {
-                        return Err(Diagnostic::new(
-                            "`@TestSetup` does not accept arguments",
-                            name.span,
-                        ));
-                    }
-                    AnnotationKind::TestSetup
-                }
-                "future" => {
-                    if parenthesized {
-                        return Err(Diagnostic::new(
-                            "`@future` options are not supported",
-                            name.span,
-                        ));
-                    }
-                    AnnotationKind::Future
-                }
-                _ => AnnotationKind::Other,
-            };
+            let kind = self.classify_annotation(&name, &arguments, parenthesized)?;
             let end = self.token_at(self.cursor.saturating_sub(1)).span.end;
             annotations.push(Annotation {
                 name,
@@ -568,6 +513,173 @@ impl Parser {
             });
         }
         Ok(annotations)
+    }
+
+    fn classify_annotation(
+        &self,
+        name: &Identifier,
+        arguments: &[AnnotationArgument],
+        parenthesized: bool,
+    ) -> Result<AnnotationKind, Diagnostic> {
+        match name.canonical.as_str() {
+            "istest" => self.classify_is_test_annotation(name, arguments, parenthesized),
+            "testsetup" => self.classify_argumentless_annotation(
+                name,
+                parenthesized,
+                "`@TestSetup` does not accept arguments",
+                AnnotationKind::TestSetup,
+            ),
+            "future" => self.classify_argumentless_annotation(
+                name,
+                parenthesized,
+                "`@future` options are not supported",
+                AnnotationKind::Future,
+            ),
+            "auraenabled" => self.classify_aura_enabled_annotation(arguments),
+            "suppresswarnings" => {
+                self.classify_suppress_warnings_annotation(name, arguments, parenthesized)
+            }
+            "testvisible" => self.classify_argumentless_annotation(
+                name,
+                parenthesized,
+                "`@TestVisible` does not accept arguments",
+                AnnotationKind::TestVisible,
+            ),
+            _ => Ok(AnnotationKind::Other),
+        }
+    }
+
+    fn classify_is_test_annotation(
+        &self,
+        name: &Identifier,
+        arguments: &[AnnotationArgument],
+        parenthesized: bool,
+    ) -> Result<AnnotationKind, Diagnostic> {
+        if parenthesized && arguments.is_empty() {
+            return Err(Diagnostic::new(
+                "expected a named `@IsTest` option",
+                name.span,
+            ));
+        }
+        let mut see_all_data = None;
+        let mut is_parallel = None;
+        for argument in arguments {
+            let Some(argument_name) = &argument.name else {
+                return Err(Diagnostic::new(
+                    "`@IsTest` options must be named",
+                    argument.span,
+                ));
+            };
+            let Expression::BooleanLiteral(value, _) = argument.value else {
+                return Err(Diagnostic::new(
+                    format!("`{}` requires a Boolean literal", argument_name.spelling),
+                    argument.value.span(),
+                ));
+            };
+            let slot = match argument_name.canonical.as_str() {
+                "seealldata" => &mut see_all_data,
+                "isparallel" => &mut is_parallel,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "supported `@IsTest` options are `SeeAllData` and `IsParallel`",
+                        argument_name.span,
+                    ));
+                }
+            };
+            if slot.replace(value).is_some() {
+                return Err(Diagnostic::new(
+                    format!("duplicate `@IsTest` option `{}`", argument_name.spelling),
+                    argument_name.span,
+                ));
+            }
+        }
+        Ok(AnnotationKind::IsTest {
+            see_all_data,
+            is_parallel,
+        })
+    }
+
+    fn classify_aura_enabled_annotation(
+        &self,
+        arguments: &[AnnotationArgument],
+    ) -> Result<AnnotationKind, Diagnostic> {
+        let mut cacheable = None;
+        let mut continuation = None;
+        for argument in arguments {
+            let Some(argument_name) = &argument.name else {
+                return Err(Diagnostic::new(
+                    "`@AuraEnabled` options must be named",
+                    argument.span,
+                ));
+            };
+            let Expression::BooleanLiteral(value, _) = argument.value else {
+                return Err(Diagnostic::new(
+                    format!("`{}` requires a Boolean literal", argument_name.spelling),
+                    argument.value.span(),
+                ));
+            };
+            let slot = match argument_name.canonical.as_str() {
+                "cacheable" => &mut cacheable,
+                "continuation" => &mut continuation,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "supported `@AuraEnabled` options are `cacheable` and `continuation`",
+                        argument_name.span,
+                    ));
+                }
+            };
+            if slot.replace(value).is_some() {
+                return Err(Diagnostic::new(
+                    format!(
+                        "duplicate `@AuraEnabled` option `{}`",
+                        argument_name.spelling
+                    ),
+                    argument_name.span,
+                ));
+            }
+        }
+        Ok(AnnotationKind::AuraEnabled {
+            cacheable,
+            continuation,
+        })
+    }
+
+    fn classify_argumentless_annotation(
+        &self,
+        name: &Identifier,
+        parenthesized: bool,
+        message: &str,
+        kind: AnnotationKind,
+    ) -> Result<AnnotationKind, Diagnostic> {
+        if parenthesized {
+            Err(Diagnostic::new(message, name.span))
+        } else {
+            Ok(kind)
+        }
+    }
+
+    fn classify_suppress_warnings_annotation(
+        &self,
+        name: &Identifier,
+        arguments: &[AnnotationArgument],
+        parenthesized: bool,
+    ) -> Result<AnnotationKind, Diagnostic> {
+        if !parenthesized
+            || !matches!(
+                arguments,
+                [AnnotationArgument {
+                    name: None,
+                    value: Expression::StringLiteral(_, _),
+                    ..
+                }]
+            )
+        {
+            return Err(Diagnostic::new(
+                "`@SuppressWarnings` requires exactly one positional String literal",
+                name.span,
+            ));
+        }
+        Ok(AnnotationKind::SuppressWarnings)
     }
 
     fn parse_annotation_arguments(

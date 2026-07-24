@@ -219,9 +219,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 kind: job.kind,
                 stage: AsyncStage::Started,
             });
+            let allows_callouts = self.async_job_allows_callouts(&job);
             let previous = self.current_async.replace(CurrentAsync {
                 id: job.id.clone(),
                 kind: job.kind,
+                allows_callouts,
             });
             let previous_execution_context =
                 std::mem::replace(&mut self.execution_context, job.execution_context);
@@ -243,6 +245,19 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             result?;
         }
         Ok(())
+    }
+
+    fn async_job_allows_callouts(&self, job: &PendingAsyncJob) -> bool {
+        let receiver = match &job.work {
+            AsyncWork::Queueable { receiver } | AsyncWork::Batch { receiver, .. } => *receiver,
+            AsyncWork::Future { .. }
+            | AsyncWork::Scheduled { .. }
+            | AsyncWork::PlatformEvent { .. } => return false,
+        };
+        let class_id = self.store.object(receiver).class_id;
+        self.program()
+            .async_contract(class_id)
+            .is_some_and(|contract| contract.allows_callouts)
     }
 
     fn execute_async_transaction(&mut self, job: &PendingAsyncJob) -> Result<(), Diagnostic> {
@@ -332,9 +347,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             .and_then(|contract| contract.batch.clone())
             .ok_or_else(|| Diagnostic::new("missing checked Batchable contract", span))?;
         let context = self.async_context_value(TypeName::BatchableContext, job_id);
+        let mut transaction_receiver = if contract.stateful {
+            receiver
+        } else {
+            self.snapshot_async_object(Value::Object(receiver), span)?
+        };
         let start_result = self.evaluate_class_method_arguments(
             contract.start,
-            Some(receiver),
+            Some(transaction_receiver),
             vec![EvaluatedArgument {
                 value: context.clone(),
                 span,
@@ -346,6 +366,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let elements = self.batch_start_elements(start_result, span)?;
 
         for chunk in elements.chunks(scope_size) {
+            if !contract.stateful {
+                transaction_receiver = self.snapshot_async_object(Value::Object(receiver), span)?;
+            }
             let scope = self.store.allocate_collection(Collection::List {
                 element_type: contract.scope_type.clone(),
                 elements: chunk.to_vec(),
@@ -353,7 +376,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             });
             self.evaluate_class_method_arguments(
                 contract.execute,
-                Some(receiver),
+                Some(transaction_receiver),
                 vec![
                     EvaluatedArgument {
                         value: context.clone(),
@@ -366,9 +389,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 false,
             )?;
         }
+        if !contract.stateful {
+            transaction_receiver = self.snapshot_async_object(Value::Object(receiver), span)?;
+        }
         self.evaluate_class_method_arguments(
             contract.finish,
-            Some(receiver),
+            Some(transaction_receiver),
             vec![EvaluatedArgument {
                 value: context,
                 span,
@@ -469,6 +495,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.current_async.as_ref().map(|context| context.kind)
     }
 
+    pub(super) fn current_async_allows_callouts(&self) -> bool {
+        self.current_async
+            .as_ref()
+            .is_none_or(|context| context.allows_callouts)
+    }
+
     fn clone_async_value(
         &mut self,
         value: Value,
@@ -479,7 +511,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             value @ (Value::String(_) | Value::Boolean(_) | Value::Integer(_) | Value::Long(_)) => {
                 Ok(value)
             }
-            value @ (Value::Decimal(_) | Value::Date(_) | Value::Datetime(_)) => Ok(value),
+            value
+            @ (Value::Decimal(_) | Value::Double(_) | Value::Date(_) | Value::Datetime(_)) => {
+                Ok(value)
+            }
             value @ (Value::Time(_) | Value::Id(_) | Value::Null(_)) => Ok(value),
             value @ (Value::Enum { .. } | Value::TypeLiteral(_)) => Ok(value),
             Value::Collection(source) => {

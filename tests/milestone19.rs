@@ -149,6 +149,28 @@ fn every_compound_family_preserves_value_and_failure_semantics() {
 }
 
 #[test]
+fn scalar_switch_dispatches_the_maximum_long_label() {
+    let output = execute(
+        r#"
+        Long value = 9223372036854775807L;
+        switch on value {
+            when 9223372036854775806L {
+                System.debug('wrong');
+            }
+            when 9223372036854775807L {
+                System.debug('maximum');
+            }
+            when else {
+                System.debug('wrong');
+            }
+        }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(output, ["maximum"]);
+}
+
+#[test]
 fn project_invocation_tests_and_coverage_complete_the_m19_slice() {
     let compilation = project::compile(PROJECT).unwrap();
     assert_eq!(

@@ -30,18 +30,19 @@ platform area. Broader surfaces retain their stated fidelity level.
 | `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
 | `Datetime` | Yes | Yes | Yes | Simplified | UTC construction/parsing, epoch milliseconds, arithmetic, date/time projections, and formatting |
 | `Time` | Yes | Yes | Yes | Simplified | Millisecond construction/parsing, wrapping arithmetic, components, and formatting |
-| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character standalone values with checksum-aware `to15`/`to18` |
+| `Id` | Yes | Yes | Yes | Compatible | Validated 15/18-character values with checksum-aware `to15`/`to18`; `getSObjectType()` resolves known catalog key prefixes and raises catchable `SObjectException` for malformed or unknown IDs |
 | `Blob` | Yes | Yes | Yes | Simplified | UTF-8 value construction, text conversion, size, and Base64 encode/decode |
 | `Object` | Yes | Yes | Yes | Simplified | Assignment, overload widening, explicit casts, and `toString()` |
 | Explicit initialization | Yes | Yes | Yes | Compatible | Initializers remain checked and execute in source order |
 | Uninitialized/multi-declarator locals | Yes | Yes | Yes | Compatible | Uninitialized values receive typed null; declarators check and execute left to right in one scope |
+| `final` local bindings | Yes | Yes | Yes | Compatible | Exactly-once lexical bindings: initialize in the declaration or assign once before reading; reassignment and reads before initialization are rejected |
 | Assignment | Yes | Yes | Yes | Compatible | Invariant supported types or `null`; chained assignment is right-associative; arithmetic, String, bitwise, and shift compounds share evaluate-once lvalue handling |
 | Variable references | Yes | Yes | Yes | Compatible | Checked before execution |
 | Case-insensitive names | Yes | Yes | Yes | Compatible | Original spelling is preserved |
 | Line/block comments | Yes | N/A | N/A | Compatible | Unterminated block comments are errors |
 | `System.debug(expression)` | Yes | Yes | Yes | Simplified | Structured platform-host event exposed as plain output by the default host; no Salesforce log metadata |
 | Numeric arithmetic | Yes | Yes | Yes | Simplified | Checked 32-bit Integer, 64-bit Long, and Decimal `+`, `-`, `*`, `/`, `%`, unary signs, and mixed promotion |
-| Comparison and equality | Yes | Yes | Yes | Compatible | Mixed numeric ordering/equality; case-insensitive String `==`; same-type collection and null equality |
+| Comparison and equality | Yes | Yes | Yes | Compatible | Mixed numeric ordering/equality; case-insensitive String `==`; same-type collection and null equality; exact-value/reference-identity `===` and `!==` |
 | Boolean operators | Yes | Yes | Yes | Compatible | Short-circuit `&&` and <code>&#124;&#124;</code>, unary `!`, plus eager `&`, <code>&#124;</code>, and `^` |
 | String concatenation | Yes | Yes | Yes | Simplified | `+` converts every supported non-Void value; complete String content is preserved and collection text uses deterministic cycle-safe local formatting |
 | Increment/decrement | Yes | Yes | Yes | Compatible | Prefix and postfix forms on Integer/Long locals, List indexes, class members, and SObject fields |
@@ -52,7 +53,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | Bitwise/shift operators | Yes | Yes | Yes | Compatible | Boolean/integral `&`, <code>&#124;</code>, `^`, integral `~`, `<<`, `>>`, and `>>>`; shift widths are masked to 32/64 bits |
 | Nested blocks and scopes | Yes | Yes | Yes | Compatible | Shadowing and lookup are case-insensitive |
 | Conditional statements | Yes | Yes | Yes | Compatible | `if` and `if`/`else` |
-| `switch on` / `when` | Yes | Explicit error | No | Stubbed | Lossless arms and spans; semantic execution remains unsupported |
+| `switch on` / `when` | Yes | Partial | Partial | Simplified | Typed SObject patterns use schema identity, arm-local bindings, first-match execution, and evaluate the switch expression once; unsupported pattern families remain explicit |
 | Loops and loop control | Yes | Yes | Yes | Compatible | Traditional and enhanced `for`, `while`, `do`/`while`, `break`, and `continue` |
 | Anonymous `return` | Yes | Yes | Yes | Simplified | Value-less return terminates anonymous execution; declared methods have checked values |
 | `null` | Yes | Yes | Yes | Simplified | Assignable to every supported value type; selected runtime null behavior implemented |
@@ -74,22 +75,22 @@ platform area. Broader surfaces retain their stated fidelity level.
 | Nested types and enums | Yes | Yes | Yes | Simplified | Qualified nested access/dispatch plus enum constants, equality, `name`, `ordinal`, `values`, and `valueOf` |
 | Typed custom SObjects | Yes | Yes | Yes | Simplified | Metadata-aware project compilation, construction, case-insensitive checked field access, and in-memory identity |
 | Dynamic `SObject` | Yes | Yes | Yes | Simplified | `new SObject(apiName)`, `get(String)`, and `put(String,Object)`; unknown runtime names raise `IllegalArgumentException` |
-| Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, and SQLite execution |
+| Static SOQL | Yes | Yes | Yes | Simplified | Checked direct/parent fields, binds, filters, ordering, limits, aggregates, `ALL ROWS`, soft-delete visibility, and SQLite execution |
 | Static SOSL | Yes | Yes | Yes | Simplified | Checked returning clauses with deterministic local String-field matching |
-| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution; external-ID upsert is retained then rejected semantically |
-| `Database` DML methods | Yes | Yes | Yes | Simplified | Common methods are atomic and return void; partial result APIs are unsupported |
+| DML statements | Yes | Yes | Yes | Simplified | Scalar/bulk insert, update, upsert, delete, and undelete with atomic trigger execution; external-ID upsert resolves a configured field on one statically known schema SObject, while dynamic, unknown, and misconfigured cases are explicit |
+| `Database` DML methods | Yes | Yes | Yes | Simplified | Atomic and `allOrNone=false` partial-result overloads return typed ordered outcomes; supported access/DML options and external-ID fields are schema-checked |
 | Apex triggers | Yes | Yes | Yes | Simplified | Schema-checked `.trigger` units, typed contexts, eight before/after DML events, bulk handlers, and bounded recursion |
 | Transaction rollback | N/A | N/A | Yes | Compatible | Caught failures roll back one DML tree; uncaught failures roll back the entry-point transaction |
 | Recycle bin / undelete | Yes | Yes | Yes | Simplified | Deleted local records retain fields and IDs for deterministic undelete |
 | `AggregateResult` | Yes | Yes | Yes | Simplified | Grouped query results with `get(String)` |
 | Static/instance members | Yes | Yes | Yes | Simplified | Fields, methods, source-ordered initializer blocks, lazy per-class initialization with cached success/failure, checked cycles/depth, overloads, checked dispatch, and static entry-point invocation |
-| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` is retained then rejected semantically |
+| Inheritance/access modifiers | Yes | Yes | Yes | Simplified | Single class inheritance, interfaces, access checks, abstract/virtual/override/final, and virtual dispatch; `transient` fields and properties execute normally and are omitted from JSON serialization, while non-value-member uses are rejected semantically |
 | Properties | Yes | Yes | Yes | Simplified | Auto and custom get/set accessors with accessor-specific visibility |
-| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, optional `SeeAllData=false`, method-only `@TestSetup`, and correct `Test.isRunningTest()` mode in tests and their queued work; `SeeAllData=true` is explicit |
-| Non-test annotations | Yes | Explicit error | No | Stubbed | Names plus positional/named arguments and spans are lossless; platform effects are not approximated |
+| Test annotations | Yes | Yes | Via runner | Simplified | Case-insensitive `@IsTest`, `SeeAllData=false`, deterministic `IsParallel` partitioning, method-only `@TestSetup`, lexical-test-only `@TestVisible` access, and correct `Test.isRunningTest()` mode; `SeeAllData=true` is explicit |
+| Non-test annotations | Yes | Partial | Partial | Simplified | `@SuppressWarnings` accepts exactly one positional String and is runtime-neutral. `@AuraEnabled` supports public/global fields and properties plus public/global static methods, with Boolean `cacheable`/`continuation` method options; it is runtime-neutral and does not imply Lightning behavior. Other names/effects remain lossless and explicitly unsupported |
 | `@future` | Yes | Yes | Via drain | Simplified | Public/global static void methods; primitive and primitive List/Set arguments are snapshotted at enqueue |
 | Queueable Apex | Yes | Yes | Via drain | Simplified | Checked interface contract, deterministic `System.enqueueJob`, context job ID, payload snapshot, and FIFO execution |
-| Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract whose declared `T` binds the List-returning `start` and `execute` scope types, plus deterministic chunking, context job ID, and `finish` |
+| Batch Apex | Yes | Yes | Via drain | Simplified | Checked single-argument `Database.Batchable<T>` contract, deterministic chunking/context/finish, and marker-gated `Database.Stateful` receiver persistence; non-stateful stages restore the enqueue snapshot |
 | Scheduled Apex | Yes | Yes | Via drain | Simplified | Checked Schedulable contract, seven-field cron shape validation, deterministic submission, and trigger ID |
 | Platform events | Yes | Yes | Via drain | Simplified | `EventBus.publish` queues imported `__e` records for after-insert trigger delivery; no retention or replay |
 | JSON | Yes | Yes | Yes | Simplified | Ordered primitive/List/Set/String-keyed Map serialization, catchable cycle/limit failures, and recursive untyped deserialization |
@@ -107,7 +108,8 @@ Method names are case-insensitive. Supported overloads still receive static
 arity and argument-type checking.
 
 - `List<T>`: `add`, `addAll`, `clear`, `clone`, `contains`, `get`, `indexOf`,
-  `isEmpty`, `remove`, `set`, `size`, and scalar `sort`. `add` accepts either a
+  `isEmpty`, `remove`, `set`, `size`, scalar `sort`, and stable custom
+  `System.Comparable` sorting. `add` accepts either a
   value or an index and value. `sort` places null before non-null values.
 - `Set<T>`: `add`, `addAll`, `clear`, `clone`, `contains`, `containsAll`,
   `isEmpty`, `remove`, `removeAll`, `retainAll`, and `size`.
@@ -428,7 +430,7 @@ produce a compile diagnostic naming the API and exact effective profile.
   components, and `format`.
 - `Decimal`: literals, mixed Integer operators, `valueOf`, `setScale`, `abs`,
   `scale`, and deterministic text conversion.
-- `Id`: `valueOf`, `to15`, and `to18`; `Blob`: `valueOf`, `toString`, and
+- `Id`: `valueOf`, `to15`, `to18`, and `getSObjectType`; `Blob`: `valueOf`, `toString`, and
   `size`; `EncodingUtil`: Base64 encode/decode.
 - `JSON`: `serialize`, `serializePretty`, and `deserializeUntyped`; structural
   serialization rejects cycles or exhausted traversal budgets with catchable
@@ -681,6 +683,28 @@ production parse blockers affect all 1,159 tests: a typed `switch when` arm in
 location census in `evidence/milestone22/report.json` orders future work by
 affected tests. These figures describe the frozen Nebula candidate only; they
 are not a runtime or general Salesforce compatibility percentage.
+
+## M28 checkpoint
+
+Ten typed compatibility slices are checkpointed on
+`codex/milestone-28-enterprise-compatibility`. The latest completed full replay
+parses 1,159/1,159 frozen tests but still checks and strictly matches 0/1,159.
+Comparable and Stateful were implemented after that replay and have focused
+tests, but they have not received another full enterprise run. This is
+in-progress evidence, not an **Exact** claim or a milestone completion result.
+The post-C1 replay is recorded in
+`evidence/milestone28/census-1/report.json`: it parses 1,159/1,159 and checks
+0/1,159 across three deterministic runs. C1 removes `Id.getSObjectType` as the
+first blocker; the next first blocker is the unsupported `transient` modifier
+on a property, affecting 1,126 tests. `Flow.Interview` affects 18 tests and
+`System.FeatureManagement.checkPermission` affects 15. No next-family
+implementation has started at that checkpoint. The transient-property slice
+then matched compile and values against Salesforce 2/2; its post-slice replay
+is recorded in `evidence/milestone28/census-2/report.json`. The next first
+blocker is cross-type equality between `SourceMetadataType` and
+`LoggerStackTrace.SourceMetadataType`, affecting 1,126 tests. See
+`docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
+`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
 ## Platform surface
 

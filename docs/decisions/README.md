@@ -60,3 +60,4 @@ history.
 - [0028 — Bind compatibility profiles per source](0028-bind-compatibility-profiles-per-source.md)
 - [0029 — Separate metadata catalog, accounting, and org discovery](0029-separate-metadata-catalog-accounting-and-org-discovery.md)
 - [0030 — Model sharing and security at the typed host boundary](0030-model-sharing-and-security-at-the-host-boundary.md)
+- [0031 — Close enterprise compatibility with measured typed slices](0031-close-enterprise-compatibility-with-measured-typed-slices.md)

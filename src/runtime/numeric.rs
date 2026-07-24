@@ -1,4 +1,4 @@
-use super::{Value, integer_overflow, invalid_runtime_operands, runtime_exception};
+use super::{ApexDouble, Value, integer_overflow, invalid_runtime_operands, runtime_exception};
 use crate::{
     ast::BinaryOperator,
     diagnostic::Diagnostic,
@@ -79,6 +79,9 @@ pub(super) fn apply_unary(
             .checked_mul(Decimal::NEGATIVE_ONE)
             .map(Value::Decimal)
             .ok_or_else(|| decimal_overflow(span)),
+        CheckedUnaryOperation::Negate(NumericKind::Double) => {
+            finite_double(-double(value, span)?, span)
+        }
         CheckedUnaryOperation::BitwiseNot(NumericKind::Integer) => {
             let value =
                 i32::try_from(integer(value, span)?).map_err(|_| invalid_runtime_operands(span))?;
@@ -87,7 +90,7 @@ pub(super) fn apply_unary(
         CheckedUnaryOperation::BitwiseNot(NumericKind::Long) => {
             Ok(Value::Long(!long(value, span)?))
         }
-        CheckedUnaryOperation::BitwiseNot(NumericKind::Decimal) => {
+        CheckedUnaryOperation::BitwiseNot(NumericKind::Decimal | NumericKind::Double) => {
             Err(invalid_runtime_operands(span))
         }
     }
@@ -103,6 +106,7 @@ pub(super) fn increment(
         NumericKind::Integer => Value::Integer(i64::from(delta)),
         NumericKind::Long => Value::Long(i64::from(delta)),
         NumericKind::Decimal => return Err(invalid_runtime_operands(span)),
+        NumericKind::Double => Value::Double(ApexDouble(f64::from(delta))),
     };
     apply_numeric_binary(BinaryOperator::Add, kind, value, one, span)
 }
@@ -118,6 +122,7 @@ fn apply_numeric_binary(
         NumericKind::Integer => apply_integer_binary(operator, left, right, span),
         NumericKind::Long => apply_long_binary(operator, left, right, span),
         NumericKind::Decimal => apply_decimal_binary(operator, left, right, span),
+        NumericKind::Double => apply_double_binary(operator, left, right, span),
     }
 }
 
@@ -192,6 +197,32 @@ fn apply_decimal_binary(
     Ok(Value::Decimal(value))
 }
 
+fn apply_double_binary(
+    operator: BinaryOperator,
+    left: Value,
+    right: Value,
+    span: Span,
+) -> Result<Value, Diagnostic> {
+    let left = double(left, span)?;
+    let right = double(right, span)?;
+    if right == 0.0 && matches!(operator, BinaryOperator::Divide | BinaryOperator::Remainder) {
+        return Err(if operator == BinaryOperator::Divide {
+            division_by_zero(span)
+        } else {
+            remainder_by_zero(span)
+        });
+    }
+    let value = match operator {
+        BinaryOperator::Add => left + right,
+        BinaryOperator::Subtract => left - right,
+        BinaryOperator::Multiply => left * right,
+        BinaryOperator::Divide => left / right,
+        BinaryOperator::Remainder => left % right,
+        _ => return Err(invalid_runtime_operands(span)),
+    };
+    finite_double(value, span)
+}
+
 fn apply_integral_binary(
     operator: BinaryOperator,
     kind: NumericKind,
@@ -222,7 +253,7 @@ fn apply_integral_binary(
                 _ => return Err(invalid_runtime_operands(span)),
             }))
         }
-        NumericKind::Decimal => Err(invalid_runtime_operands(span)),
+        NumericKind::Decimal | NumericKind::Double => Err(invalid_runtime_operands(span)),
     }
 }
 
@@ -256,7 +287,7 @@ fn apply_shift(
                 _ => return Err(invalid_runtime_operands(span)),
             }))
         }
-        NumericKind::Decimal => Err(invalid_runtime_operands(span)),
+        NumericKind::Decimal | NumericKind::Double => Err(invalid_runtime_operands(span)),
     }
 }
 
@@ -269,6 +300,7 @@ fn convert_numeric(value: Value, kind: NumericKind, span: Span) -> Result<Value,
         }
         NumericKind::Long => Ok(Value::Long(long(value, span)?)),
         NumericKind::Decimal => Ok(Value::Decimal(decimal(value, span)?)),
+        NumericKind::Double => finite_double(double(value, span)?, span),
     }
 }
 
@@ -292,6 +324,25 @@ fn decimal(value: Value, span: Span) -> Result<Decimal, Diagnostic> {
         Value::Decimal(value) => Ok(value),
         _ => Err(invalid_runtime_operands(span)),
     }
+}
+
+fn double(value: Value, span: Span) -> Result<f64, Diagnostic> {
+    match value {
+        Value::Integer(value) | Value::Long(value) => Ok(value as f64),
+        Value::Decimal(value) => value
+            .normalize()
+            .to_string()
+            .parse::<f64>()
+            .map_err(|_| invalid_runtime_operands(span)),
+        Value::Double(value) => Ok(value.get()),
+        _ => Err(invalid_runtime_operands(span)),
+    }
+}
+
+fn finite_double(value: f64, span: Span) -> Result<Value, Diagnostic> {
+    ApexDouble::new(value)
+        .map(Value::Double)
+        .ok_or_else(|| runtime_exception("MathException", "Double arithmetic overflow", span))
 }
 
 fn division_by_zero(span: Span) -> Diagnostic {

@@ -11,7 +11,7 @@ use crate::{
         CheckedSoslReturning, CheckedValue, DatabaseDmlTarget, DatabaseQueryKind, ExpressionType,
         FieldId, ObjectTypeId, QueryResultKind,
     },
-    platform::{DataValue, FieldType, QueryAccessMode},
+    platform::{DataValue, FieldType, ObjectSchema, QueryAccessMode},
 };
 
 #[derive(Clone, Copy)]
@@ -23,6 +23,7 @@ pub(super) struct DmlValueShape {
 struct DatabaseDmlOptions {
     external_id: Option<(ObjectTypeId, FieldId)>,
     all_or_none_argument: Option<usize>,
+    dml_options_argument: Option<usize>,
     access_level_argument: Option<usize>,
 }
 
@@ -30,6 +31,7 @@ fn empty_database_dml_options() -> DatabaseDmlOptions {
     DatabaseDmlOptions {
         external_id: None,
         all_or_none_argument: None,
+        dml_options_argument: None,
         access_level_argument: None,
     }
 }
@@ -40,13 +42,10 @@ impl Checker {
         object_id: usize,
         relationship: &str,
     ) -> Option<(usize, usize)> {
-        let reference_name = relationship_field_name(relationship)?;
         let object = self.schema.object_at(object_id)?;
-        let reference_field_id = object.field_index(&reference_name)?;
+        let reference_field_id = relationship_field_id(object, relationship)?;
         let reference = object.field_at(reference_field_id)?;
-        let FieldType::Reference { target_object } = reference.data_type() else {
-            return None;
-        };
+        let target_object = relationship_target_object(reference.data_type())?;
         let target_object_id = self.schema.object_index(target_object)?;
         Some((reference_field_id, target_object_id))
     }
@@ -127,6 +126,7 @@ impl Checker {
                 order_by,
                 limit,
                 offset,
+                all_rows: query.all_rows,
                 result,
             })),
         );
@@ -188,6 +188,12 @@ impl Checker {
         child: &SoqlQuery,
         span: crate::span::Span,
     ) -> Result<CheckedSelectItem, Diagnostic> {
+        if child.all_rows {
+            return Err(Diagnostic::new(
+                "`ALL ROWS` is only valid on a top-level SOQL query",
+                child.span,
+            ));
+        }
         if child
             .select
             .iter()
@@ -418,27 +424,22 @@ impl Checker {
                 .schema
                 .object_at(object_id)
                 .expect("checked relationship object index is valid");
-            let reference_name =
-                relationship_field_name(&relationship.spelling).ok_or_else(|| {
+            let reference_field_id = relationship_field_id(object, &relationship.spelling)
+                .ok_or_else(|| {
                     Diagnostic::new(
-                        "custom parent relationship paths must use a `__r` relationship name",
+                        format!(
+                            "unknown relationship `{}` on SObject `{}`",
+                            relationship.spelling,
+                            object.api_name()
+                        ),
                         relationship.span,
                     )
                 })?;
-            let reference_field_id = object.field_index(&reference_name).ok_or_else(|| {
-                Diagnostic::new(
-                    format!(
-                        "unknown relationship `{}` on SObject `{}`",
-                        relationship.spelling,
-                        object.api_name()
-                    ),
-                    relationship.span,
-                )
-            })?;
             let reference = object
                 .field_at(reference_field_id)
                 .expect("checked relationship field index is valid");
-            let FieldType::Reference { target_object } = reference.data_type() else {
+            let reference_name = reference.api_name();
+            let Some(target_object) = relationship_target_object(reference.data_type()) else {
                 return Err(Diagnostic::new(
                     format!("field `{reference_name}` is not a relationship"),
                     relationship.span,
@@ -630,7 +631,16 @@ impl Checker {
         let expected = super::apex_field_type(field_type);
         let compatible = match &actual {
             ExpressionType::Value(TypeName::List(element))
-            | ExpressionType::Value(TypeName::Set(element)) => self.is_subtype(element, &expected),
+            | ExpressionType::Value(TypeName::Set(element)) => {
+                self.is_subtype(element, &expected)
+                    || (matches!(
+                        field_type,
+                        FieldType::Id
+                            | FieldType::Reference { .. }
+                            | FieldType::MetadataRelationship { .. }
+                    ) && (self.is_sobject_type(element)
+                        || self.is_dynamic_sobject_type(element)))
+            }
             _ => false,
         };
         if !compatible {
@@ -660,11 +670,15 @@ impl Checker {
         value: &SoqlValue,
         expected: &FieldType,
     ) -> Result<CheckedValue, Diagnostic> {
+        let expected = query_value_field_type(expected);
         let checked = match value {
             SoqlValue::String(value, span) => {
                 if !matches!(
                     expected,
-                    FieldType::String | FieldType::Id | FieldType::Reference { .. }
+                    FieldType::String
+                        | FieldType::Id
+                        | FieldType::Reference { .. }
+                        | FieldType::MetadataRelationship { .. }
                 ) {
                     return Err(query_value_mismatch(expected, "String", *span));
                 }
@@ -797,6 +811,7 @@ impl Checker {
                 operation,
                 external_id: options.external_id,
                 all_or_none_argument: options.all_or_none_argument,
+                dml_options_argument: options.dml_options_argument,
                 access_level_argument: options.access_level_argument,
                 statement_access: None,
             }),
@@ -843,6 +858,10 @@ impl Checker {
                 all_or_none_argument: Some(1),
                 ..empty_database_dml_options()
             }),
+            Ok(ExpressionType::Value(TypeName::DmlOptions)) => Ok(DatabaseDmlOptions {
+                dml_options_argument: Some(1),
+                ..empty_database_dml_options()
+            }),
             Ok(ExpressionType::Value(TypeName::AccessLevel)) => Ok(DatabaseDmlOptions {
                 access_level_argument: Some(1),
                 ..empty_database_dml_options()
@@ -854,7 +873,7 @@ impl Checker {
             Err(error) => Err(error),
             _ => Err(Diagnostic::new(
                 format!(
-                    "Database.{} second argument must be allOrNone Boolean or AccessLevel",
+                    "Database.{} second argument must be allOrNone Boolean, DmlOptions, or AccessLevel",
                     method.spelling
                 ),
                 arguments[1].span(),
@@ -904,11 +923,13 @@ impl Checker {
             ExpressionType::Value(TypeName::Boolean) => Ok(DatabaseDmlOptions {
                 external_id: Some(external_id),
                 all_or_none_argument: Some(2),
+                dml_options_argument: None,
                 access_level_argument: None,
             }),
             ExpressionType::Value(TypeName::AccessLevel) => Ok(DatabaseDmlOptions {
                 external_id: Some(external_id),
                 all_or_none_argument: None,
+                dml_options_argument: None,
                 access_level_argument: Some(2),
             }),
             _ => Err(Diagnostic::new(
@@ -940,6 +961,7 @@ impl Checker {
         Ok(DatabaseDmlOptions {
             external_id: Some(external_id),
             all_or_none_argument: Some(2),
+            dml_options_argument: None,
             access_level_argument: Some(3),
         })
     }
@@ -1191,6 +1213,29 @@ fn relationship_field_name(relationship: &str) -> Option<String> {
         .map(|prefix| format!("{prefix}__c"))
 }
 
+fn relationship_field_id(object: &ObjectSchema, relationship: &str) -> Option<usize> {
+    if let Some(field_name) = relationship_field_name(relationship)
+        && let Some(field_id) = object.field_index(&field_name)
+    {
+        return Some(field_id);
+    }
+    object.fields().position(|field| {
+        field
+            .relationship_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(relationship))
+    })
+}
+
+fn relationship_target_object(field_type: &FieldType) -> Option<&str> {
+    match field_type {
+        FieldType::Reference { target_object } => Some(target_object),
+        FieldType::MetadataRelationship {
+            target_metadata, ..
+        } => Some(target_metadata),
+        _ => None,
+    }
+}
+
 fn database_dml_result_type(operation: crate::ast::DmlOperation) -> TypeName {
     match operation {
         crate::ast::DmlOperation::Insert | crate::ast::DmlOperation::Update => TypeName::SaveResult,
@@ -1253,5 +1298,14 @@ fn field_type_name(field_type: &FieldType) -> &'static str {
         FieldType::Datetime => "Datetime",
         FieldType::Id => "Id",
         FieldType::Reference { .. } => "relationship",
+        FieldType::MetadataRelationship { .. } => "metadata relationship",
+        FieldType::Summary { result_type, .. } => field_type_name(result_type),
+    }
+}
+
+fn query_value_field_type(field_type: &FieldType) -> &FieldType {
+    match field_type {
+        FieldType::Summary { result_type, .. } => query_value_field_type(result_type),
+        other => other,
     }
 }

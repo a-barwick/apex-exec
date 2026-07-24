@@ -346,29 +346,47 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         output: &mut String,
         cycle_behavior: CycleBehavior,
     ) -> Result<(), TraversalError> {
-        match self.store.platform(id) {
-            PlatformValue::Blob(bytes) => {
-                traversal.write(output, "Blob[")?;
-                traversal.write(output, &bytes.len().to_string())?;
-                traversal.write(output, "]")
+        let value = self.store.platform(id);
+        let result = match value {
+            PlatformValue::Blob(bytes) => render_blob(bytes, traversal, output),
+            PlatformValue::HttpRequest(_) | PlatformValue::HttpResponse(_) => {
+                render_http_platform(value, traversal, output)
             }
-            PlatformValue::Pattern(pattern) => traversal.write(output, pattern),
-            PlatformValue::Matcher { .. } => traversal.write(output, "Matcher"),
-            PlatformValue::Http => traversal.write(output, "Http"),
-            PlatformValue::HttpRequest(request) => {
-                traversal.write(output, "HttpRequest[")?;
-                traversal.write(output, &request.method)?;
-                traversal.write(output, " ")?;
-                traversal.write(output, &request.endpoint)?;
-                traversal.write(output, "]")
+            PlatformValue::VisualEditorDataRow { .. }
+            | PlatformValue::VisualEditorDynamicPickListRows(_) => {
+                render_visual_editor_platform(value, traversal, output)
             }
-            PlatformValue::HttpResponse(response) => {
-                traversal.write(output, "HttpResponse[")?;
-                traversal.write(output, &response.status_code.to_string())?;
-                traversal.write(output, " ")?;
-                traversal.write(output, &response.status)?;
-                traversal.write(output, "]")
+            PlatformValue::SObjectType(_)
+            | PlatformValue::DescribeSObject(_)
+            | PlatformValue::SObjectField { .. }
+            | PlatformValue::DescribeField { .. }
+            | PlatformValue::FieldSetMember { .. }
+            | PlatformValue::SObjectFieldMap(_)
+            | PlatformValue::FieldSetMap(_)
+            | PlatformValue::FieldSet { .. }
+            | PlatformValue::PicklistEntry(_) => {
+                self.render_schema_platform(value, traversal, output)
             }
+            PlatformValue::AsyncContext { .. } => render_async_context(value, traversal, output),
+            value @ (PlatformValue::DmlResult { .. }
+            | PlatformValue::DmlError(_)
+            | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
+            PlatformValue::Request { .. } => render_request(value, traversal, output),
+            PlatformValue::SecurityDecision { .. } => {
+                traversal.write(output, "SObjectAccessDecision")
+            }
+            value => render_simple_platform(value, traversal, output),
+        };
+        result.or_else(|error| handle_output_error(error, traversal, output, cycle_behavior))
+    }
+
+    fn render_schema_platform(
+        &self,
+        value: &PlatformValue,
+        traversal: &mut ValueGraphTraversal,
+        output: &mut String,
+    ) -> Result<(), TraversalError> {
+        match value {
             PlatformValue::SObjectType(object_id) | PlatformValue::DescribeSObject(object_id) => {
                 let name = self
                     .program()
@@ -377,23 +395,40 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                     .map_or("Schema", |object| object.api_name());
                 traversal.write(output, name)
             }
-            PlatformValue::AsyncContext { ty, job_id } => {
-                traversal.write(output, &ty.apex_name())?;
-                traversal.write(output, "[")?;
-                traversal.write(output, job_id)?;
-                traversal.write(output, "]")
+            PlatformValue::SObjectField {
+                object_id,
+                field_id,
             }
-            PlatformValue::QueryLocator(_) => traversal.write(output, "Database.QueryLocator"),
-            value @ (PlatformValue::DmlResult { .. }
-            | PlatformValue::DmlError(_)
-            | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
-            PlatformValue::AccessLevel(access) => traversal.write(output, access.apex_name()),
-            PlatformValue::AccessType(access) => traversal.write(output, access.apex_name()),
-            PlatformValue::SecurityDecision { .. } => {
-                traversal.write(output, "SObjectAccessDecision")
+            | PlatformValue::DescribeField {
+                object_id,
+                field_id,
             }
+            | PlatformValue::FieldSetMember {
+                object_id,
+                field_id,
+            } => {
+                let schema = self.program().schema();
+                let object = schema.object_at(*object_id);
+                let object_name = object.map_or("Schema", |object| object.api_name());
+                let field_name = object
+                    .and_then(|object| object.field_at(*field_id))
+                    .map_or("Field", |field| field.api_name());
+                traversal.write(output, object_name)?;
+                traversal.write(output, ".")?;
+                traversal.write(output, field_name)
+            }
+            PlatformValue::SObjectFieldMap(object_id) | PlatformValue::FieldSetMap(object_id) => {
+                let name = self
+                    .program()
+                    .schema()
+                    .object_at(*object_id)
+                    .map_or("Schema", |object| object.api_name());
+                traversal.write(output, name)
+            }
+            PlatformValue::FieldSet { name, .. } => traversal.write(output, name),
+            PlatformValue::PicklistEntry(value) => traversal.write(output, value),
+            _ => unreachable!("caller selects schema platform values"),
         }
-        .or_else(|error| handle_output_error(error, traversal, output, cycle_behavior))
     }
 
     fn render_collection(
@@ -565,6 +600,40 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
     }
 
+    pub(super) fn operator_values_identical(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::String(left), Value::String(right)) => left == right,
+            (Value::Boolean(left), Value::Boolean(right)) => left == right,
+            (Value::Integer(left), Value::Integer(right)) => left == right,
+            (Value::Long(left), Value::Long(right)) => left == right,
+            (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Double(left), Value::Double(right)) => left == right,
+            (Value::Date(left), Value::Date(right)) => left == right,
+            (Value::Datetime(left), Value::Datetime(right)) => left == right,
+            (Value::Time(left), Value::Time(right)) => left == right,
+            (Value::Id(left), Value::Id(right)) => left == right,
+            (Value::Platform(left), Value::Platform(right)) => left == right,
+            (Value::Collection(left), Value::Collection(right)) => left == right,
+            (Value::Object(left), Value::Object(right)) => left == right,
+            (
+                Value::Enum {
+                    class_id: left_class,
+                    ordinal: left_ordinal,
+                },
+                Value::Enum {
+                    class_id: right_class,
+                    ordinal: right_ordinal,
+                },
+            ) => left_class == right_class && left_ordinal == right_ordinal,
+            (Value::TypeLiteral(left), Value::TypeLiteral(right)) => left == right,
+            (Value::SObject(left), Value::SObject(right)) => left == right,
+            (Value::AggregateResult(left), Value::AggregateResult(right)) => left == right,
+            (Value::Exception(left), Value::Exception(right)) => std::ptr::eq(left, right),
+            (Value::Null(_), Value::Null(_)) | (Value::Void, Value::Void) => true,
+            _ => false,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn values_equal_with_stats<'value>(
         &'value self,
@@ -586,6 +655,7 @@ fn render_leaf(
         Value::Integer(value) => traversal.write(output, &value.to_string()),
         Value::Long(value) => traversal.write(output, &value.to_string()),
         Value::Decimal(value) => traversal.write(output, &value.normalize().to_string()),
+        Value::Double(value) => traversal.write(output, &value.get().to_string()),
         Value::Date(value) => traversal.write(output, &value.format("%Y-%m-%d").to_string()),
         Value::Datetime(value) => {
             traversal.write(output, &value.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -683,6 +753,108 @@ fn finish_container(
     }
 }
 
+fn render_blob(
+    bytes: &[u8],
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    traversal.write(output, "Blob[")?;
+    traversal.write(output, &bytes.len().to_string())?;
+    traversal.write(output, "]")
+}
+
+fn render_http_platform(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    match value {
+        PlatformValue::HttpRequest(request) => {
+            traversal.write(output, "HttpRequest[")?;
+            traversal.write(output, &request.method)?;
+            traversal.write(output, " ")?;
+            traversal.write(output, &request.endpoint)?;
+            traversal.write(output, "]")
+        }
+        PlatformValue::HttpResponse(response) => {
+            traversal.write(output, "HttpResponse[")?;
+            traversal.write(output, &response.status_code.to_string())?;
+            traversal.write(output, " ")?;
+            traversal.write(output, &response.status)?;
+            traversal.write(output, "]")
+        }
+        _ => unreachable!("caller selects HTTP platform values"),
+    }
+}
+
+fn render_visual_editor_platform(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    match value {
+        PlatformValue::VisualEditorDataRow { label, value } => {
+            traversal.write(output, "VisualEditor.DataRow[")?;
+            traversal.write(output, label)?;
+            traversal.write(output, "=")?;
+            traversal.write(output, value)?;
+            traversal.write(output, "]")
+        }
+        PlatformValue::VisualEditorDynamicPickListRows(rows) => {
+            traversal.write(output, "VisualEditor.DynamicPickListRows[")?;
+            traversal.write(output, &rows.len().to_string())?;
+            traversal.write(output, "]")
+        }
+        _ => unreachable!("caller selects VisualEditor platform values"),
+    }
+}
+
+fn render_async_context(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    let PlatformValue::AsyncContext { ty, job_id } = value else {
+        unreachable!("caller selects async context values")
+    };
+    traversal.write(output, &ty.apex_name())?;
+    traversal.write(output, "[")?;
+    traversal.write(output, job_id)?;
+    traversal.write(output, "]")
+}
+
+fn render_request(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    let PlatformValue::Request { request_id, .. } = value else {
+        unreachable!("caller selects request values")
+    };
+    traversal.write(output, "System.Request[")?;
+    traversal.write(output, request_id)?;
+    traversal.write(output, "]")
+}
+
+fn render_simple_platform(
+    value: &PlatformValue,
+    traversal: &mut ValueGraphTraversal,
+    output: &mut String,
+) -> Result<(), TraversalError> {
+    match value {
+        PlatformValue::Pattern(pattern) => traversal.write(output, pattern),
+        PlatformValue::Matcher { .. } => traversal.write(output, "Matcher"),
+        PlatformValue::Http => traversal.write(output, "Http"),
+        PlatformValue::DmlOptions(_) => traversal.write(output, "Database.DmlOptions"),
+        PlatformValue::QueryLocator(_) => traversal.write(output, "Database.QueryLocator"),
+        PlatformValue::AccessLevel(access) => traversal.write(output, access.apex_name()),
+        PlatformValue::AccessType(access) => traversal.write(output, access.apex_name()),
+        PlatformValue::PlatformEnum(value) => traversal.write(output, value.apex_name()),
+        PlatformValue::CachePartition => traversal.write(output, "Cache.Partition[unavailable]"),
+        _ => unreachable!("caller selects simple platform values"),
+    }
+}
+
 fn render_dml_platform(
     value: &PlatformValue,
     traversal: &mut ValueGraphTraversal,
@@ -708,6 +880,68 @@ fn render_dml_platform(
         PlatformValue::DmlStatus(status) => traversal.write(output, status.apex_name()),
         _ => unreachable!("caller selects DML platform values"),
     }
+}
+
+fn non_collection_values_equal(left: &Value, right: &Value) -> bool {
+    scalar_values_equal(left, right)
+        .or_else(|| identity_values_equal(left, right))
+        .unwrap_or(false)
+}
+
+fn scalar_values_equal(left: &Value, right: &Value) -> Option<bool> {
+    let equal =
+        match (left, right) {
+            (Value::String(left), Value::String(right)) => left == right,
+            (Value::Boolean(left), Value::Boolean(right)) => left == right,
+            (Value::Integer(left), Value::Integer(right)) => left == right,
+            (Value::Long(left), Value::Long(right)) => left == right,
+            (Value::Integer(left), Value::Long(right))
+            | (Value::Long(right), Value::Integer(left)) => left == right,
+            (Value::Decimal(left), Value::Decimal(right)) => left == right,
+            (Value::Double(left), Value::Double(right)) => left == right,
+            (Value::Integer(left), Value::Double(right))
+            | (Value::Double(right), Value::Integer(left)) => (*left as f64) == right.get(),
+            (Value::Long(left), Value::Double(right))
+            | (Value::Double(right), Value::Long(left)) => (*left as f64) == right.get(),
+            (Value::Decimal(left), Value::Double(right))
+            | (Value::Double(right), Value::Decimal(left)) => left
+                .normalize()
+                .to_string()
+                .parse::<f64>()
+                .is_ok_and(|left| left == right.get()),
+            (Value::Integer(left), Value::Decimal(right))
+            | (Value::Decimal(right), Value::Integer(left)) => Decimal::from(*left) == *right,
+            (Value::Long(left), Value::Decimal(right))
+            | (Value::Decimal(right), Value::Long(left)) => Decimal::from(*left) == *right,
+            (Value::Date(left), Value::Date(right)) => left == right,
+            (Value::Datetime(left), Value::Datetime(right)) => left == right,
+            (Value::Time(left), Value::Time(right)) => left == right,
+            (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
+            (Value::Null(_), Value::Null(_)) | (Value::Void, Value::Void) => true,
+            _ => return None,
+        };
+    Some(equal)
+}
+
+fn identity_values_equal(left: &Value, right: &Value) -> Option<bool> {
+    let equal = match (left, right) {
+        (Value::Object(left), Value::Object(right)) => left == right,
+        (
+            Value::Enum {
+                class_id: left_class,
+                ordinal: left_ordinal,
+            },
+            Value::Enum {
+                class_id: right_class,
+                ordinal: right_ordinal,
+            },
+        ) => left_class == right_class && left_ordinal == right_ordinal,
+        (Value::TypeLiteral(left), Value::TypeLiteral(right)) => left == right,
+        (Value::SObject(left), Value::SObject(right)) => left == right,
+        (Value::Exception(left), Value::Exception(right)) => left == right,
+        _ => return None,
+    };
+    Some(equal)
 }
 
 enum EqualityTask<'value> {
@@ -802,64 +1036,83 @@ impl<'value, 'program, H: PlatformHost> EqualityEngine<'value, 'program, H> {
 
     fn compare(&mut self, left: &'value Value, right: &'value Value) {
         self.traversal.note_equality_comparison();
-        self.last = match (left, right) {
-            (Value::String(left), Value::String(right)) => left == right,
-            (Value::Boolean(left), Value::Boolean(right)) => left == right,
-            (Value::Integer(left), Value::Integer(right)) => left == right,
-            (Value::Long(left), Value::Long(right)) => left == right,
-            (Value::Integer(left), Value::Long(right))
-            | (Value::Long(right), Value::Integer(left)) => left == right,
-            (Value::Decimal(left), Value::Decimal(right)) => left == right,
-            (Value::Integer(left), Value::Decimal(right))
-            | (Value::Decimal(right), Value::Integer(left)) => Decimal::from(*left) == *right,
-            (Value::Long(left), Value::Decimal(right))
-            | (Value::Decimal(right), Value::Long(left)) => Decimal::from(*left) == *right,
-            (Value::Date(left), Value::Date(right)) => left == right,
-            (Value::Datetime(left), Value::Datetime(right)) => left == right,
-            (Value::Time(left), Value::Time(right)) => left == right,
-            (Value::Id(left), Value::Id(right)) => left.eq_ignore_ascii_case(right),
-            (Value::Platform(left), Value::Platform(right)) => {
-                match (
-                    self.interpreter.store.platform(*left),
-                    self.interpreter.store.platform(*right),
-                ) {
-                    (
-                        PlatformValue::DmlStatus(left_status),
-                        PlatformValue::DmlStatus(right_status),
-                    ) => left_status == right_status,
-                    (
-                        PlatformValue::AccessLevel(left_access),
-                        PlatformValue::AccessLevel(right_access),
-                    ) => left_access == right_access,
-                    (
-                        PlatformValue::AccessType(left_access),
-                        PlatformValue::AccessType(right_access),
-                    ) => left_access == right_access,
-                    _ => left == right,
-                }
-            }
+        match (left, right) {
             (Value::Collection(left), Value::Collection(right)) => {
                 self.start_collection(*left, *right);
-                return;
             }
-            (Value::Object(left), Value::Object(right)) => left == right,
+            (Value::Platform(left), Value::Platform(right)) => {
+                self.last = self.platform_values_equal(*left, *right);
+            }
+            _ => self.last = non_collection_values_equal(left, right),
+        }
+    }
+
+    fn platform_values_equal(
+        &self,
+        left: super::PlatformValueId,
+        right: super::PlatformValueId,
+    ) -> bool {
+        match (
+            self.interpreter.store.platform(left),
+            self.interpreter.store.platform(right),
+        ) {
+            (PlatformValue::DmlStatus(left), PlatformValue::DmlStatus(right)) => left == right,
+            (PlatformValue::AccessLevel(left), PlatformValue::AccessLevel(right)) => left == right,
+            (PlatformValue::AccessType(left), PlatformValue::AccessType(right)) => left == right,
+            (PlatformValue::PlatformEnum(left), PlatformValue::PlatformEnum(right)) => {
+                left == right
+            }
+            (PlatformValue::SObjectType(left), PlatformValue::SObjectType(right))
+            | (PlatformValue::DescribeSObject(left), PlatformValue::DescribeSObject(right))
+            | (PlatformValue::SObjectFieldMap(left), PlatformValue::SObjectFieldMap(right))
+            | (PlatformValue::FieldSetMap(left), PlatformValue::FieldSetMap(right)) => {
+                left == right
+            }
             (
-                Value::Enum {
-                    class_id: left_class,
-                    ordinal: left_ordinal,
+                PlatformValue::SObjectField {
+                    object_id: left_object,
+                    field_id: left_field,
                 },
-                Value::Enum {
-                    class_id: right_class,
-                    ordinal: right_ordinal,
+                PlatformValue::SObjectField {
+                    object_id: right_object,
+                    field_id: right_field,
                 },
-            ) => left_class == right_class && left_ordinal == right_ordinal,
-            (Value::TypeLiteral(left), Value::TypeLiteral(right)) => left == right,
-            (Value::SObject(left), Value::SObject(right)) => left == right,
-            (Value::Exception(left), Value::Exception(right)) => left == right,
-            (Value::Null(_), Value::Null(_)) => true,
-            (Value::Void, Value::Void) => true,
-            _ => false,
-        };
+            )
+            | (
+                PlatformValue::DescribeField {
+                    object_id: left_object,
+                    field_id: left_field,
+                },
+                PlatformValue::DescribeField {
+                    object_id: right_object,
+                    field_id: right_field,
+                },
+            )
+            | (
+                PlatformValue::FieldSetMember {
+                    object_id: left_object,
+                    field_id: left_field,
+                },
+                PlatformValue::FieldSetMember {
+                    object_id: right_object,
+                    field_id: right_field,
+                },
+            ) => left_object == right_object && left_field == right_field,
+            (
+                PlatformValue::FieldSet {
+                    object_id: left_object,
+                    name: left_name,
+                },
+                PlatformValue::FieldSet {
+                    object_id: right_object,
+                    name: right_name,
+                },
+            ) => left_object == right_object && left_name.eq_ignore_ascii_case(right_name),
+            (PlatformValue::PicklistEntry(left), PlatformValue::PicklistEntry(right)) => {
+                left == right
+            }
+            _ => left == right,
+        }
     }
 
     fn start_collection(&mut self, left_id: CollectionId, right_id: CollectionId) {

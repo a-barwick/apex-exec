@@ -205,8 +205,8 @@ fn system_debug_crosses_the_platform_host_boundary() {
 #[test]
 fn typed_nulls_retain_static_string_behavior_and_compare_as_null() {
     let interpreter = Interpreter::new();
-    let string_null = typed_value(Value::Null(None), &TypeName::String);
-    let integer_null = typed_value(Value::Null(None), &TypeName::Integer);
+    let string_null = typed_value(Value::Null(None), &TypeName::String, Span::new(0, 0)).unwrap();
+    let integer_null = typed_value(Value::Null(None), &TypeName::Integer, Span::new(0, 0)).unwrap();
 
     assert!(string_null.has_string_type());
     assert!(!integer_null.has_string_type());
@@ -409,8 +409,8 @@ fn null_aware_non_null_paths_preserve_argument_exceptions() {
              public static Integer explode() { return 1 / 0; } \
              public String label(Integer value) { return 'value=' + value; } \
          } \
-         Box box = new Box(); \
-         String value = box?.label(Box.explode()) ?? 'fallback';",
+         Box instance = new Box(); \
+         String value = instance?.label(Box.explode()) ?? 'fallback';",
     )
     .unwrap_err();
 
@@ -441,6 +441,39 @@ fn safe_navigation_handles_intrinsics_and_void_methods() {
     .unwrap();
 
     assert_eq!(output, ["EMPTY", "0", "READY", "2", "1"]);
+}
+
+#[test]
+fn member_dispatch_and_collection_copy_construction_evaluate_each_input_once() {
+    let output = execute_source(
+        "public class Factory { \
+             public static Integer receiverHits = 0; \
+             public static Integer argumentHits = 0; \
+             public static Integer sourceHits = 0; \
+             public Integer value; \
+             public Factory(Integer input) { value = input; } \
+             public static Factory make(Boolean present) { \
+                 receiverHits++; \
+                 return present ? new Factory(5) : null; \
+             } \
+             public static Integer suffix() { argumentHits++; return 2; } \
+             public static List<Integer> source() { \
+                 sourceHits++; \
+                 return new List<Integer>{1, 2}; \
+             } \
+             public Integer add(Integer suffix) { return value + suffix; } \
+         } \
+         Integer present = Factory.make(true)?.add(Factory.suffix()); \
+         Integer absent = Factory.make(false)?.add(Factory.suffix()) ?? 0; \
+         Integer member = Factory.make(true)?.value ?? 0; \
+         List<Integer> copied = new List<Integer>(Factory.source()); \
+         System.debug(present); System.debug(absent); System.debug(member); \
+         System.debug(copied.size()); System.debug(Factory.receiverHits); \
+         System.debug(Factory.argumentHits); System.debug(Factory.sourceHits);",
+    )
+    .unwrap();
+
+    assert_eq!(output, ["7", "0", "5", "2", "3", "1", "1"]);
 }
 
 #[test]
@@ -588,6 +621,85 @@ fn string_math_and_system_calls_cover_utf16_indices() {
     let error =
         execute_source("String value = '😀'; System.debug(value.substring(0, 1));").unwrap_err();
     assert_eq!(error.message, "String index splits a UTF-16 surrogate pair");
+}
+
+#[test]
+fn string_instance_dispatch_preserves_helper_family_boundaries() {
+    let output = execute_source(
+        "String missing = null; \
+         System.debug('Alpha'.containsIgnoreCase('PH')); \
+         System.debug('left:right'.substringBefore(':')); \
+         System.debug('left:right'.substringAfter(':')); \
+         System.debug('[middle]'.substringBetween('[', ']')); \
+         System.debug('A😀B'.left(3)); \
+         System.debug('a,b,'.split(',').size()); \
+         System.debug('replace'.replace('place', 'turn')); \
+         System.debug('A1B2'.replaceAll('\\\\d', '-')); \
+         System.debug('value'.equals(missing));",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "true", "left", "right", "middle", "A😀", "2", "return", "A-B-", "false",
+        ]
+    );
+
+    let error = execute_source("System.debug('😀'.left(1));").unwrap_err();
+    assert_eq!(
+        error.message,
+        "String length splits a UTF-16 surrogate pair"
+    );
+}
+
+#[test]
+fn platform_value_rendering_preserves_stable_debug_text() {
+    let output = execute_source(
+        "Blob body = Blob.valueOf('ok'); \
+         HttpRequest request = new HttpRequest(); \
+         request.setMethod('POST'); \
+         request.setEndpoint('https://example.test'); \
+         Database.DmlOptions options = new Database.DmlOptions(); \
+         System.debug(body); System.debug(request); System.debug(options);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        [
+            "Blob[2]",
+            "HttpRequest[POST https://example.test]",
+            "Database.DmlOptions",
+        ]
+    );
+}
+
+#[test]
+fn equality_cost_for_equal_lists_is_linear_in_their_elements() {
+    const ELEMENTS: usize = 512;
+    let mut interpreter = Interpreter::new();
+    let elements = (0..ELEMENTS)
+        .map(|value| Value::Integer(value as i64))
+        .collect();
+    let left = interpreter.allocate(Collection::List {
+        element_type: TypeName::Integer,
+        elements,
+        iteration_depth: 0,
+    });
+    let right = interpreter.allocate(Collection::List {
+        element_type: TypeName::Integer,
+        elements: (0..ELEMENTS)
+            .map(|value| Value::Integer(value as i64))
+            .collect(),
+        iteration_depth: 0,
+    });
+
+    let (equal, stats) = interpreter.values_equal_with_stats(&left, &right);
+
+    assert!(equal);
+    assert_eq!(stats.equality_pairs, 1);
+    assert_eq!(stats.equality_comparisons, ELEMENTS + 1);
 }
 
 #[test]

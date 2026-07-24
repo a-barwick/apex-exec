@@ -156,6 +156,8 @@ impl Parser {
             &[
                 (TokenKind::EqualEqual, BinaryOperator::Equal),
                 (TokenKind::BangEqual, BinaryOperator::NotEqual),
+                (TokenKind::ExactEqual, BinaryOperator::ExactEqual),
+                (TokenKind::ExactBangEqual, BinaryOperator::ExactNotEqual),
             ],
         )
     }
@@ -455,7 +457,13 @@ impl Parser {
 
         if matches!(
             ty,
-            TypeName::Custom(_) | TypeName::Http | TypeName::HttpRequest | TypeName::HttpResponse
+            TypeName::Custom(_)
+                | TypeName::Http
+                | TypeName::HttpRequest
+                | TypeName::HttpResponse
+                | TypeName::DmlOptions
+                | TypeName::VisualEditorDataRow
+                | TypeName::VisualEditorDynamicPickListRows
         ) {
             if !self.check(&TokenKind::LeftParen) {
                 return Err(Diagnostic::new(

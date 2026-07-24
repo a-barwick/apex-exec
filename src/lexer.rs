@@ -75,10 +75,22 @@ impl<'a> Lexer<'a> {
             ',' => TokenKind::Comma,
             ':' => TokenKind::Colon,
             '?' => self.question_token_kind(),
-            '=' if self.take('=') => TokenKind::EqualEqual,
+            '=' if self.take('=') => {
+                if self.take('=') {
+                    TokenKind::ExactEqual
+                } else {
+                    TokenKind::EqualEqual
+                }
+            }
             '=' if self.take('>') => TokenKind::FatArrow,
             '=' => TokenKind::Equal,
-            '!' if self.take('=') => TokenKind::BangEqual,
+            '!' if self.take('=') => {
+                if self.take('=') {
+                    TokenKind::ExactBangEqual
+                } else {
+                    TokenKind::BangEqual
+                }
+            }
             '!' => TokenKind::Bang,
             '<' => self.less_token_kind(),
             '>' => self.greater_token_kind(),

@@ -54,6 +54,54 @@ pub enum PlatformConstructor {
     Http,
     HttpRequest,
     HttpResponse,
+    DmlOptions,
+    VisualEditorDataRow,
+    VisualEditorDynamicPickListRows,
+}
+
+/// Governor values exposed through the static `System.Limits` surface.
+///
+/// Keeping the resource identity separate from `PlatformIntrinsic` lets the
+/// checker and runtime share one closed, exhaustively matched limits table
+/// instead of extending the platform dispatch tree for every getter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LimitIntrinsic {
+    AggregateQueries,
+    ApexCursorFetchCalls,
+    ApexCursorRows,
+    AsyncCalls,
+    Callouts,
+    CpuTime,
+    DmlRows,
+    DmlStatements,
+    EmailInvocations,
+    FutureCalls,
+    HeapSize,
+    MobilePushApexCalls,
+    PublishImmediateDml,
+    Queries,
+    QueryLocatorRows,
+    QueryRows,
+    QueueableJobs,
+    SoslQueries,
+    LimitAggregateQueries,
+    LimitApexCursorFetchCalls,
+    LimitApexCursorRows,
+    LimitAsyncCalls,
+    LimitCallouts,
+    LimitCpuTime,
+    LimitDmlRows,
+    LimitDmlStatements,
+    LimitEmailInvocations,
+    LimitFutureCalls,
+    LimitHeapSize,
+    LimitMobilePushApexCalls,
+    LimitPublishImmediateDml,
+    LimitQueries,
+    LimitQueryLocatorRows,
+    LimitQueryRows,
+    LimitQueueableJobs,
+    LimitSoslQueries,
 }
 
 /// Curated M10 platform calls. This remains a closed checker-selected set so
@@ -100,15 +148,19 @@ pub enum PlatformIntrinsic {
     DecimalSetScale,
     DecimalAbs,
     DecimalScale,
+    DoubleValueOf,
+    LongValueOf,
     IdValueOf,
     IdTo15,
     IdTo18,
+    IdGetSObjectType,
     BlobValueOf,
     BlobToString,
     BlobSize,
     ObjectToString,
     JsonSerialize,
     JsonSerializePretty,
+    JsonDeserialize,
     JsonDeserializeUntyped,
     PatternCompile,
     PatternQuote,
@@ -120,12 +172,47 @@ pub enum PlatformIntrinsic {
     MatcherEnd,
     SchemaGetGlobalDescribe,
     SObjectTypeGetDescribe,
+    SObjectTypeGetName,
+    SObjectTypeNewSObject,
+    SObjectGetSObjectType,
     DescribeGetName,
+    DescribeGetLocalName,
+    DescribeGetLabel,
+    DescribeGetLabelPlural,
     DescribeGetKeyPrefix,
     DescribeIsCustom,
+    DescribeIsCustomSetting,
+    DescribeIsAccessible,
+    DescribeIsDeletable,
+    DescribeIsUpdateable,
+    SObjectFieldGetDescribe,
+    SObjectFieldMapGetMap,
+    FieldSetMapGetMap,
+    DescribeFieldGetName,
+    DescribeFieldGetLocalName,
+    DescribeFieldGetLabel,
+    DescribeFieldGetLength,
+    DescribeFieldGetInlineHelpText,
+    DescribeFieldGetRelationshipName,
+    DescribeFieldGetSoapType,
+    DescribeFieldGetType,
+    DescribeFieldGetReferenceTo,
+    DescribeFieldGetPicklistValues,
+    DescribeFieldIsNameField,
+    DescribeFieldIsSortable,
+    DescribeFieldIsAccessible,
+    FieldSetGetName,
+    FieldSetGetLabel,
+    FieldSetGetNamespace,
+    FieldSetGetFields,
+    FieldSetMemberGetFieldPath,
+    FieldSetMemberGetLabel,
+    FieldSetMemberGetSObjectField,
+    PicklistEntryGetValue,
     TestStartTest,
     TestStopTest,
     TestIsRunningTest,
+    TestSetMock,
     SystemEnqueueJob,
     SystemSchedule,
     SystemIsFuture,
@@ -135,13 +222,34 @@ pub enum PlatformIntrinsic {
     DatabaseExecuteBatch,
     EventBusPublish,
     AsyncContextGetJobId,
+    BatchableContextGetChildJobId,
+    FinalizerContextGetAsyncApexJobId,
+    FinalizerContextGetException,
+    FinalizerContextGetResult,
+    FinalizerContextGetRequestId,
     SchedulableContextGetTriggerId,
-    LimitsGetQueries,
-    LimitsGetLimitQueries,
-    LimitsGetDmlStatements,
-    LimitsGetLimitDmlStatements,
-    LimitsGetCallouts,
-    LimitsGetLimitCallouts,
+    RequestGetCurrent,
+    RequestGetRequestId,
+    RequestGetQuiddity,
+    PlatformEnumName,
+    PlatformEnumOrdinal,
+    LoggingLevelValues,
+    LoggingLevelValueOf,
+    CacheGetPartition,
+    CachePartitionContains,
+    CachePartitionGet,
+    CachePartitionIsAvailable,
+    CachePartitionPut,
+    CachePartitionRemove,
+    CallableCall,
+    TypeForName,
+    TypeGetName,
+    TypeNewInstance,
+    Limits(LimitIntrinsic),
+    NetworkGetNetworkId,
+    NetworkGetLoginUrl,
+    NetworkGetLogoutUrl,
+    NetworkGetSelfRegUrl,
     UserInfoGetUserId,
     UserInfoGetUserName,
     UserInfoGetProfileId,
@@ -167,6 +275,11 @@ pub enum PlatformIntrinsic {
     HttpResponseSetStatus,
     HttpResponseGetStatus,
     HttpSend,
+    HttpCalloutMockRespond,
+    VisualEditorDataRowGetLabel,
+    VisualEditorDataRowGetValue,
+    VisualEditorRowsAddRow,
+    VisualEditorRowsGetDataRows,
 }
 
 impl PlatformIntrinsic {
@@ -183,10 +296,13 @@ impl PlatformIntrinsic {
                 | Self::TimeNewInstance
                 | Self::TimeValueOf
                 | Self::DecimalValueOf
+                | Self::DoubleValueOf
+                | Self::LongValueOf
                 | Self::IdValueOf
                 | Self::BlobValueOf
                 | Self::JsonSerialize
                 | Self::JsonSerializePretty
+                | Self::JsonDeserialize
                 | Self::JsonDeserializeUntyped
                 | Self::PatternCompile
                 | Self::PatternQuote
@@ -194,6 +310,7 @@ impl PlatformIntrinsic {
                 | Self::TestStartTest
                 | Self::TestStopTest
                 | Self::TestIsRunningTest
+                | Self::TestSetMock
                 | Self::SystemEnqueueJob
                 | Self::SystemSchedule
                 | Self::SystemIsFuture
@@ -202,12 +319,16 @@ impl PlatformIntrinsic {
                 | Self::SystemIsScheduled
                 | Self::DatabaseExecuteBatch
                 | Self::EventBusPublish
-                | Self::LimitsGetQueries
-                | Self::LimitsGetLimitQueries
-                | Self::LimitsGetDmlStatements
-                | Self::LimitsGetLimitDmlStatements
-                | Self::LimitsGetCallouts
-                | Self::LimitsGetLimitCallouts
+                | Self::RequestGetCurrent
+                | Self::CacheGetPartition
+                | Self::TypeForName
+                | Self::LoggingLevelValues
+                | Self::LoggingLevelValueOf
+                | Self::Limits(_)
+                | Self::NetworkGetNetworkId
+                | Self::NetworkGetLoginUrl
+                | Self::NetworkGetLogoutUrl
+                | Self::NetworkGetSelfRegUrl
                 | Self::UserInfoGetUserId
                 | Self::UserInfoGetUserName
                 | Self::UserInfoGetProfileId
@@ -224,6 +345,8 @@ impl PlatformIntrinsic {
 pub enum StaticStringIntrinsic {
     ValueOf,
     Join,
+    Format,
+    EscapeSingleQuotes,
     IsBlank,
     IsNotBlank,
     IsEmpty,
@@ -260,16 +383,24 @@ pub enum SystemIntrinsic {
 pub enum StringIntrinsic {
     Length,
     Contains,
+    ContainsIgnoreCase,
     StartsWith,
     EndsWith,
     Equals,
     EqualsIgnoreCase,
     IndexOf,
     Substring,
+    SubstringBefore,
+    SubstringAfter,
+    SubstringAfterLast,
+    SubstringBetween,
+    Left,
+    Split,
     Trim,
     ToLowerCase,
     ToUpperCase,
     Replace,
+    ReplaceAll,
 }
 
 /// Supported methods on a core Apex exception value.
@@ -289,6 +420,7 @@ pub enum ListIntrinsic {
     AddAll,
     Clear,
     Clone,
+    DeepClone,
     Contains,
     Get,
     IndexOf,
@@ -322,6 +454,7 @@ pub enum SetIntrinsic {
 pub enum MapIntrinsic {
     Clear,
     Clone,
+    DeepClone,
     ContainsKey,
     Get,
     IsEmpty,

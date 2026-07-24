@@ -204,8 +204,12 @@ through every alias, including diagnostic unwinding. `break` and `continue`
 target the nearest enclosing loop. A value-less `return` terminates anonymous
 execution. Declared methods support typed values and `void` completion.
 
-`switch on`/`when` is retained as lossless parsed syntax in M21 but fails with
-an explicit semantic unsupported diagnostic; no switch execution is implied.
+Typed SObject `switch on`/`when` patterns resolve schema identities during
+checking. A matching arm introduces its binding only within that arm, the
+switch expression executes once, the first matching arm wins, and `when null`
+and `when else` retain their Apex ordering behavior. Duplicate typed patterns
+are rejected. Other unimplemented pattern families remain explicit semantic
+errors rather than runtime approximations.
 
 ## Exceptions
 
@@ -247,6 +251,12 @@ is wired into checked HIR and in-memory SObject execution, while query/DML
 requests cross storage-neutral platform contracts into SQLite. Async work is
 queued explicitly and drains deterministically at `Test.stopTest`; no
 background scheduler or live callout transport exists.
+
+Batch receivers preserve instance state across `start`, every `execute` chunk,
+and `finish` only when the checked class implements `Database.Stateful`.
+Non-stateful stages each restore the enqueue-time receiver snapshot. Static
+state is deterministic locally, but Salesforce-exact transaction isolation is
+not claimed.
 
 M23 dynamic SOQL calls evaluate their String argument once, parse it through
 the dedicated SOQL grammar, and semantically recheck it against the immutable

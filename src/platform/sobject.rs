@@ -79,6 +79,12 @@ impl SObject {
         value: DataValue,
     ) -> Result<Option<DataValue>, SObjectError> {
         let field = schema.field(&self.object_api_name, field_api_name)?;
+        if matches!(field.data_type(), FieldType::Summary { .. }) {
+            return Err(SObjectError::ReadOnlyField {
+                object: self.object_api_name.clone(),
+                field: field.api_name().to_owned(),
+            });
+        }
         validate_value(
             &self.object_api_name,
             field.api_name(),
@@ -123,7 +129,20 @@ impl SObject {
         let mut value = Self::new(schema, record.object_api_name())?;
         value.set_id(record.id().clone());
         for (name, field_value) in record.fields() {
-            value.set(schema, name, field_value.clone())?;
+            let field = schema.field(record.object_api_name(), name)?;
+            if let FieldType::Summary { result_type, .. } = field.data_type() {
+                validate_value(
+                    record.object_api_name(),
+                    field.api_name(),
+                    result_type,
+                    field_value,
+                )?;
+                value
+                    .fields
+                    .insert(canonical_name(field.api_name()), field_value.clone());
+            } else {
+                value.set(schema, name, field_value.clone())?;
+            }
         }
         Ok(value)
     }
@@ -136,8 +155,12 @@ pub enum SObjectError {
     InvalidFieldValue {
         object: String,
         field: String,
-        expected: FieldType,
+        expected: Box<FieldType>,
         actual: &'static str,
+    },
+    ReadOnlyField {
+        object: String,
+        field: String,
     },
     UnsetField {
         object: String,
@@ -164,6 +187,9 @@ impl fmt::Display for SObjectError {
             ),
             Self::UnsetField { object, field } => {
                 write!(formatter, "field `{object}.{field}` has not been assigned")
+            }
+            Self::ReadOnlyField { object, field } => {
+                write!(formatter, "field `{object}.{field}` is read-only")
             }
             Self::MissingId { object } => {
                 write!(
@@ -202,7 +228,11 @@ fn validate_value(
         | (FieldType::Integer, DataValue::Integer(_))
         | (FieldType::String, DataValue::String(_))
         | (FieldType::Id, DataValue::Id(_) | DataValue::String(_))
-        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_)) => true,
+        | (FieldType::Reference { .. }, DataValue::Id(_) | DataValue::String(_))
+        | (FieldType::MetadataRelationship { .. }, DataValue::String(_)) => true,
+        (FieldType::Summary { result_type, .. }, value) => {
+            return validate_value(object, field, result_type, value);
+        }
         (FieldType::Date, DataValue::Date(value)) => NaiveDate::from_ymd_opt(1970, 1, 1)
             .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(*value))))
             .is_some(),
@@ -217,7 +247,7 @@ fn validate_value(
         Err(SObjectError::InvalidFieldValue {
             object: object.to_owned(),
             field: field.to_owned(),
-            expected: expected.clone(),
+            expected: Box::new(expected.clone()),
             actual: data_value_name(value),
         })
     }
@@ -279,16 +309,21 @@ mod tests {
             account.get(&schema, "NAME").unwrap(),
             Some(&DataValue::String("Acme".to_owned()))
         );
+        let invalid_value = account
+            .set(&schema, "Employees", DataValue::Boolean(true))
+            .unwrap_err();
         assert_eq!(
-            account
-                .set(&schema, "Employees", DataValue::Boolean(true))
-                .unwrap_err(),
+            invalid_value,
             SObjectError::InvalidFieldValue {
                 object: "Account".to_owned(),
                 field: "Employees".to_owned(),
-                expected: FieldType::Integer,
+                expected: Box::new(FieldType::Integer),
                 actual: "Boolean",
             }
+        );
+        assert_eq!(
+            invalid_value.to_string(),
+            "field `Account.Employees` expects Integer, found Boolean"
         );
     }
 

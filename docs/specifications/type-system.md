@@ -201,6 +201,12 @@ zero- and one-String constructor surface. Arbitrary generic syntax is retained
 losslessly, while runtime generic behavior remains limited to the documented
 collection and `Iterable<T>` surface.
 
+A class implementing `System.Comparable` must satisfy the checked comparison
+contract used by `List.sort`. HIR records the resolved comparison target, and
+runtime sorting uses a stable iterative merge. Comparator exceptions propagate
+without partially rewriting the original list. Heterogeneous `List<Object>`
+and SObject natural ordering remain unsupported.
+
 ## Explicit casts
 
 **Implemented for M4, simplified.** Casts are accepted between identical
@@ -219,6 +225,10 @@ membership uses case-sensitive String equality. Boolean `&&` and `||`
 short-circuit, while Boolean `&`, `|`, and `^` evaluate both operands. Integer
 and Long support integral bitwise operations, unary `~`, and signed or unsigned
 shifts with width-masked distances.
+
+Exact equality `===` and `!==` has normal equality precedence and evaluates
+each operand once. Primitive values compare exactly; reference values compare
+runtime identity without recursive collection traversal.
 
 `+` concatenates when either operand is String and converts every supported
 non-Void value. Arithmetic, String, bitwise, and shift compound assignments use
