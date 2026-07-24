@@ -495,7 +495,9 @@ relationships, roll-up summaries, exact equality, `ALL ROWS` and undelete
 behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable sorting, and
 `Database.Stateful`.
 
-The post-transient frozen enterprise census parses 1,159/1,159 tests and
+The integrated transient-property slice (`d2aefd2`) is covered by a focused
+local/Salesforce comparison that matches 2/2 dimensions. The post-transient
+frozen enterprise census parses 1,159/1,159 tests and
 checks 0/1,159 across three deterministic runs. C1 removed the prior
 `Id.getSObjectType` blocker and the transient-property slice removed the
 `transient` property blocker. The new first blockers are cross-type equality

@@ -282,8 +282,8 @@ package after review and integration.
 | M28-V0 | Integrated quality-gate checkpoint | Complete (`ba92a42`; owner-authorized website dependency recovery cleared the audit without changing the allowance; fresh Rust 1.88 fmt/full locked test/North Star/Clippy, tooling 20/20, docs 75/113, Lizard ratchet at 37 recorded caps, actionlint/whitespace, clean website build/test/lint and editor smoke/audit, npm policy with 0 records, Cargo Audit 0.22.2, and Cargo Deny 0.20.2 advisories/bans/sources pass; Deny used the official macOS ARM release asset verified at SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3` and removed it after the check; full LLVM coverage JSON `/private/tmp/m28-v0-coverage.json`: 37,677/44,475 lines (84.7150%), 3,222/3,845 functions (83.7971%), and 54,459/64,638 regions (84.2523%); frozen M22 canonical inputs, source closure, denominator, and outcomes remain unchanged; C1 was blocked at the V0 capture and is now claimed on its dedicated task branch) | Q1-Q4C, M1-M5B | Verification and documentation |
 | M28-C1 | `Id.getSObjectType` compatibility slice | Complete (integrated at `f841099`; reviewed; local and Salesforce differential evidence 2/2; full Rust verification pass; enterprise census recorded) | V0 complete (`ba92a42`) | Typed ID/schema/runtime boundary |
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-1/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | C1 integrated at `f841099` | Enterprise evidence only |
-| M28-CN | One next-ranked compatibility family | Complete (transient property semantics; reviewed; local and Salesforce differential evidence 2/2; post-slice census recorded) | CENSUS-1 complete | Semantic modifier and JSON serialization |
-| M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated | Enterprise evidence only |
+| M28-CN | One next-ranked compatibility family | Complete (integrated at `d2aefd2`; transient property semantics; reviewed; local and Salesforce differential evidence 2/2; post-slice census recorded) | CENSUS-1 complete | Semantic modifier and JSON serialization |
+| M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated at `d2aefd2` | Enterprise evidence only |
 | M28-CN2 | One next-ranked compatibility family | Ready (cross-type equality selected by CENSUS-2; implementation not started) | Latest census | Determined by fresh first blockers |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
@@ -482,7 +482,7 @@ surface. Implementation agents must not make those decisions.
 
 M28-C1 is reviewed and integrated from
 `codex/m28-c1-id-sobject-type`. The transient-property package is implemented
-on `codex/m28-cn-transient-property` with matching local/Salesforce evidence,
-and the post-slice enterprise census is recorded. The next package is ready
-for owner direction: the cross-type equality check. No implementation of that
-next family has started.
+on `codex/m28-cn-transient-property` and integrated at `d2aefd2`, with matching
+local/Salesforce evidence and a recorded post-slice enterprise census. The
+next package is ready for owner direction: the cross-type equality check. No
+implementation of that next family has started.
