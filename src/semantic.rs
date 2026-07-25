@@ -7471,6 +7471,7 @@ fn is_platform_static_owner(name: &str) -> bool {
         "date"
             | "datetime"
             | "time"
+            | "boolean"
             | "decimal"
             | "double"
             | "long"

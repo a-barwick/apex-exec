@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "boolean-valueof-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN4BooleanValueOfOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

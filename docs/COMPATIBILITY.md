@@ -716,6 +716,13 @@ leaves 0/1,159 strict-compatible tests and selects static
 `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
 `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
+The CN4 static `Boolean.valueOf(String)` slice is implemented on
+`codex/m28-cn4-boolean-valueof` and has focused local/Salesforce evidence 2/2
+in `evidence/milestone28/cn4/`. It accepts only the checked static String
+overload: case-insensitive exact `true` returns `true`, other captured strings
+return `false`, and null raises `NullPointerException`. CN4 remains in review;
+this is not an expanded general Boolean-platform compatibility claim.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

@@ -513,9 +513,13 @@ quality gate cleared the recorded Rust, tooling, website, editor, dependency,
 documentation, maintainability, and coverage checks. The strict numerator
 therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
 merge as complete. The checked-in census is
-`evidence/milestone28/census-4/report.json`. M28-CN4 is Ready for the
-`Boolean.valueOf` compatibility family; no implementation of that family has
-started.
+`evidence/milestone28/census-4/report.json`. M28-CN4 is implemented on
+`codex/m28-cn4-boolean-valueof` and awaiting independent review. It adds the
+checked static `Boolean.valueOf(String)` intrinsic: case-insensitive exact
+`true` returns `true`, other captured strings return `false`, and null raises
+`NullPointerException`. Its focused local/Salesforce evidence matches 2/2
+dimensions in `evidence/milestone28/cn4/`. No later family may begin before
+CN4 is reviewed, integrated, and followed by a fresh enterprise census.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

@@ -288,7 +288,7 @@ package after review and integration.
 | M28-CENSUS-3 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-3/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN2 integrated at `fd6806d` | Enterprise evidence only |
 | M28-CN3 | One next-ranked compatibility family | Complete (integrated at `bbbd519`; independently reviewed; typed-SObject `Map` casts preserve runtime generic identity; local/Salesforce evidence 2/2; full Rust, documentation, and Lizard gates pass; post-slice census recorded) | CENSUS-3 complete | Semantic/runtime typed SObject `Map` casts |
 | M28-CENSUS-4 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-4/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN3 integrated at `bbbd519` | Enterprise evidence only |
-| M28-CN4 | One next-ranked compatibility family | Ready (static `Boolean.valueOf` resolution) | CENSUS-4 complete | Semantic/runtime built-in Boolean static methods |
+| M28-CN4 | One next-ranked compatibility family | Review (static `Boolean.valueOf(String)` resolution; local/Salesforce evidence 2/2; full Rust, tooling, documentation, and Lizard gates pass) | CENSUS-4 complete | Semantic/runtime built-in Boolean static methods |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -496,6 +496,10 @@ runtime generic identity: a generic map raises `TypeException`, whereas a typed
 trigger map narrows successfully. Its post-slice census is recorded at
 `evidence/milestone28/census-4/report.json`, with unchanged frozen inputs and
 0/1,159 strict-compatible tests. It selects static `Boolean.valueOf`
-resolution (1,121 affected tests) for M28-CN4. Claim CN4 on its dedicated
-branch before implementation; do not start `Flow.Interview` or another later
-family first.
+resolution (1,121 affected tests) for M28-CN4. CN4 is implemented on
+`codex/m28-cn4-boolean-valueof` with local/Salesforce evidence 2/2 and awaits
+independent review. It supports only the checked `Boolean.valueOf(String)`
+contract: case-insensitive exact `true` returns `true`, other captured strings
+return `false`, and null raises `NullPointerException`. Do not start
+`Flow.Interview` or another later family until CN4 is reviewed, integrated, and
+followed by a fresh census.
