@@ -24,7 +24,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 |---|---:|---:|---:|---|---|
 | `String` | Yes | Yes | Yes | Simplified | Single-quoted literals, common escapes, and the documented M3 method subset |
 | `Boolean` | Yes | Yes | Yes | Compatible | `true` and `false` are case-insensitive |
-| `Integer` | Yes | Yes | Yes | Compatible | Signed 32-bit values with checked arithmetic overflow |
+| `Integer` | Yes | Yes | Yes | Compatible | Signed 32-bit values with checked arithmetic overflow; `valueOf` supports the differentially verified String and Integer forms |
 | `Long` | Yes | Yes | Yes | Compatible | Signed 64-bit values, `L` literals, checked arithmetic, casts, and platform epoch-millisecond results |
 | `Decimal` | Yes | Yes | Yes | Simplified | Decimal literals, mixed Integer/Long arithmetic, comparison, parsing, scale, and fixed-point display |
 | `Date` | Yes | Yes | Yes | Simplified | UTC construction/parsing, arithmetic, components, and deterministic formatting |
@@ -716,17 +716,26 @@ leaves 0/1,159 strict-compatible tests and selects static
 `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
 `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
-The CN4 static `Boolean.valueOf(String)` slice is implemented on
-`codex/m28-cn4-boolean-valueof` and has focused local/Salesforce evidence 2/2
-in `evidence/milestone28/cn4/`. It accepts only the checked static String
-overload: case-insensitive exact `true` returns `true`, other captured strings
-return `false`, and null raises `NullPointerException`. CN4 remains in review;
-this is not an expanded general Boolean-platform compatibility claim.
+The CN4 static `Boolean.valueOf(String)` slice is integrated at `600af4d` with
+focused local/Salesforce evidence 2/2 in `evidence/milestone28/cn4/`. It
+accepts only the checked static String overload: case-insensitive exact `true`
+returns `true`, other captured strings return `false`, and null raises
+`NullPointerException`. This is not an expanded general Boolean-platform
+compatibility claim.
 
 CN4 was independently reviewed and integrated at `600af4d`. Its frozen
 post-slice replay is `evidence/milestone28/census-5/report.json`; it remains
 0/1,159 strict-compatible and selects static `Integer` resolution (1,121
 affected tests) as the Ready CN5 family.
+
+The CN5 static `Integer.valueOf` slice is implemented on
+`codex/m28-cn5-integer-valueof` with focused local/Salesforce evidence 2/2 in
+`evidence/milestone28/cn5/`. Checked HIR distinguishes the String and Integer
+forms. Signed base-10 String values are range checked; invalid or out-of-range
+strings raise `TypeException`, String null raises `NullPointerException`, and
+typed Integer null remains null. Untyped null is rejected as ambiguous. The
+broader Salesforce `Object` conversion surface remains outside this bounded
+slice.
 
 ## Platform surface
 

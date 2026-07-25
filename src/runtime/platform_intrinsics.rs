@@ -106,6 +106,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         match intrinsic {
             P::BooleanValueOf => self.call_boolean_value_of(arguments, span),
+            P::IntegerValueOfString | P::IntegerValueOfInteger => {
+                self.call_integer_value_of(intrinsic, arguments, span)
+            }
             P::DateNewInstance
             | P::DateValueOf
             | P::DateToday
@@ -1119,6 +1122,39 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         let value = expect_string(&value.value, value.span)?;
         Ok(Value::Boolean(value.eq_ignore_ascii_case("true")))
+    }
+
+    fn call_integer_value_of(
+        &self,
+        intrinsic: PlatformIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        let [value] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        match intrinsic {
+            P::IntegerValueOfString => {
+                let value = expect_string(&value.value, value.span)?;
+                value
+                    .parse::<i32>()
+                    .map(|value| Value::Integer(i64::from(value)))
+                    .map_err(|_| {
+                        runtime_exception(
+                            "TypeException",
+                            format!("Invalid integer: {value}"),
+                            span,
+                        )
+                    })
+            }
+            P::IntegerValueOfInteger => match &value.value {
+                Value::Integer(value) => Ok(Value::Integer(*value)),
+                Value::Null(_) => Ok(Value::Null(Some(TypeName::Integer))),
+                _ => Err(invalid_runtime_operands(span)),
+            },
+            _ => unreachable!("only Integer.valueOf intrinsics use this helper"),
+        }
     }
 
     fn call_json_intrinsic(

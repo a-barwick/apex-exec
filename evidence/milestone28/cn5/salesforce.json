@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "integer-valueof-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN5IntegerValueOfOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "integerNull": true,
+        "integerValue": 19,
+        "invalidStringThrows": true,
+        "overflowStringThrows": true,
+        "signedString": -7,
+        "stringNullThrows": true,
+        "stringValue": 42
+      }
+    }
+  ]
+}

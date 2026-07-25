@@ -1015,6 +1015,11 @@ impl Checker {
         {
             return self.static_boolean_value_of_type(owner, method, arguments);
         }
+        if matches!(canonical_owner.as_str(), "integer" | "system.integer")
+            && method.canonical == "valueof"
+        {
+            return self.static_integer_value_of_type(owner, method, arguments);
+        }
         if canonical_owner == "limits" {
             return self.limits_static_method_type(owner, method, arguments);
         }
@@ -1230,6 +1235,43 @@ impl Checker {
     ) -> Result<ExpressionType, Diagnostic> {
         self.static_named_argument(owner, method, arguments, &TypeName::String)?;
         Ok(ExpressionType::Value(TypeName::Boolean))
+    }
+
+    fn static_integer_value_of_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
+        let argument = self.expression_type(&arguments[0])?;
+        let intrinsic = match argument {
+            ExpressionType::Value(TypeName::String) => PlatformIntrinsic::IntegerValueOfString,
+            ExpressionType::Value(TypeName::Integer) => PlatformIntrinsic::IntegerValueOfInteger,
+            ExpressionType::Null => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "ambiguous call to `valueOf` on {owner}: null matches String and Integer"
+                    ),
+                    arguments[0].span(),
+                ));
+            }
+            ExpressionType::Value(_) | ExpressionType::Void => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "{}.{} argument 1 expects String or Integer, found {}",
+                        owner,
+                        method.spelling,
+                        argument.apex_name()
+                    ),
+                    arguments[0].span(),
+                ));
+            }
+        };
+        Ok((
+            IntrinsicId::Platform(intrinsic),
+            ExpressionType::Value(TypeName::Integer),
+        ))
     }
 
     fn static_json_signature_type(

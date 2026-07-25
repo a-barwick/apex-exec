@@ -145,6 +145,8 @@ pub enum PlatformIntrinsic {
     TimeMillisecond,
     TimeFormat,
     BooleanValueOf,
+    IntegerValueOfString,
+    IntegerValueOfInteger,
     DecimalValueOf,
     DecimalSetScale,
     DecimalAbs,
@@ -297,6 +299,8 @@ impl PlatformIntrinsic {
                 | Self::TimeNewInstance
                 | Self::TimeValueOf
                 | Self::BooleanValueOf
+                | Self::IntegerValueOfString
+                | Self::IntegerValueOfInteger
                 | Self::DecimalValueOf
                 | Self::DoubleValueOf
                 | Self::LongValueOf
