@@ -520,6 +520,12 @@ checked static `Boolean.valueOf(String)` intrinsic: case-insensitive exact
 `NullPointerException`. Its focused local/Salesforce evidence matches 2/2
 dimensions in `evidence/milestone28/cn4/`. No later family may begin before
 CN4 is reviewed, integrated, and followed by a fresh enterprise census.
+
+CN4 has since been independently reviewed and integrated at `600af4d`. Its
+post-slice frozen replay is `evidence/milestone28/census-5/report.json`: it is
+deterministic but remains 0/1,159 strict-compatible. Static `Integer`
+resolution is now the first blocker (1,121 tests), so M28-CN5 is Ready; no CN5
+implementation has started.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

@@ -723,6 +723,11 @@ overload: case-insensitive exact `true` returns `true`, other captured strings
 return `false`, and null raises `NullPointerException`. CN4 remains in review;
 this is not an expanded general Boolean-platform compatibility claim.
 
+CN4 was independently reviewed and integrated at `600af4d`. Its frozen
+post-slice replay is `evidence/milestone28/census-5/report.json`; it remains
+0/1,159 strict-compatible and selects static `Integer` resolution (1,121
+affected tests) as the Ready CN5 family.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
