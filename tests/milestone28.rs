@@ -257,25 +257,6 @@ public class LexicalPrivateDemo {
         ["85"]
     );
     fs::remove_dir_all(root).unwrap();
-
-    let root = test_project(
-        "InvalidSObjectMapKeyCast",
-        r#"
-public class InvalidSObjectMapKeyCast {
-    public static void run() {
-        Map<String, SObject> source = new Map<String, SObject>();
-        Map<Id, M28Alpha__c> typed = (Map<Id, M28Alpha__c>) source;
-    }
-}
-"#,
-        &[],
-    );
-    let error = project::compile(&root).unwrap_err().to_string();
-    assert!(
-        error.contains("cannot cast Map<String,SObject> to Map<Id,M28Alpha__c>"),
-        "{error}"
-    );
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -376,6 +357,25 @@ public class InvalidSObjectMapCast {
     let error = project::compile(&root).unwrap_err().to_string();
     assert!(
         error.contains("cannot cast Map<Id,Object> to Map<Id,M28Alpha__c>"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let root = test_project(
+        "InvalidSObjectMapKeyCast",
+        r#"
+public class InvalidSObjectMapKeyCast {
+    public static void run() {
+        Map<String, SObject> source = new Map<String, SObject>();
+        Map<Id, M28Alpha__c> typed = (Map<Id, M28Alpha__c>) source;
+    }
+}
+"#,
+        &[],
+    );
+    let error = project::compile(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("cannot cast Map<String,SObject> to Map<Id,M28Alpha__c>"),
         "{error}"
     );
     fs::remove_dir_all(root).unwrap();
