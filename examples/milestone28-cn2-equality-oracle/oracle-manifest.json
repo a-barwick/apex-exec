@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "nested-enum-equality-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN2EqualityOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

@@ -2346,6 +2346,67 @@ public class ExactEqualityDemo {
 }
 
 #[test]
+fn equality_resolves_nested_enum_identity_across_short_and_qualified_spellings() {
+    let logger_stack_trace = r#"
+public class LoggerStackTrace {
+    public enum SourceMetadataType { AnonymousBlock, ApexClass }
+
+    public class SourceMetadata {
+        public SourceMetadataType MetadataType { get; private set; }
+
+        public SourceMetadata() {
+            MetadataType = SourceMetadataType.ApexClass;
+        }
+    }
+
+    public SourceMetadata Source { get; private set; }
+
+    public LoggerStackTrace() {
+        Source = new SourceMetadata();
+    }
+}
+"#;
+
+    let source = r#"
+
+public class NestedEnumEqualityDemo {
+    public static void run() {
+        LoggerStackTrace trace = new LoggerStackTrace();
+        System.debug(trace.Source.MetadataType == LoggerStackTrace.SourceMetadataType.ApexClass);
+        System.debug(trace.Source.MetadataType != LoggerStackTrace.SourceMetadataType.AnonymousBlock);
+    }
+}
+"#;
+    let root = test_project(
+        "NestedEnumEqualityDemo",
+        source,
+        &[("LoggerStackTrace", logger_stack_trace)],
+    );
+    let compilation = project::compile(&root).unwrap();
+    assert_eq!(
+        compilation.invoke("NestedEnumEqualityDemo.run").unwrap(),
+        ["true", "true"]
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let error = check(
+        "public class InvalidNestedEnumEquality {
+            private enum First { VALUE }
+            private enum Second { VALUE }
+            public static Boolean compare() { return First.VALUE == Second.VALUE; }
+        }",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("operator `==` cannot be applied to InvalidNestedEnumEquality.First and InvalidNestedEnumEquality.Second"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
 fn all_rows_queries_expose_soft_deleted_records_and_is_deleted() {
     let source = r#"
 public class AllRowsDemo {
