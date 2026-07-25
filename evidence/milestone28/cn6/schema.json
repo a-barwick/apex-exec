@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "apiVersion": "65.0",
+  "object": "M28CN6Share__Share",
+  "fields": [
+    {
+      "name": "AccessLevel",
+      "dataType": "picklist",
+      "nullable": false
+    },
+    {
+      "name": "Id",
+      "dataType": "id",
+      "nullable": false
+    },
+    {
+      "name": "IsDeleted",
+      "dataType": "boolean",
+      "nullable": false
+    },
+    {
+      "name": "LastModifiedById",
+      "dataType": "reference",
+      "nullable": false
+    },
+    {
+      "name": "LastModifiedDate",
+      "dataType": "datetime",
+      "nullable": false
+    },
+    {
+      "name": "ParentId",
+      "dataType": "reference",
+      "nullable": false
+    },
+    {
+      "name": "RowCause",
+      "dataType": "picklist",
+      "nullable": true
+    },
+    {
+      "name": "UserOrGroupId",
+      "dataType": "reference",
+      "nullable": false
+    }
+  ]
+}

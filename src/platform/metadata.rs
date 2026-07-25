@@ -18,6 +18,7 @@ pub fn import_metadata(
     let mut objects = import_metadata_objects(&files)?;
     insert_metadata_relationship_targets(&mut objects);
     resolve_summaries(&mut objects)?;
+    synthesize_generated_share_objects(&mut objects)?;
 
     build_metadata_catalog(objects)
 }
@@ -27,6 +28,7 @@ struct MetadataFiles {
     object_files: Vec<PathBuf>,
     field_files: Vec<PathBuf>,
     field_set_files: Vec<PathBuf>,
+    sharing_reason_files: Vec<PathBuf>,
 }
 
 impl MetadataFiles {
@@ -40,6 +42,7 @@ impl MetadataFiles {
                 &mut files.object_files,
                 &mut files.field_files,
                 &mut files.field_set_files,
+                &mut files.sharing_reason_files,
             )?;
         }
         files.normalize();
@@ -51,6 +54,7 @@ impl MetadataFiles {
             &mut self.object_files,
             &mut self.field_files,
             &mut self.field_set_files,
+            &mut self.sharing_reason_files,
         ] {
             paths.sort();
             paths.dedup();
@@ -70,6 +74,9 @@ fn import_metadata_objects(
     }
     for path in &files.field_set_files {
         import_field_set_file(path, &mut objects)?;
+    }
+    for path in &files.sharing_reason_files {
+        import_sharing_reason_file(path, &mut objects)?;
     }
     Ok(objects)
 }
@@ -157,6 +164,8 @@ impl From<SchemaError> for MetadataError {
 struct ObjectBuilder {
     api_name: String,
     sharing_model: SharingModel,
+    enable_sharing: bool,
+    sharing_reasons: Vec<String>,
     fields: Vec<FieldSchema>,
     field_sets: Vec<FieldSetSchema>,
     summaries: Vec<PendingSummary>,
@@ -167,6 +176,8 @@ impl ObjectBuilder {
         let mut builder = Self {
             api_name,
             sharing_model: SharingModel::default(),
+            enable_sharing: false,
+            sharing_reasons: Vec::new(),
             fields: vec![
                 FieldSchema::new("Id", FieldType::Id, false),
                 FieldSchema::new("OwnerId", FieldType::Id, true),
@@ -261,6 +272,7 @@ fn collect_metadata_files(
     object_files: &mut Vec<PathBuf>,
     field_files: &mut Vec<PathBuf>,
     field_set_files: &mut Vec<PathBuf>,
+    sharing_reason_files: &mut Vec<PathBuf>,
 ) -> Result<(), MetadataError> {
     if !directory.exists() {
         return Err(MetadataError::invalid(
@@ -277,7 +289,13 @@ fn collect_metadata_files(
             .file_type()
             .map_err(|error| MetadataError::io(&path, "inspect", error))?;
         if file_type.is_dir() {
-            collect_metadata_files(&path, object_files, field_files, field_set_files)?;
+            collect_metadata_files(
+                &path,
+                object_files,
+                field_files,
+                field_set_files,
+                sharing_reason_files,
+            )?;
         } else if file_type.is_file() {
             let name = path
                 .file_name()
@@ -289,9 +307,55 @@ fn collect_metadata_files(
                 field_files.push(path);
             } else if name.ends_with(".fieldSet-meta.xml") {
                 field_set_files.push(path);
+            } else if name.ends_with(".sharingReason-meta.xml") {
+                sharing_reason_files.push(path);
             }
         }
     }
+    Ok(())
+}
+
+fn import_sharing_reason_file(
+    path: &Path,
+    objects: &mut BTreeMap<String, ObjectBuilder>,
+) -> Result<(), MetadataError> {
+    let xml = fs::read_to_string(path).map_err(|error| MetadataError::io(path, "read", error))?;
+    let object_name = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            MetadataError::invalid(
+                path,
+                "sharing reason file must be under objects/<Object>/sharingReasons",
+            )
+        })?;
+    let fallback_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".sharingReason-meta.xml"))
+        .ok_or_else(|| MetadataError::invalid(path, "invalid sharing reason metadata filename"))?;
+    let builder = objects
+        .get_mut(&canonical_name(object_name))
+        .ok_or_else(|| {
+            MetadataError::invalid(
+                path,
+                format!("sharing reason belongs to unknown custom object `{object_name}`"),
+            )
+        })?;
+    let api_name = tag_text(&xml, "fullName").unwrap_or_else(|| fallback_name.to_owned());
+    if builder
+        .sharing_reasons
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&api_name))
+    {
+        return Err(MetadataError::invalid(
+            path,
+            format!("duplicate sharing reason `{api_name}` on `{object_name}`"),
+        ));
+    }
+    builder.sharing_reasons.push(api_name);
     Ok(())
 }
 
@@ -349,6 +413,8 @@ fn import_object_file(
         ));
     }
     let mut builder = ObjectBuilder::new(api_name);
+    builder.enable_sharing =
+        tag_text(&xml, "enableSharing").is_some_and(|value| value.eq_ignore_ascii_case("true"));
     builder.sharing_model = match tag_text(&xml, "sharingModel").as_deref() {
         None | Some("ReadWrite") => SharingModel::PublicReadWrite,
         Some("Read") => SharingModel::PublicReadOnly,
@@ -379,6 +445,87 @@ fn import_object_file(
     }
     objects.insert(canonical, builder);
     Ok(())
+}
+
+fn synthesize_generated_share_objects(
+    objects: &mut BTreeMap<String, ObjectBuilder>,
+) -> Result<(), MetadataError> {
+    let generated = objects
+        .values()
+        .filter(|object| object.api_name.ends_with("__c") && object.enable_sharing)
+        .map(generated_share_object)
+        .collect::<Vec<_>>();
+    for share in generated {
+        let canonical = canonical_name(&share.api_name);
+        if objects.contains_key(&canonical) {
+            return Err(MetadataError::Schema(SchemaError::DuplicateObject {
+                object: share.api_name,
+            }));
+        }
+        objects.insert(canonical, share);
+    }
+    Ok(())
+}
+
+fn generated_share_object(parent: &ObjectBuilder) -> ObjectBuilder {
+    let api_name = format!(
+        "{}__Share",
+        parent
+            .api_name
+            .strip_suffix("__c")
+            .expect("generated shares require a custom object")
+    );
+    ObjectBuilder {
+        api_name,
+        sharing_model: SharingModel::default(),
+        enable_sharing: false,
+        sharing_reasons: Vec::new(),
+        fields: vec![
+            FieldSchema::new("Id", FieldType::Id, false),
+            FieldSchema::new("IsDeleted", FieldType::Boolean, false),
+            FieldSchema::new(
+                "LastModifiedById",
+                FieldType::Reference {
+                    target_object: "User".to_owned(),
+                },
+                false,
+            ),
+            FieldSchema::new("LastModifiedDate", FieldType::Datetime, false),
+            FieldSchema::new(
+                "ParentId",
+                FieldType::Reference {
+                    target_object: parent.api_name.clone(),
+                },
+                false,
+            )
+            .with_relationship_name("Parent"),
+            FieldSchema::new("RowCause", FieldType::String, true).with_describe(
+                "Row Cause",
+                None,
+                None,
+                DisplayType::Picklist,
+                std::iter::once("Manual".to_owned())
+                    .chain(parent.sharing_reasons.iter().cloned())
+                    .collect(),
+            ),
+            FieldSchema::new(
+                "UserOrGroupId",
+                FieldType::Reference {
+                    target_object: "User".to_owned(),
+                },
+                false,
+            ),
+            FieldSchema::new("AccessLevel", FieldType::String, false).with_describe(
+                "Access Level",
+                None,
+                None,
+                DisplayType::Picklist,
+                vec!["Read".to_owned(), "Edit".to_owned(), "All".to_owned()],
+            ),
+        ],
+        field_sets: Vec::new(),
+        summaries: Vec::new(),
+    }
 }
 
 fn import_field_file(

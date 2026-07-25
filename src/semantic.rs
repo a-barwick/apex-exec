@@ -4457,21 +4457,62 @@ impl Checker {
         {
             return Some(self.schema_sobject_type_token_member(object_id, name, span, for_write));
         }
-        if matches!(
-            self.members.get(&receiver.span()),
-            Some(MemberTarget::Schema(
-                hir::SchemaMemberTarget::SObjectField { .. }
-            ))
-        ) {
-            return Some(self.checked_schema_member(
-                span,
-                name,
-                for_write,
-                hir::SchemaMemberTarget::PicklistValue(name.spelling.clone()),
-                TypeName::String,
-            ));
+        if let Some(MemberTarget::Schema(hir::SchemaMemberTarget::SObjectField {
+            object_id,
+            field_id,
+        })) = self.members.get(&receiver.span()).cloned()
+        {
+            return Some(
+                self.schema_picklist_value_member(object_id, field_id, name, span, for_write),
+            );
         }
         self.describe_schema_member(receiver_type, name, span, for_write)
+    }
+
+    fn schema_picklist_value_member(
+        &mut self,
+        object_id: usize,
+        field_id: usize,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Result<ExpressionType, Diagnostic> {
+        let object = self
+            .schema
+            .object_at(object_id)
+            .expect("checked schema object target is valid");
+        let field = object
+            .field_at(field_id)
+            .expect("checked schema field target is valid");
+        let declared_value = field
+            .picklist_values()
+            .iter()
+            .find(|value| value.eq_ignore_ascii_case(&name.spelling))
+            .cloned();
+        let is_generated_share_picklist = object.api_name().ends_with("__Share")
+            && matches!(field.api_name(), "AccessLevel" | "RowCause");
+        if is_generated_share_picklist
+            && !field.picklist_values().is_empty()
+            && declared_value.is_none()
+        {
+            return Err(Diagnostic::new(
+                format!(
+                    "unknown picklist constant `{}.{}`",
+                    field.api_name(),
+                    name.spelling
+                ),
+                name.span,
+            ));
+        }
+        self.checked_schema_member(
+            span,
+            name,
+            for_write,
+            hir::SchemaMemberTarget::PicklistValue(
+                declared_value.unwrap_or_else(|| name.spelling.clone()),
+            ),
+            TypeName::String,
+        )
     }
 
     fn unqualified_schema_sobject_type_member(
