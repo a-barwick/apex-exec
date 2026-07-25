@@ -751,6 +751,11 @@ objects and imports declared sharing reasons as checked `RowCause` constants.
 unknown declared picklist constants fail during checking. The package does not
 claim Salesforce-exact share-row visibility propagation.
 
+CN6 passed independent review and was integrated at `798c438`. Its frozen
+post-slice replay is `evidence/milestone28/census-7/report.json`; it remains
+0/1,159 strict-compatible and selects `System.OrgLimit` and
+`System.OrgLimits.getMap` (1,121 affected tests) as the Ready CN7 family.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

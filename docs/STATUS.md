@@ -536,15 +536,21 @@ The post-CN5 frozen replay is
 it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
 execution, agreement, and strict compatibility. Generated custom-share SObject
 resolution for `Log__Share` is now the first blocker (1,121 tests), so M28-CN6
-was selected. CN6 is implemented on
-`codex/m28-cn6-generated-share-sobjects` and is awaiting independent review.
-It imports custom sharing reasons and synthesizes the checked eight-field
-`__Share` schema, including typed access-level and row-cause picklist
-constants. Its focused local/Salesforce evidence matches 2/2 dimensions in
-`evidence/milestone28/cn6/`; a guarded API 65.0 schema query binds the generated
-field set and nullability, and the temporary class and custom object were
-removed after capture. Share-row visibility propagation remains outside this
-bounded package. `Flow.Interview` remains second at 18 tests.
+was selected. CN6 imports custom sharing reasons and synthesizes the checked
+eight-field `__Share` schema, including typed access-level and row-cause
+picklist constants. Its focused local/Salesforce evidence matches 2/2
+dimensions in `evidence/milestone28/cn6/`; a guarded API 65.0 schema query
+binds the generated field set and nullability, and the temporary class and
+custom object were removed after capture. Share-row visibility propagation
+remains outside this bounded package. CN6 passed independent review and was
+integrated at `798c438`.
+
+The post-CN6 frozen replay is
+`evidence/milestone28/census-7/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. `System.OrgLimit` is now the
+first blocker (1,121 tests), so M28-CN7 is Ready. `Flow.Interview` remains
+second at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.
