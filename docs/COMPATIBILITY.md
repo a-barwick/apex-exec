@@ -708,8 +708,11 @@ replay is recorded in `evidence/milestone28/census-3/report.json`. The selected
 typed-SObject `Map` cast slice permits the blocked narrowing while preserving
 runtime generic identity: a generic map raises `TypeException`, while a typed
 trigger map narrows successfully. Its focused local/Salesforce comparison
-matches 2/2 and is recorded in `evidence/milestone28/cn3/`; it remains in
-review until integrated, so the census is not yet superseded. See
+matches 2/2 and is recorded in `evidence/milestone28/cn3/`. CN3 was
+independently reviewed and integrated at `bbbd519`; its post-slice replay is
+recorded in `evidence/milestone28/census-4/report.json`. That sealed replay
+leaves 0/1,159 strict-compatible tests and selects static
+`Boolean.valueOf` resolution as the next family (1,121 affected tests). See
 `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
 `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
