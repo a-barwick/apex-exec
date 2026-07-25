@@ -411,6 +411,39 @@ fn boolean_valueof_matches_salesforce_string_and_null_behavior() {
 }
 
 #[test]
+fn integer_valueof_resolves_string_and_integer_overloads() {
+    let compilation =
+        project::compile(Path::new("examples/milestone28-cn5-integer-valueof-oracle")).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN5IntegerValueOfOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|stringValue|42",
+            "APEX_EXEC_ORACLE_VALUE|signedString|-7",
+            "APEX_EXEC_ORACLE_VALUE|integerValue|19",
+            "APEX_EXEC_ORACLE_VALUE|integerNull|true",
+            "APEX_EXEC_ORACLE_VALUE|invalidStringThrows|true",
+            "APEX_EXEC_ORACLE_VALUE|overflowStringThrows|true",
+            "APEX_EXEC_ORACLE_VALUE|stringNullThrows|true",
+        ]
+    );
+
+    let error = check("Integer value = Integer.valueOf(true);").unwrap_err();
+    assert!(error.message.contains("valueOf"), "{error}");
+    assert!(error.message.contains("String or Integer"), "{error}");
+    assert!(error.message.contains("Boolean"), "{error}");
+
+    let error = check("Integer value = Integer.valueOf(null);").unwrap_err();
+    assert!(error.message.contains("ambiguous"), "{error}");
+
+    assert_eq!(
+        execute("System.debug(SyStEm.InTeGeR.VaLuEoF('2147483647'));").unwrap(),
+        ["2147483647"]
+    );
+}
+
+#[test]
 fn dynamic_sobject_exposes_only_the_typed_id_pseudo_field() {
     let source = r#"
 public class DynamicSObjectIdDemo {
