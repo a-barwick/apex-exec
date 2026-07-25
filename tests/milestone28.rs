@@ -382,6 +382,35 @@ public class InvalidSObjectMapKeyCast {
 }
 
 #[test]
+fn boolean_valueof_matches_salesforce_string_and_null_behavior() {
+    let compilation =
+        project::compile(Path::new("examples/milestone28-cn4-boolean-valueof-oracle")).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN4BooleanValueOfOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|lowercaseTrue|true",
+            "APEX_EXEC_ORACLE_VALUE|uppercaseTrue|true",
+            "APEX_EXEC_ORACLE_VALUE|falseValue|false",
+            "APEX_EXEC_ORACLE_VALUE|otherValue|false",
+            "APEX_EXEC_ORACLE_VALUE|spacePadded|false",
+            "APEX_EXEC_ORACLE_VALUE|nullThrows|true",
+        ]
+    );
+
+    let error = check("Boolean value = Boolean.valueOf(1);").unwrap_err();
+    assert!(error.message.contains("valueOf"), "{error}");
+    assert!(error.message.contains("Boolean"), "{error}");
+    assert!(error.message.contains("String"), "{error}");
+
+    assert_eq!(
+        execute("System.debug(SyStEm.BoOlEaN.VaLuEoF('TrUe'));").unwrap(),
+        ["true"]
+    );
+}
+
+#[test]
 fn dynamic_sobject_exposes_only_the_typed_id_pseudo_field() {
     let source = r#"
 public class DynamicSObjectIdDemo {

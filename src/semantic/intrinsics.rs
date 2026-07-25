@@ -1010,6 +1010,11 @@ impl Checker {
             return result;
         }
         let canonical_owner = normalized_owner.to_ascii_lowercase();
+        if matches!(canonical_owner.as_str(), "boolean" | "system.boolean")
+            && method.canonical == "valueof"
+        {
+            return self.static_boolean_value_of_type(owner, method, arguments);
+        }
         if canonical_owner == "limits" {
             return self.limits_static_method_type(owner, method, arguments);
         }
@@ -1202,6 +1207,29 @@ impl Checker {
             _ => unreachable!("only String conversion intrinsics use this helper"),
         };
         Ok(ExpressionType::Value(result))
+    }
+
+    fn static_boolean_value_of_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        let result = self.static_boolean_value_of_signature(owner, method, arguments)?;
+        Ok((
+            IntrinsicId::Platform(PlatformIntrinsic::BooleanValueOf),
+            result,
+        ))
+    }
+
+    fn static_boolean_value_of_signature(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<ExpressionType, Diagnostic> {
+        self.static_named_argument(owner, method, arguments, &TypeName::String)?;
+        Ok(ExpressionType::Value(TypeName::Boolean))
     }
 
     fn static_json_signature_type(

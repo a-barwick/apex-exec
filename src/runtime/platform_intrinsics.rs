@@ -105,6 +105,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             return self.call_network(intrinsic, arguments, span);
         }
         match intrinsic {
+            P::BooleanValueOf => self.call_boolean_value_of(arguments, span),
             P::DateNewInstance
             | P::DateValueOf
             | P::DateToday
@@ -1106,6 +1107,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             _ => unreachable!("numeric intrinsic dispatch is closed"),
         }
+    }
+
+    fn call_boolean_value_of(
+        &self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [value] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let value = expect_string(&value.value, value.span)?;
+        Ok(Value::Boolean(value.eq_ignore_ascii_case("true")))
     }
 
     fn call_json_intrinsic(

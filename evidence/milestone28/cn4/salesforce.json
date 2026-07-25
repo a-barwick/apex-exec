@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "boolean-valueof-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN4BooleanValueOfOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "falseValue": false,
+        "lowercaseTrue": true,
+        "nullThrows": true,
+        "otherValue": false,
+        "spacePadded": false,
+        "uppercaseTrue": true
+      }
+    }
+  ]
+}
