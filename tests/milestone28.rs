@@ -257,6 +257,25 @@ public class LexicalPrivateDemo {
         ["85"]
     );
     fs::remove_dir_all(root).unwrap();
+
+    let root = test_project(
+        "InvalidSObjectMapKeyCast",
+        r#"
+public class InvalidSObjectMapKeyCast {
+    public static void run() {
+        Map<String, SObject> source = new Map<String, SObject>();
+        Map<Id, M28Alpha__c> typed = (Map<Id, M28Alpha__c>) source;
+    }
+}
+"#,
+        &[],
+    );
+    let error = project::compile(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("cannot cast Map<String,SObject> to Map<Id,M28Alpha__c>"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -324,6 +343,40 @@ public class SObjectListCastDemo {
             "1",
             "List element at index 1 is not compatible with M28Alpha__c",
         ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn typed_sobject_map_casts_preserve_runtime_map_identity() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn3-sobject-map-cast-oracle",
+    ))
+    .unwrap();
+    assert_eq!(
+        compilation.invoke("M28CN3MapCastOracle.run").unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|rejected|true",
+            "APEX_EXEC_ORACLE_VALUE|triggerTyped|true",
+        ]
+    );
+
+    let root = test_project(
+        "InvalidSObjectMapCast",
+        r#"
+public class InvalidSObjectMapCast {
+    public static void run() {
+        Map<Id, Object> source = new Map<Id, Object>();
+        Map<Id, M28Alpha__c> typed = (Map<Id, M28Alpha__c>) source;
+    }
+}
+"#,
+        &[],
+    );
+    let error = project::compile(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("cannot cast Map<Id,Object> to Map<Id,M28Alpha__c>"),
+        "{error}"
     );
     fs::remove_dir_all(root).unwrap();
 }

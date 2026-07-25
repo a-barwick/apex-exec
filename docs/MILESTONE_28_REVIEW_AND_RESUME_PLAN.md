@@ -286,7 +286,7 @@ package after review and integration.
 | M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated at `d2aefd2` | Enterprise evidence only |
 | M28-CN2 | One next-ranked compatibility family | Complete (integrated at `fd6806d`; nested-enum equality resolves through checked type identity; reviewed; local/Salesforce evidence 2/2; post-slice census recorded) | CENSUS-2 complete | Semantic equality |
 | M28-CENSUS-3 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-3/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN2 integrated at `fd6806d` | Enterprise evidence only |
-| M28-CN3 | One next-ranked compatibility family | Ready | CENSUS-3 complete | Typed SObject `Map` casts |
+| M28-CN3 | One next-ranked compatibility family | Review (typed-SObject `Map` casts preserve runtime generic identity; local/Salesforce evidence 2/2; full Rust, documentation, and Lizard gates pass) | CENSUS-3 complete | Semantic/runtime typed SObject `Map` casts |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -489,6 +489,9 @@ local/Salesforce evidence and a recorded post-slice enterprise census.
 M28-CN2 was reviewed and integrated at `fd6806d`, with matching local and
 Salesforce evidence. Its post-slice census is recorded at
 `evidence/milestone28/census-3/report.json`; it selects the typed-SObject
-`Map` cast family (1,121 affected tests) for M28-CN3. Implement CN3 only on a
-dedicated task branch. Do not start `Flow.Interview` or another family until
-CN3 has been reviewed, integrated, and followed by a fresh census.
+`Map` cast family (1,121 affected tests) for M28-CN3. CN3 is implemented on
+`codex/m28-cn3-sobject-map-casts` and awaiting independent review. It permits
+the checked narrowing while preserving runtime generic identity: a generic map
+still raises `TypeException`, whereas a typed trigger map narrows successfully.
+Do not start `Flow.Interview` or another family until CN3 has been reviewed,
+integrated, and followed by a fresh census.

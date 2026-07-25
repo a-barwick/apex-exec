@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "typed-sobject-map-cast-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN3MapCastOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}
