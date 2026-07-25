@@ -496,24 +496,21 @@ behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable sorting, and
 `Database.Stateful`.
 
 The integrated transient-property slice (`d2aefd2`) is covered by a focused
-local/Salesforce comparison that matches 2/2 dimensions. The post-transient
-frozen enterprise census parses 1,159/1,159 tests and
-checks 0/1,159 across three deterministic runs. C1 removed the prior
-`Id.getSObjectType` blocker and the transient-property slice removed the
-`transient` property blocker. The new first blockers are cross-type equality
-between `SourceMetadataType` and `LoggerStackTrace.SourceMetadataType` for
-1,126 tests, `Flow.Interview` for 18, and
-`System.FeatureManagement.checkPermission` for 15. The V0 quality gate
+local/Salesforce comparison that matches 2/2 dimensions. CN2 then resolved
+equivalent nested-enum type spellings through the checked type-identity
+boundary, matched its focused local/Salesforce comparison 2/2, and was
+reviewed and integrated at `fd6806d`. Its post-slice frozen enterprise census
+parses 1,159/1,159 tests and checks 0/1,159 across three deterministic runs.
+The next first blocker is a cast from `Map<Id,SObject>` to `Map<Id,Log__c>`,
+affecting 1,121 tests; `Flow.Interview` affects 18 tests and
+`System.FeatureManagement.checkPermission` affects 15. The V0 quality gate
 cleared the recorded Rust, tooling, website, editor, dependency,
 documentation, maintainability, and coverage checks. The strict numerator
 therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
 merge as complete. The checked-in census is
-`evidence/milestone28/census-2/report.json`. The selected equality family is
-implemented on `codex/m28-cn2-cross-type-equality` and awaits independent
-review: it resolves equivalent nested-enum type spellings through the existing
-checked type-identity boundary, has 2/2 focused local/Salesforce dimensions,
-and passes the required Rust, documentation, and complexity gates. No new
-enterprise census or next-family selection may occur before its integration.
+`evidence/milestone28/census-3/report.json`. M28-CN3 is ready to implement the
+typed-SObject `Map` cast family; no later family may begin before CN3 is
+reviewed, integrated, and followed by a fresh enterprise census.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

@@ -284,7 +284,9 @@ package after review and integration.
 | M28-CENSUS-1 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-1/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | C1 integrated at `f841099` | Enterprise evidence only |
 | M28-CN | One next-ranked compatibility family | Complete (integrated at `d2aefd2`; transient property semantics; reviewed; local and Salesforce differential evidence 2/2; post-slice census recorded) | CENSUS-1 complete | Semantic modifier and JSON serialization |
 | M28-CENSUS-2 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-2/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN integrated at `d2aefd2` | Enterprise evidence only |
-| M28-CN2 | One next-ranked compatibility family | Review (`2b7ddda`; nested-enum equality resolves through checked type identity; local/Salesforce evidence 2/2; full Rust, documentation, and Lizard gates pass) | Latest census | Determined by fresh first blockers |
+| M28-CN2 | One next-ranked compatibility family | Complete (integrated at `fd6806d`; nested-enum equality resolves through checked type identity; reviewed; local/Salesforce evidence 2/2; post-slice census recorded) | CENSUS-2 complete | Semantic equality |
+| M28-CENSUS-3 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-3/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN2 integrated at `fd6806d` | Enterprise evidence only |
+| M28-CN3 | One next-ranked compatibility family | Ready | CENSUS-3 complete | Typed SObject `Map` casts |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -484,7 +486,9 @@ M28-C1 is reviewed and integrated from
 `codex/m28-c1-id-sobject-type`. The transient-property package is implemented
 on `codex/m28-cn-transient-property` and integrated at `d2aefd2`, with matching
 local/Salesforce evidence and a recorded post-slice enterprise census.
-M28-CN2 resolves the selected nested-enum equality family on
-`codex/m28-cn2-cross-type-equality` and is awaiting independent review. Do not
-run the next census or select another compatibility family until CN2 is
-reviewed and integrated.
+M28-CN2 was reviewed and integrated at `fd6806d`, with matching local and
+Salesforce evidence. Its post-slice census is recorded at
+`evidence/milestone28/census-3/report.json`; it selects the typed-SObject
+`Map` cast family (1,121 affected tests) for M28-CN3. Implement CN3 only on a
+dedicated task branch. Do not start `Flow.Interview` or another family until
+CN3 has been reviewed, integrated, and followed by a fresh census.

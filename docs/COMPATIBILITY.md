@@ -700,15 +700,14 @@ on a property, affecting 1,126 tests. `Flow.Interview` affects 18 tests and
 `System.FeatureManagement.checkPermission` affects 15. No next-family
 implementation has started at that checkpoint. The transient-property slice
 then matched compile and values against Salesforce 2/2; its post-slice replay
-is recorded in `evidence/milestone28/census-2/report.json`. The next first
-blocker is cross-type equality between `SourceMetadataType` and
-`LoggerStackTrace.SourceMetadataType`, affecting 1,126 tests. See
-`docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
-`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue. The
-selected equality slice resolves equivalent nested-enum type spellings through
-the checked type-identity boundary and has 2/2 focused local/Salesforce
-dimensions; it remains in review until integrated, so the census is not yet
-superseded.
+is recorded in `evidence/milestone28/census-2/report.json`. The selected
+equality slice resolved equivalent nested-enum type spellings through the
+checked type-identity boundary and matched its focused local/Salesforce
+comparison 2/2. It was reviewed and integrated at `fd6806d`; its post-slice
+replay is recorded in `evidence/milestone28/census-3/report.json`. The next
+first blocker is a cast from `Map<Id,SObject>` to `Map<Id,Log__c>`, affecting
+1,121 tests. See `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop
+point and `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
 ## Platform surface
 
