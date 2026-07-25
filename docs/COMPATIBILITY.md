@@ -742,6 +742,15 @@ CN5 was audited and integrated at `e0ebfe5`. Its frozen post-slice replay is
 strict-compatible and selects generated custom-share SObject resolution for
 `Log__Share` (1,121 affected tests) as the Ready CN6 family.
 
+The CN6 generated custom-share slice is implemented on
+`codex/m28-cn6-generated-share-sobjects` with focused local/Salesforce evidence
+2/2 in `evidence/milestone28/cn6/`. Metadata import now synthesizes the
+Salesforce-shaped eight-field `__Share` object for sharing-enabled custom
+objects and imports declared sharing reasons as checked `RowCause` constants.
+`AccessLevel` constants and describe values are typed and case-insensitive;
+unknown declared picklist constants fail during checking. The package does not
+claim Salesforce-exact share-row visibility propagation.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

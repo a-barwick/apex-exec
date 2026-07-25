@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "generated-custom-share-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN6GeneratedShareOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

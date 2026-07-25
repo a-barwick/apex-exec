@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "generated-custom-share-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN6GeneratedShareOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "accessLevel": "Edit",
+        "accessLevels": "Read,Edit,All",
+        "rowCause": "M28Reason__c",
+        "shareType": "M28CN6Share__Share"
+      }
+    }
+  ]
+}

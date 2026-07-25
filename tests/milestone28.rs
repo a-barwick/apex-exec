@@ -5,6 +5,7 @@ use apex_exec::{
         DataValue, FieldSchema, FieldType, LocalDatabase, ObjectSchema, QueryAccessMode,
         QueryField, QueryOutcome, QuerySelect, Record, RecordId, SchemaCatalog, SharingMode,
         SoqlRequest, SummaryDefinition, SummaryFilter, SummaryFilterOperator, SummaryOperation,
+        metadata,
     },
     project,
     runtime::{HttpResponseData, Interpreter, NetworkContext, RecordingHost},
@@ -441,6 +442,63 @@ fn integer_valueof_resolves_string_and_integer_overloads() {
         execute("System.debug(SyStEm.InTeGeR.VaLuEoF('2147483647'));").unwrap(),
         ["2147483647"]
     );
+}
+
+#[test]
+fn generated_custom_share_sobjects_are_typed_from_metadata() {
+    let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
+    let compilation = project::compile(project_root).unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN6GeneratedShareOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|shareType|M28CN6Share__Share",
+            "APEX_EXEC_ORACLE_VALUE|accessLevel|Edit",
+            "APEX_EXEC_ORACLE_VALUE|rowCause|M28Reason__c",
+            "APEX_EXEC_ORACLE_VALUE|accessLevels|Read,Edit,All",
+        ]
+    );
+
+    let schema = metadata::import_metadata([project_root.join("force-app/main/default")]).unwrap();
+    let share = schema.object("M28CN6Share__Share").unwrap();
+    assert_eq!(share.fields().len(), 8);
+    assert!(share.field("OwnerId").is_err());
+    assert!(share.field("CreatedDate").is_err());
+    assert!(!share.field("IsDeleted").unwrap().is_nullable());
+    assert!(share.field("RowCause").unwrap().is_nullable());
+    assert_eq!(
+        share.field("RowCause").unwrap().picklist_values(),
+        ["Manual", "M28Reason__c"]
+    );
+
+    let invalid_root = test_project(
+        "InvalidShareReason",
+        "public class InvalidShareReason {
+            public static void run() {
+                String reason = Schema.M28Alpha__Share.RowCause.UnknownReason__c;
+            }
+        }",
+        &[],
+    );
+    let object = invalid_root.join("force-app/main/default/objects/M28Alpha__c");
+    fs::write(
+        object.join("M28Alpha__c.object-meta.xml"),
+        "<CustomObject><label>M28 Alpha</label><pluralLabel>M28 Alphas</pluralLabel><nameField><label>Name</label><type>Text</type></nameField><deploymentStatus>Deployed</deploymentStatus><enableSharing>true</enableSharing><sharingModel>Private</sharingModel></CustomObject>",
+    )
+    .unwrap();
+    fs::create_dir_all(object.join("sharingReasons")).unwrap();
+    fs::write(
+        object.join("sharingReasons/ValidReason__c.sharingReason-meta.xml"),
+        "<SharingReason><fullName>ValidReason__c</fullName><label>Valid Reason</label></SharingReason>",
+    )
+    .unwrap();
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error.render().contains("unknown picklist constant"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
 }
 
 #[test]
