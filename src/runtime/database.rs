@@ -922,7 +922,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<TriggerContext, Diagnostic> {
         let object_type = TypeName::Custom(crate::ast::NamedType::new(object.to_owned(), span));
         let list_type = TypeName::List(Box::new(object_type.clone()));
-        let map_type = TypeName::Map(Box::new(TypeName::String), Box::new(object_type.clone()));
+        let map_type = TypeName::Map(Box::new(TypeName::Id), Box::new(object_type.clone()));
         let operation = event.operation();
         let new_available = operation != AstDmlOperation::Delete;
         let old_available = matches!(operation, AstDmlOperation::Update | AstDmlOperation::Delete);
@@ -989,11 +989,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let Value::String(value) = instance.fields.get(&id_field)? else {
                     return None;
                 };
-                Some((Value::String(value.clone()), Value::SObject(*id)))
+                Some((Value::Id(value.clone()), Value::SObject(*id)))
             })
             .collect();
         let value = self.store.allocate_collection(Collection::Map {
-            key_type: TypeName::String,
+            key_type: TypeName::Id,
             value_type,
             entries,
         });

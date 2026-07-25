@@ -59,7 +59,7 @@ platform area. Broader surfaces retain their stated fidelity level.
 | `null` | Yes | Yes | Yes | Simplified | Assignable to every supported value type; selected runtime null behavior implemented |
 | `List<T>` | Yes | Yes | Yes | Compatible | Recursive invariant type; ordered, indexed, mutable reference value |
 | `Set<T>` | Yes | Yes | Yes | Simplified | Unique mutable reference value with deterministic local insertion order |
-| `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot |
+| `Map<K,V>` | Yes | Yes | Yes | Simplified | Deterministic local insertion order; `keySet()` is a snapshot; typed-SObject casts preserve runtime generic identity |
 | `Iterable<T>` | Yes | Yes | Yes | Simplified | Accepts supported List/Set values and enhanced iteration; arbitrary user implementations are not modeled |
 | Array syntax | Yes | Yes | Yes | Simplified | One-dimensional `T[]` alias for `List<T>`; sized construction validates and supports primitive, `Object`, known custom-class, and core-exception elements |
 | Type literals | Yes | Yes | Yes | Simplified | Qualified, array, and generic `.class` forms preserve canonical type identity |
@@ -704,10 +704,14 @@ is recorded in `evidence/milestone28/census-2/report.json`. The selected
 equality slice resolved equivalent nested-enum type spellings through the
 checked type-identity boundary and matched its focused local/Salesforce
 comparison 2/2. It was reviewed and integrated at `fd6806d`; its post-slice
-replay is recorded in `evidence/milestone28/census-3/report.json`. The next
-first blocker is a cast from `Map<Id,SObject>` to `Map<Id,Log__c>`, affecting
-1,121 tests. See `docs/MILESTONE_28_CHECKPOINT.md` for the historical stop
-point and `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
+replay is recorded in `evidence/milestone28/census-3/report.json`. The selected
+typed-SObject `Map` cast slice permits the blocked narrowing while preserving
+runtime generic identity: a generic map raises `TypeException`, while a typed
+trigger map narrows successfully. Its focused local/Salesforce comparison
+matches 2/2 and is recorded in `evidence/milestone28/cn3/`; it remains in
+review until integrated, so the census is not yet superseded. See
+`docs/MILESTONE_28_CHECKPOINT.md` for the historical stop point and
+`docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md` for the active queue.
 
 ## Platform surface
 

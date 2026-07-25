@@ -3875,6 +3875,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         if let Some(result) = self.cast_list_value(&value, target, span) {
             return result;
         }
+        if let Some(result) = self.cast_map_value(&value, target, span) {
+            return result;
+        }
         if self.value_has_type(&value, target) || matches!(target, TypeName::Object) {
             return Ok(value);
         }
@@ -3931,6 +3934,34 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         };
         *element_type = (**target_element).clone();
         Some(Ok(value.clone()))
+    }
+
+    fn cast_map_value(
+        &self,
+        value: &Value,
+        target: &TypeName,
+        span: Span,
+    ) -> Option<Result<Value, Diagnostic>> {
+        let (Value::Collection(collection), TypeName::Map(_, _)) = (value, target) else {
+            return None;
+        };
+        let source = self.collection_type(*collection);
+        if Self::map_cast_identity_matches(&source, target) {
+            return Some(Ok(value.clone()));
+        }
+        Some(Err(runtime_exception(
+            "TypeException",
+            format!(
+                "invalid conversion from runtime type {} to {}",
+                source.apex_name(),
+                target.apex_name()
+            ),
+            span,
+        )))
+    }
+
+    fn map_cast_identity_matches(source: &TypeName, target: &TypeName) -> bool {
+        source == target
     }
 
     fn evaluate_assignment(

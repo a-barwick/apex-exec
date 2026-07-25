@@ -508,9 +508,13 @@ cleared the recorded Rust, tooling, website, editor, dependency,
 documentation, maintainability, and coverage checks. The strict numerator
 therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
 merge as complete. The checked-in census is
-`evidence/milestone28/census-3/report.json`. M28-CN3 is ready to implement the
-typed-SObject `Map` cast family; no later family may begin before CN3 is
-reviewed, integrated, and followed by a fresh enterprise census.
+`evidence/milestone28/census-3/report.json`. M28-CN3 is implemented on
+`codex/m28-cn3-sobject-map-casts` and awaiting independent review. It permits
+the checked typed-SObject `Map` narrowing while preserving runtime generic
+identity: a manually constructed generic map still raises `TypeException`, but
+a typed trigger map narrows successfully. Its focused local/Salesforce evidence
+matches 2/2 dimensions. No later family may begin before CN3 is reviewed,
+integrated, and followed by a fresh enterprise census.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

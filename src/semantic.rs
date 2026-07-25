@@ -5182,12 +5182,24 @@ impl Checker {
         source == target
             || integral_cast(source, target)
             || numeric_to_double_cast(source, target)
+            || self.sobject_map_cast_allowed(source, target)
             || *source == TypeName::Object
             || *target == TypeName::Object
             || (*source == TypeName::Exception && self.is_exception_type(target))
             || (*target == TypeName::Exception && self.is_exception_type(source))
             || self.is_subtype(source, target)
             || self.is_subtype(target, source)
+    }
+
+    fn sobject_map_cast_allowed(&self, source: &TypeName, target: &TypeName) -> bool {
+        let (TypeName::Map(source_key, source_value), TypeName::Map(target_key, target_value)) =
+            (source, target)
+        else {
+            return false;
+        };
+        self.same_type_identity(source_key, target_key)
+            && self.is_dynamic_sobject_type(source_value)
+            && self.is_sobject_type(target_value)
     }
 
     fn new_collection_type(
@@ -7729,11 +7741,11 @@ fn trigger_context_variable_type(
         )),
         "newmap" => Ok((
             TriggerContextVariable::NewMap,
-            TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+            TypeName::Map(Box::new(TypeName::Id), Box::new(object_type)),
         )),
         "oldmap" => Ok((
             TriggerContextVariable::OldMap,
-            TypeName::Map(Box::new(TypeName::String), Box::new(object_type)),
+            TypeName::Map(Box::new(TypeName::Id), Box::new(object_type)),
         )),
         "isexecuting" => Ok((TriggerContextVariable::IsExecuting, TypeName::Boolean)),
         "isbefore" => Ok((TriggerContextVariable::IsBefore, TypeName::Boolean)),
