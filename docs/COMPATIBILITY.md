@@ -737,6 +737,11 @@ typed Integer null remains null. Untyped null is rejected as ambiguous. The
 broader Salesforce `Object` conversion surface remains outside this bounded
 slice.
 
+CN5 was audited and integrated at `e0ebfe5`. Its frozen post-slice replay is
+`evidence/milestone28/census-6/report.json`; it remains 0/1,159
+strict-compatible and selects generated custom-share SObject resolution for
+`Log__Share` (1,121 affected tests) as the Ready CN6 family.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

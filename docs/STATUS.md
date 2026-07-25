@@ -524,14 +524,20 @@ CN4 is reviewed, integrated, and followed by a fresh enterprise census.
 CN4 has since been independently reviewed and integrated at `600af4d`. Its
 post-slice frozen replay is `evidence/milestone28/census-5/report.json`: it is
 deterministic but remains 0/1,159 strict-compatible. Static `Integer`
-resolution is now the first blocker (1,121 tests). M28-CN5 is implemented on
-`codex/m28-cn5-integer-valueof` and awaits independent review. It records
-distinct checked HIR targets for `Integer.valueOf(String)` and
-`Integer.valueOf(Integer)`, including typed null and catchable conversion
-failures. Its focused local/Salesforce evidence matches 2/2 dimensions in
-`evidence/milestone28/cn5/`; the temporary org fixture was removed after
-capture. No post-CN5 enterprise census or later-family implementation has
-started.
+resolution was the first blocker (1,121 tests). M28-CN5 was audited and
+integrated at `e0ebfe5`. It records distinct checked HIR targets for
+`Integer.valueOf(String)` and `Integer.valueOf(Integer)`, including typed null
+and catchable conversion failures. Its focused local/Salesforce evidence
+matches 2/2 dimensions in `evidence/milestone28/cn5/`; the temporary org
+fixture was removed after capture.
+
+The post-CN5 frozen replay is
+`evidence/milestone28/census-6/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. Generated custom-share SObject
+resolution for `Log__Share` is now the first blocker (1,121 tests), so M28-CN6
+is Ready. `Flow.Interview` remains second at 18 tests. No CN6 implementation
+has started.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

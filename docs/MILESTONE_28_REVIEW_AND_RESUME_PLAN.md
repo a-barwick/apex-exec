@@ -290,7 +290,9 @@ package after review and integration.
 | M28-CENSUS-4 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-4/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN3 integrated at `bbbd519` | Enterprise evidence only |
 | M28-CN4 | One next-ranked compatibility family | Complete (integrated at `600af4d`; independently reviewed; static `Boolean.valueOf(String)` resolution; local/Salesforce evidence 2/2; post-slice census recorded) | CENSUS-4 complete | Semantic/runtime built-in Boolean static methods |
 | M28-CENSUS-5 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-5/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN4 integrated at `600af4d` | Enterprise evidence only |
-| M28-CN5 | One next-ranked compatibility family | Review on `codex/m28-cn5-integer-valueof` (checked String/Integer `valueOf` targets; local/Salesforce evidence 2/2; full Rust, Clippy, documentation, Lizard, and replay gates pass) | CENSUS-5 complete | Semantic/runtime built-in Integer static methods |
+| M28-CN5 | One next-ranked compatibility family | Complete (integrated at `e0ebfe5`; isolated integration audit approved; checked String/Integer `valueOf` targets; local/Salesforce evidence 2/2; full Rust, Clippy, documentation, Lizard, and replay gates pass; post-slice census recorded) | CENSUS-5 complete | Semantic/runtime built-in Integer static methods |
+| M28-CENSUS-6 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-6/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN5 integrated at `e0ebfe5` | Enterprise evidence only |
+| M28-CN6 | One next-ranked compatibility family | Ready (generated custom-share SObject resolution for `Log__Share`) | CENSUS-6 complete | Normalized schema and typed generated-share SObject surface |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -499,11 +501,10 @@ trigger map narrows successfully. Its post-slice census is recorded at
 `evidence/milestone28/census-4/report.json`, with unchanged frozen inputs and
 0/1,159 strict-compatible tests. It selected static `Boolean.valueOf`
 resolution (1,121 affected tests) for M28-CN4. CN4 was independently reviewed
-and integrated at `600af4d`; its fifth sealed census remains 0/1,159 and
-selects static `Integer.valueOf` resolution (1,121 affected tests). CN5 is
-implemented on `codex/m28-cn5-integer-valueof` and awaits independent review.
-It supports the checked String and Integer forms, including the distinct null
-and failure behavior recorded by the focused local/Salesforce 2/2 evidence in
-`evidence/milestone28/cn5/`. The broader Salesforce `Object` conversion surface
-is explicit non-scope. Do not start a later family until CN5 is reviewed,
-integrated, and followed by a fresh enterprise census.
+and integrated at `600af4d`; its fifth sealed census selected static
+`Integer.valueOf` resolution (1,121 affected tests). CN5 was audited and
+integrated at `e0ebfe5`, with checked String and Integer forms plus focused
+local/Salesforce 2/2 evidence. Its sixth sealed census remains 0/1,159 and
+selects generated custom-share SObject resolution for `Log__Share` (1,121
+affected tests) as Ready CN6. Claim CN6 on a dedicated branch before
+implementation; do not start `Flow.Interview` or another later family first.
