@@ -626,21 +626,22 @@ execution, agreement, and strict compatibility. The single-record
 dynamic-query blocker is gone; 1,117 tests now advance to missing
 `Messaging.SingleEmailMessage`, so M28-CN12 is Ready.
 
-CN12 is in Review on `codex/m28-cn12-single-email-message`. It implements the
-enterprise-used `Messaging.SingleEmailMessage` constructor, setters, getters,
-capacity reservation, typed send results and errors, and an explicit host
-boundary for email delivery. Focused local tests pass, including deterministic
-capacity failures and one recorded host invocation per send call. The guarded
-Salesforce comparison matches 2/2 dimensions, sends no email, and leaves no
-temporary Apex class.
+CN12 passed independent review after bounded corrections and was integrated
+at `b88a8f2`. It implements the enterprise-used
+`Messaging.SingleEmailMessage` constructor, setters, getters, cumulative
+transaction-local capacity reservation, typed send results and errors, and an
+explicit host boundary for email delivery. Focused local tests pass, including
+deterministic capacity failures and one recorded host invocation per send
+call. The guarded Salesforce comparison matches 2/2 dimensions, sends no
+email, and leaves no temporary Apex class.
 
-The candidate post-CN12 replay is recorded at
-`evidence/milestone28/cn12/candidate-census.json`. It preserves both frozen
-input hashes and all 1,159 tests across three deterministic runs. Strict
-compatibility remains 0/1,159, but the 1,117-test email blocker is gone; the
-new first blocker is missing `Approval.LockResult` in
-`LogEntryEventBuilder.cls`, affecting 1,005 tests. This is package-selection
-evidence, not an integrated census or M28 completion evidence.
+The post-CN12 frozen replay is
+`evidence/milestone28/census-13/report.json`. Across three deterministic runs,
+it preserves both frozen input bindings, discovers and parses 1,159/1,159
+tests, and remains 0/1,159 at checking, execution, agreement, and strict
+compatibility. The 1,117-test email blocker is gone; 1,005 tests now first
+stop at missing `Approval.LockResult` in `LogEntryEventBuilder.cls`, so
+M28-CN13 is Ready.
 
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in

@@ -824,20 +824,22 @@ The frozen post-CN11 replay is
 strict-compatible and selects missing `Messaging.SingleEmailMessage` (1,117
 affected tests) as the Ready CN12 family.
 
-CN12 is in Review. Apex Exec now types the enterprise-used
+CN12 passed independent review after bounded corrections and was integrated
+at `b88a8f2`. Apex Exec now types the enterprise-used
 `Messaging.SingleEmailMessage` constructor, subject/body/target/activity/address
-setters and getters, `reserveSingleEmailCapacity`, `sendEmail`, and
-`SendEmailResult.success`, `SendEmailResult.errors`, and
-`SendEmailError.message`. Email delivery crosses an explicit host boundary;
-the recording host accounts for exactly one email invocation per send call,
-and unavailable or exhausted capacity fails explicitly.
+setters and getters, cumulative transaction-local
+`reserveSingleEmailCapacity`, `sendEmail`, and `SendEmailResult.success`,
+`SendEmailResult.errors`, and `SendEmailError.message`. Email delivery crosses
+an explicit host boundary; the recording host accounts for exactly one email
+invocation per send call, and unavailable or exhausted capacity fails
+explicitly.
 
 Focused Salesforce compile/value evidence matches 2/2 dimensions without
 sending an email, while local tests cover successful and failed send results.
-The candidate frozen replay at
-`evidence/milestone28/cn12/candidate-census.json` remains 0/1,159
-strict-compatible but removes the email blocker and advances 1,005 tests to
-missing `Approval.LockResult`.
+The frozen post-CN12 replay is
+`evidence/milestone28/census-13/report.json`; it remains 0/1,159
+strict-compatible, removes the email blocker, and selects missing
+`Approval.LockResult` (1,005 affected tests) as the Ready CN13 family.
 
 ## Platform surface
 

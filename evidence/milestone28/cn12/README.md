@@ -36,7 +36,10 @@ API, and a guarded query verified no remaining fixture.
 against the CN12 candidate. Discovery and parsing remain 1,159/1,159 while
 strict compatibility remains 0/1,159. The former 1,117-test email blocker is
 gone; 1,005 tests now first stop at missing `Approval.LockResult`. This
-candidate measurement is not the formal post-integration census.
+candidate measurement is not the formal post-integration census. CN12 later
+passed independent review and was integrated at `b88a8f2`; the sealed census
+at `evidence/milestone28/census-13/report.json` reproduces the same funnel and
+blocker ranking across three deterministic runs.
 
 Credential-free replay:
 
