@@ -298,7 +298,9 @@ package after review and integration.
 | M28-CENSUS-8 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-8/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN7 integrated at `ac756a0` | Enterprise evidence only |
 | M28-CN8 | One next-ranked compatibility family | Complete (integrated at `d679e6e`; independent review approved; checked `User.IsActive` Boolean field; Salesforce 2/2; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-8 complete | Standard schema and query typing |
 | M28-CENSUS-9 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-9/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN8 integrated at `d679e6e` | Enterprise evidence only |
-| M28-CN9 | One next-ranked compatibility family | Review on `codex/m28-cn9-flow-definition-version` (`FlowDefinitionView.VersionNumber` Integer field, Salesforce 2/2, candidate replay advances 1,121 tests to `FlowDefinitionView.IsActive`) | CENSUS-9 complete | Standard schema and query typing |
+| M28-CN9 | One next-ranked compatibility family | Complete (integrated at `b014898`; independent review approved; checked `FlowDefinitionView.VersionNumber` Integer field; Salesforce 2/2; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-9 complete | Standard schema and query typing |
+| M28-CENSUS-10 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-10/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN9 integrated at `b014898` | Enterprise evidence only |
+| M28-CN10 | One next-ranked compatibility family | Ready (`FlowDefinitionView.IsActive` standard-schema field, affecting 1,121 tests) | CENSUS-10 complete | Standard schema and query typing |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -524,6 +526,9 @@ remains 0/1,159, and the same 1,121 tests now stop at the missing
 and was integrated at `d679e6e`. Its ninth sealed census is recorded at
 `evidence/milestone28/census-9/report.json`; strict compatibility remains
 0/1,159, and the same 1,121 tests now stop at the missing
-`FlowDefinitionView.VersionNumber` standard-schema field. Claim that Ready CN9
-family on a dedicated branch; do not start `Flow.Interview` or another later
-family first.
+`FlowDefinitionView.VersionNumber` standard-schema field. CN9 passed
+independent review and was integrated at `b014898`. Its tenth sealed census is
+recorded at `evidence/milestone28/census-10/report.json`; strict compatibility
+remains 0/1,159, and the same 1,121 tests now stop at missing
+`FlowDefinitionView.IsActive`. Claim that Ready CN10 family on a dedicated
+branch; do not start `Flow.Interview` or another later family first.
