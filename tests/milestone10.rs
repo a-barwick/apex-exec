@@ -121,10 +121,16 @@ fn deterministic_services_are_configurable_at_the_host_boundary() {
 
 #[test]
 fn unsupported_platform_apis_name_the_profile() {
-    let error = check("Date value = Date.parse('tomorrow');").unwrap_err();
+    let source = "Date value = Date.parse('tomorrow');";
+    let error = check(source).unwrap_err();
     assert_eq!(
         error.message,
         "unsupported API `Date.parse` in compatibility profile `salesforce-api-66.0`"
+    );
+    assert_eq!(error.span.start, source.find("parse").unwrap());
+    assert_eq!(
+        error.span.end,
+        source.find("parse").unwrap() + "parse".len()
     );
 }
 

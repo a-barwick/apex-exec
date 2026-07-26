@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "typed-sobject-map-cast-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN3MapCastOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        },
+        {
+          "source": "force-app/main/default/triggers/M28CN3MapCastTrigger.trigger",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "rejected": true,
+        "triggerTyped": true
+      },
+      "triggers": [
+        {
+          "trigger": "M28CN3MapCastTrigger",
+          "object": "Account",
+          "operation": "update",
+          "phase": "after",
+          "stage": "enter"
+        },
+        {
+          "trigger": "M28CN3MapCastTrigger",
+          "object": "Account",
+          "operation": "update",
+          "phase": "after",
+          "stage": "exit"
+        }
+      ]
+    }
+  ]
+}

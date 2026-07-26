@@ -168,7 +168,6 @@ public class M27RunAsJob implements Queueable {
             "public without sharing class M27WithoutReader { public static Integer directCount() { return [SELECT COUNT() FROM M27Row__c]; } }",
         ),
     ]);
-    write_user_schema(&root);
     let compilation = project::compile(&root).unwrap();
     let report = test_runner::run(
         &compilation,
@@ -181,6 +180,30 @@ public class M27RunAsJob implements Queueable {
     assert_eq!(report.tests.len(), 1);
     assert!(report.tests[0].failure.is_none());
     assert_eq!(report.tests[0].output, ["true", "1", "2", "true"]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn standard_user_schema_keeps_unknown_fields_as_diagnostics() {
+    let root = test_project(&[(
+        "M27UnknownUserField",
+        r#"
+public class M27UnknownUserField {
+    public static void run() {
+        User user = new User();
+        user.UnknownM28Field__c = 'value';
+    }
+}
+"#,
+    )]);
+
+    let error = project::compile(&root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unknown field `UnknownM28Field__c` on SObject `User`"),
+        "{error}"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -470,7 +493,6 @@ fn malformed_access_clauses_and_invalid_overloads_fail_in_the_correct_phase() {
         "InvalidRunAsContext",
         "public class InvalidRunAsContext { public static void run(User user) { System.runAs(user) {} } }",
     )]);
-    write_user_schema(&invalid_run_as);
     let error = project::compile(&invalid_run_as).unwrap_err().render();
     assert!(error.contains("only valid in an @IsTest class"), "{error}");
     fs::remove_dir_all(invalid_run_as).unwrap();
@@ -692,26 +714,6 @@ fn write_field(object: &Path, name: &str) {
         format!(
             "<CustomField><fullName>{name}</fullName><length>80</length><required>false</required><type>Text</type></CustomField>"
         ),
-    )
-    .unwrap();
-}
-
-fn write_user_schema(root: &Path) {
-    let object = root.join(".apex-exec/schema/objects");
-    fs::create_dir_all(&object).unwrap();
-    fs::write(
-        object.join("User.object"),
-        r#"<CustomObject>
-<fields><fullName>Username</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>Alias</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>Email</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>EmailEncodingKey</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>LastName</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>LanguageLocaleKey</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>LocaleSidKey</fullName><required>true</required><type>Text</type></fields>
-<fields><fullName>ProfileId</fullName><referenceTo>Profile</referenceTo><required>true</required><type>Lookup</type></fields>
-<fields><fullName>TimeZoneSidKey</fullName><required>true</required><type>Text</type></fields>
-</CustomObject>"#,
     )
     .unwrap();
 }

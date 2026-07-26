@@ -143,49 +143,33 @@ fn run_internal(
         });
     }
 
+    let (serial_cases, parallel_cases) = partition_cases(&cases);
+    let mut serial_results = serial_cases
+        .into_iter()
+        .map(|case| execute_case(compilation, case))
+        .collect::<Vec<_>>();
     let next = AtomicUsize::new(0);
-    let executed = Mutex::new(Vec::with_capacity(cases.len()));
-    let jobs = options.jobs.min(cases.len());
+    let executed = Mutex::new(Vec::with_capacity(parallel_cases.len()));
+    let jobs = options.jobs.min(parallel_cases.len());
     thread::scope(|scope| {
         for _ in 0..jobs {
             scope.spawn(|| {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(case) = cases.get(index) else {
+                    let Some(case) = parallel_cases.get(index) else {
                         break;
                     };
-                    let mut host = crate::runtime::RecordingHost::default();
-                    host.set_security_policy(compilation.security.clone());
-                    host.set_database_fixtures(compilation.database_fixtures.clone());
-                    let execution = Interpreter::with_host(host).run_test(
-                        &compilation.program,
-                        &case.setup_methods,
-                        case.target,
-                    );
-                    let failure = execution.diagnostic.as_ref().map(|diagnostic| TestFailure {
-                        exception_type: diagnostic.exception_type.clone(),
-                        message: diagnostic.message.clone(),
-                        rendered: compilation.render_diagnostic(diagnostic),
-                    });
                     executed
                         .lock()
                         .expect("test result lock poisoned")
-                        .push(ExecutedCase {
-                            result: TestResult {
-                                name: case.name.clone(),
-                                class_name: case.class_name.clone(),
-                                method_name: case.method_name.clone(),
-                                output: execution.output,
-                                failure,
-                            },
-                            trace: execution.trace,
-                        });
+                        .push(execute_case(compilation, case));
                 }
             });
         }
     });
 
     let mut executed = executed.into_inner().expect("test result lock poisoned");
+    executed.append(&mut serial_results);
     executed.sort_by(|left, right| {
         left.result
             .name
@@ -197,4 +181,46 @@ fn run_internal(
         tests: executed.into_iter().map(|test| test.result).collect(),
         coverage,
     })
+}
+
+fn partition_cases(
+    cases: &[filtering::TestCase],
+) -> (Vec<&filtering::TestCase>, Vec<&filtering::TestCase>) {
+    let mut serial = Vec::new();
+    let mut parallel = Vec::new();
+    for case in cases {
+        if case.allows_parallel {
+            parallel.push(case);
+        } else {
+            serial.push(case);
+        }
+    }
+    debug_assert_eq!(serial.len() + parallel.len(), cases.len());
+    (serial, parallel)
+}
+
+fn execute_case(compilation: &Compilation, case: &filtering::TestCase) -> ExecutedCase {
+    let mut host = crate::runtime::RecordingHost::default();
+    host.set_security_policy(compilation.security.clone());
+    host.set_database_fixtures(compilation.database_fixtures.clone());
+    let execution = Interpreter::with_host(host).run_test(
+        &compilation.program,
+        &case.setup_methods,
+        case.target,
+    );
+    let failure = execution.diagnostic.as_ref().map(|diagnostic| TestFailure {
+        exception_type: diagnostic.exception_type.clone(),
+        message: diagnostic.message.clone(),
+        rendered: compilation.render_diagnostic(diagnostic),
+    });
+    ExecutedCase {
+        result: TestResult {
+            name: case.name.clone(),
+            class_name: case.class_name.clone(),
+            method_name: case.method_name.clone(),
+            output: execution.output,
+            failure,
+        },
+        trace: execution.trace,
+    }
 }

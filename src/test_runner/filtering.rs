@@ -7,6 +7,7 @@ pub(super) struct TestCase {
     pub(super) method_name: String,
     pub(super) target: ClassMemberId,
     pub(super) setup_methods: Vec<ClassMemberId>,
+    pub(super) allows_parallel: bool,
 }
 
 pub(super) fn discover_tests(compilation: &Compilation, filter: Option<&str>) -> Vec<TestCase> {
@@ -38,6 +39,11 @@ pub(super) fn discover_tests(compilation: &Compilation, filter: Option<&str>) ->
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let allows_parallel = class
+            .annotations
+            .iter()
+            .find_map(|annotation| annotation.kind.test_parallelism())
+            .unwrap_or(true);
         for (member_id, member) in class.members.iter().enumerate() {
             let ClassMember::Method(method) = member else {
                 continue;
@@ -62,6 +68,7 @@ pub(super) fn discover_tests(compilation: &Compilation, filter: Option<&str>) ->
                     member_id,
                 },
                 setup_methods: setup_methods.clone(),
+                allows_parallel,
             });
         }
     }

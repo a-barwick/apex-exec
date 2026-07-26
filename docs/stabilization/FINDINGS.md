@@ -337,6 +337,23 @@ Canonical hierarchy-edge identity and duplicate diagnostics belong in the
 lossless type/identity work in S1-02. S0-01 remains scoped to preserving and
 checking generic arguments plus process-safe hierarchy traversal.
 
+## M28 recovery follow-up findings
+
+### F-M28-01 — Q4C exposes a single-element M21 test loop
+
+Q4C removed the 28 warning-denied production diagnostics that had previously
+stopped Clippy before it reached the full test inventory. On the Q4C candidate
+`2b27f17`, Clippy then reports `clippy::single_element_loop` at
+`tests/milestone21.rs:325`: the M21 semantic-phase regression loops over one
+fixed source fixture.
+
+This is a test-shape hygiene finding, not an Apex behavior, parser, checker,
+runtime, M22-input, fixture, or lint-policy defect. M28-Q4D is the narrowly
+scoped follow-up: bind the sole fixture directly while preserving its exact
+parse/check assertion, source string, diagnostic behavior, and coverage. It
+depends on verification of the Q4C candidate and must not change Q4C's
+production fixes or package status.
+
 ## Scale and compatibility risks to benchmark
 
 - Deterministic Set and Map storage is vector-backed; lookup and structural

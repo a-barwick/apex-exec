@@ -7,7 +7,7 @@ public class InvoiceTriggerHandler {
 
     public static void beforeUpdate(
         List<Invoice__c> invoices,
-        Map<String, Invoice__c> oldInvoices
+        Map<Id, Invoice__c> oldInvoices
     ) {
         for (Invoice__c invoice : invoices) {
             Invoice__c previous = oldInvoices.get(invoice.Id);

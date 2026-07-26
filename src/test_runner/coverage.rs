@@ -1,7 +1,7 @@
 use super::{CoverageReport, FileCoverage};
 use crate::{
     ast::{
-        ClassMember, Expression, Statement,
+        ClassMember, Expression, Statement, SwitchLabels,
         visit::{self, Visitor},
     },
     project::Compilation,
@@ -145,9 +145,7 @@ fn visit_statement(
     statements: &mut BTreeSet<Span>,
     branches: &mut BTreeSet<Span>,
 ) {
-    if statement_is_executable_line(statement) {
-        statements.insert(statement.span());
-    }
+    register_executable_line(statement, statements);
     match statement {
         Statement::Block {
             statements: body, ..
@@ -172,15 +170,8 @@ fn visit_statement(
         }
         | Statement::DoWhile {
             condition, body, ..
-        } => {
-            branches.insert(condition.span());
-            visit_statement(body, statements, branches);
-        }
-        Statement::Switch { arms, .. } => {
-            for arm in arms {
-                visit_statement(&arm.body, statements, branches);
-            }
-        }
+        } => visit_condition_body(condition, body, statements, branches),
+        Statement::Switch { arms, .. } => visit_switch_arms(arms, statements, branches),
         Statement::For {
             initializer,
             condition,
@@ -220,11 +211,36 @@ fn visit_statement(
     }
 }
 
-fn statement_is_executable_line(statement: &Statement) -> bool {
-    !matches!(
+fn register_executable_line(statement: &Statement, statements: &mut BTreeSet<Span>) {
+    if !matches!(
         statement,
         Statement::Block { .. } | Statement::Sequence { .. }
-    )
+    ) {
+        statements.insert(statement.span());
+    }
+}
+
+fn visit_condition_body(
+    condition: &Expression,
+    body: &Statement,
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    branches.insert(condition.span());
+    visit_statement(body, statements, branches);
+}
+
+fn visit_switch_arms(
+    arms: &[crate::ast::SwitchArm],
+    statements: &mut BTreeSet<Span>,
+    branches: &mut BTreeSet<Span>,
+) {
+    for arm in arms {
+        if let SwitchLabels::TypePattern(pattern) = &arm.labels {
+            branches.insert(pattern.span);
+        }
+        visit_statement(&arm.body, statements, branches);
+    }
 }
 
 fn visit_if_statement(
@@ -315,5 +331,40 @@ impl<'ast> Visitor<'ast> for ExpressionBranchCollector<'_> {
             _ => {}
         }
         visit::walk_expression(self, expression);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statement_traversal_registers_executable_lines_and_control_flow_branches() {
+        let program = crate::parse(
+            "if (true) { thenBranch(); } else { elseBranch(); }
+             while (false) { whileBody(); }
+             do { doBody(); } while (false);
+             for (Integer i = 0; i < 1; i++) { forBody(); }
+             switch on value {
+                 when String text { typeArm(); }
+                 when else { elseArm(); }
+             }",
+        )
+        .unwrap();
+        let mut statements = BTreeSet::new();
+        let mut branches = BTreeSet::new();
+
+        for statement in &program.statements {
+            visit_statement(statement, &mut statements, &mut branches);
+        }
+
+        assert_eq!(statements.len(), 14);
+        assert_eq!(branches.len(), 5);
+        assert!(
+            program
+                .statements
+                .iter()
+                .all(|statement| statements.contains(&statement.span()))
+        );
     }
 }

@@ -26,7 +26,8 @@ fn parses_and_checks_supported_test_annotations_and_signatures() {
     assert!(matches!(
         parsed.classes[0].annotations[0].kind,
         AnnotationKind::IsTest {
-            see_all_data: Some(false)
+            see_all_data: Some(false),
+            is_parallel: None
         }
     ));
 

@@ -657,6 +657,17 @@ DML preparation. Project-local `.apex-exec/security.json` and
 fixtures without turning org configuration into semantic-analysis state. See
 ADR 0030 and `docs/specifications/sharing-security.md`.
 
+M28 keeps enterprise blocker closure on the same typed boundaries. SObject
+switch patterns, exact equality, Comparable dispatch, and Batchable/Stateful
+contracts are resolved in semantic analysis and carried through HIR; runtime
+does not rediscover them from rendered syntax. Imported metadata relationships
+and complete roll-up definitions live in normalized schema independently of
+SQLite representation. Read-only summaries are computed in the query layer
+with one shared child scan, while async execution uses bounded enqueue-time
+value snapshots and preserves a batch receiver only for the checked
+`Database.Stateful` marker. See ADR 0031 and
+`docs/MILESTONE_28_CHECKPOINT.md`.
+
 ## Performance direction
 
 Correctness and phase boundaries take priority during the language milestones.

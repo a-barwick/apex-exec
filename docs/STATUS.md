@@ -11,9 +11,10 @@ The pre-open-source audit and execution strategy are now captured in
 correctness criteria have passed. M18 — null-aware expressions, M19 — bitwise,
 shift, `Long`, and compound operators, M20 — nested declarations, enums, and
 type literals, and M21 — North Star grammar closure are complete.
-M22 through M25 are also complete: the enterprise denominator is frozen,
-query and partial-DML fidelity are expanded, and effective Salesforce API
-profiles now bind every project source and downstream result.
+M22 through M27 are also complete: the enterprise denominator is frozen,
+query and partial-DML fidelity are expanded, effective Salesforce API profiles
+now bind every project source and downstream result, and sharing/security
+behavior has live-reviewed evidence.
 
 S0-01 through S0-05 are integrated and complete on `codex/stabilization`.
 S0-04 execution context/lazy class initialization merged as `c847fb2` after
@@ -484,9 +485,185 @@ acceptance criteria, branch rules, and the coordinator prompt live under
 ## Immediate target
 
 M27 sharing and security profiles is complete. M28 measured enterprise
-compatibility closure is the next planned milestone. The package tracker is in
-`docs/STABILIZATION.md`; the complete Phase 2 sequence and its evidence
-baseline are in `ROADMAP.md` and `docs/PHASE_2_BASELINE.md`.
+compatibility closure is active. Its V0 integrated quality gate is complete;
+M28-C1 is reviewed and integrated from `codex/m28-c1-id-sobject-type` and adds
+the typed `Id.getSObjectType` boundary. Its focused local/Salesforce
+differential evidence matches compile and values, 2/2 dimensions. Ten earlier
+bounded slices are checkpointed:
+typed SObject switch patterns, `@IsTest(IsParallel=...)`, metadata
+relationships, roll-up summaries, exact equality, `ALL ROWS` and undelete
+behavior, `@SuppressWarnings`, `@TestVisible`, custom Comparable sorting, and
+`Database.Stateful`.
+
+The integrated transient-property slice (`d2aefd2`) is covered by a focused
+local/Salesforce comparison that matches 2/2 dimensions. CN2 then resolved
+equivalent nested-enum type spellings through the checked type-identity
+boundary, matched its focused local/Salesforce comparison 2/2, and was
+reviewed and integrated at `fd6806d`. CN3 permits the checked
+`Map<Id,SObject>` narrowing while preserving runtime generic identity: a
+manually constructed generic map raises `TypeException`, but a typed trigger
+map narrows successfully. It matched its focused local/Salesforce comparison
+2/2, passed independent review, and was integrated at `bbbd519`.
+
+Its post-slice frozen enterprise census parses 1,159/1,159 tests and checks
+0/1,159 across three deterministic runs. The next first blocker is static
+`Boolean.valueOf` resolution, affecting 1,121 tests; `Flow.Interview` affects
+18 tests and `System.FeatureManagement.checkPermission` affects 15. The V0
+quality gate cleared the recorded Rust, tooling, website, editor, dependency,
+documentation, maintainability, and coverage checks. The strict numerator
+therefore remains 0/1,159, the 60% exit criterion is unmet, and M28 must not
+merge as complete. The checked-in census is
+`evidence/milestone28/census-4/report.json`. M28-CN4 is implemented on
+`codex/m28-cn4-boolean-valueof` and awaiting independent review. It adds the
+checked static `Boolean.valueOf(String)` intrinsic: case-insensitive exact
+`true` returns `true`, other captured strings return `false`, and null raises
+`NullPointerException`. Its focused local/Salesforce evidence matches 2/2
+dimensions in `evidence/milestone28/cn4/`. No later family may begin before
+CN4 is reviewed, integrated, and followed by a fresh enterprise census.
+
+CN4 has since been independently reviewed and integrated at `600af4d`. Its
+post-slice frozen replay is `evidence/milestone28/census-5/report.json`: it is
+deterministic but remains 0/1,159 strict-compatible. Static `Integer`
+resolution was the first blocker (1,121 tests). M28-CN5 was audited and
+integrated at `e0ebfe5`. It records distinct checked HIR targets for
+`Integer.valueOf(String)` and `Integer.valueOf(Integer)`, including typed null
+and catchable conversion failures. Its focused local/Salesforce evidence
+matches 2/2 dimensions in `evidence/milestone28/cn5/`; the temporary org
+fixture was removed after capture.
+
+The post-CN5 frozen replay is
+`evidence/milestone28/census-6/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. Generated custom-share SObject
+resolution for `Log__Share` is now the first blocker (1,121 tests), so M28-CN6
+was selected. CN6 imports custom sharing reasons and synthesizes the checked
+eight-field `__Share` schema, including typed access-level and row-cause
+picklist constants. Its focused local/Salesforce evidence matches 2/2
+dimensions in `evidence/milestone28/cn6/`; a guarded API 65.0 schema query
+binds the generated field set and nullability, and the temporary class and
+custom object were removed after capture. Share-row visibility propagation
+remains outside this bounded package. CN6 passed independent review and was
+integrated at `798c438`.
+
+The post-CN6 frozen replay is
+`evidence/milestone28/census-7/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. `System.OrgLimit` is now the
+first blocker (1,121 tests), so M28-CN7 was selected.
+
+CN7 passed independent review and was integrated at `ac756a0`. Checked HIR
+distinguishes `System.OrgLimits.getMap()` and the three zero-argument
+`System.OrgLimit` accessors. Runtime values come from one explicit,
+deterministic platform-host snapshot; unavailable custom hosts fail explicitly,
+and malformed snapshots are rejected. Focused local/Salesforce evidence
+matches 2/2 dimensions in `evidence/milestone28/cn7/`, and the temporary Apex
+class was removed after capture.
+
+The post-CN7 frozen replay is
+`evidence/milestone28/census-8/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The organization-limit first
+blocker is gone; all 1,121 affected tests now advance to missing
+`User.IsActive` on the standard `User` schema, so M28-CN8 is Ready.
+
+CN8 passed independent review and was integrated at `d679e6e`. The
+curated standard schema now types `User.IsActive` as Boolean, including direct
+record access, describe metadata, and the enterprise
+`ApexEmailNotification.User.IsActive` relationship filter. Its focused
+local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn8/`, and the temporary Apex class was removed after
+capture. The fixed standard-schema construction budget is 151 fields.
+
+The post-CN8 frozen replay is
+`evidence/milestone28/census-9/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The `User.IsActive` blocker is
+gone; the same 1,121 tests now advance to missing
+`FlowDefinitionView.VersionNumber`, so M28-CN9 is Ready.
+
+CN9 passed independent review and was integrated at `b014898`. The curated
+standard schema now types
+`FlowDefinitionView.VersionNumber` as Integer for static queries, record
+access, and describe metadata. Its focused local/Salesforce evidence matches
+2/2 dimensions in `evidence/milestone28/cn9/`, and the temporary Apex class
+was removed after capture. The fixed standard-schema construction budget is
+152 fields.
+
+The post-CN9 frozen replay is
+`evidence/milestone28/census-10/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The `VersionNumber` blocker
+is gone; the same 1,121 tests now advance to missing
+`FlowDefinitionView.IsActive`, so M28-CN10 is Ready.
+
+CN10 passed independent review and was integrated at `9a96d1d`. The curated
+standard schema now types `FlowDefinitionView.IsActive` as Boolean for
+filtered static queries, record access, and describe metadata. Its focused
+local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn10/`, and the temporary Apex class was removed after
+capture. The fixed standard-schema construction budget is 153 fields.
+
+The post-CN10 frozen replay is
+`evidence/milestone28/census-11/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The `IsActive` blocker is
+gone; the same 1,121 tests now advance to a `List<SObject>`-to-`Log__c` cast
+diagnostic, so M28-CN11 is Ready.
+
+CN11 passed independent review and was integrated at `d0b829d`. An
+SObject-typed `Database.query` result now carries a checked single-record
+target into runtime: exactly one row returns the concrete record, while zero
+or multiple rows raise `QueryException`. Arbitrary `List<SObject>`-to-record
+casts remain rejected, and the deterministic cost assertion fixes one host
+query per source query. Focused local/Salesforce evidence matches 2/2
+dimensions in `evidence/milestone28/cn11/`; temporary Account rows and the
+Apex class were removed after capture.
+
+The post-CN11 frozen replay is
+`evidence/milestone28/census-12/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The single-record
+dynamic-query blocker is gone; 1,117 tests now advance to missing
+`Messaging.SingleEmailMessage`, so M28-CN12 is Ready.
+
+CN12 passed independent review after bounded corrections and was integrated
+at `b88a8f2`. It implements the enterprise-used
+`Messaging.SingleEmailMessage` constructor, setters, getters, cumulative
+transaction-local capacity reservation, typed send results and errors, and an
+explicit host boundary for email delivery. Focused local tests pass, including
+deterministic capacity failures and one recorded host invocation per send
+call. The guarded Salesforce comparison matches 2/2 dimensions, sends no
+email, and leaves no temporary Apex class.
+
+The post-CN12 frozen replay is
+`evidence/milestone28/census-13/report.json`. Across three deterministic runs,
+it preserves both frozen input bindings, discovers and parses 1,159/1,159
+tests, and remains 0/1,159 at checking, execution, agreement, and strict
+compatibility. The 1,117-test email blocker is gone; 1,005 tests now first
+stop at missing `Approval.LockResult` in `LogEntryEventBuilder.cls`.
+
+CN13 passed independent review after generic-placement corrections and was
+integrated at `95ea6db`. The bounded slice adds `Approval.LockResult`
+type/list identity, JSON construction and serialization, and `isSuccess()`,
+`getId()`, and `getErrors()` through the existing typed DML result/error
+machinery. The guarded API 65.0 Salesforce comparison matches 2/2
+compile/value dimensions without approval or DML mutation, and the temporary
+Apex class was deleted and verified absent. The focused M28 suite passes
+60/60. `Approval.ProcessResult` and `Approval.UnlockResult` remain explicitly
+unsupported at this integration head.
+
+The post-CN13 frozen replay is
+`evidence/milestone28/census-14/report.json`. Across three deterministic runs,
+it preserves both frozen input bindings, discovers and parses 1,159/1,159
+tests, and remains 0/1,159 at checking, execution, agreement, and strict
+compatibility. The `Approval.LockResult` blocker is gone; 1,005 tests now first
+stop at missing `Approval.ProcessResult` in `LogEntryEventBuilder.cls`, so
+M28-CN14 is Ready.
+
+`Flow.Interview` remains the second independent closure at 18 tests.
+The frozen handoff is in
+`docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
+prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.
 
 ## North Star indicators
 

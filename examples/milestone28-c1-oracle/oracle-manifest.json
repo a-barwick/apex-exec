@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "id-get-sobject-type-fidelity",
+      "project": ".",
+      "entrypoint": {
+        "kind": "invoke",
+        "target": "M28C1IdOracle.run"
+      },
+      "compare": [
+        "compile",
+        "values"
+      ]
+    }
+  ]
+}

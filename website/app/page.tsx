@@ -53,10 +53,31 @@ const roadmap = [
   },
   {
     milestone: "M19–M21",
-    state: "Planned",
-    title: "North Star grammar closure",
+    state: "Complete",
+    title: "Grammar and type closure",
     description:
-      "Bitwise, nested-type, enum, and remaining grammar slices build on the completed M18 foundation.",
+      "Bitwise, nested-type, enum, and the pinned North Star grammar close on the completed M18 foundation.",
+  },
+  {
+    milestone: "M22–M27",
+    state: "Complete",
+    title: "Measured compatibility foundation",
+    description:
+      "Enterprise benchmarking, metadata accounting, query/DML fidelity, effective API profiles, and sharing/security evidence.",
+  },
+  {
+    milestone: "M28",
+    state: "Active",
+    title: "Enterprise compatibility closure",
+    description:
+      "V0 is complete; typed compatibility slices now raise the frozen enterprise replay from its measured 0/1,159 strict baseline.",
+  },
+  {
+    milestone: "M29–M30",
+    state: "Planned",
+    title: "Persistent performance and release evidence",
+    description:
+      "Restart-safe incremental IR, dependency-scoped semantic work, and final candidate-bound release evidence.",
   },
 ];
 
@@ -194,7 +215,7 @@ export default function Home() {
 
       <section className="signal-strip" aria-label="Project signals">
         <div>
-          <strong>17</strong>
+          <strong>27</strong>
           <span>milestones complete</span>
         </div>
         <div>
@@ -274,7 +295,7 @@ export default function Home() {
             <h2>Built as infrastructure, not a demo.</h2>
           </div>
           <p>
-            Seventeen completed milestones form a coherent local-development
+            Twenty-seven completed milestones form a coherent local-development
             and evidence foundation. Each layer has clear ownership, executable
             coverage, and deliberately bounded compatibility claims.
           </p>
@@ -357,8 +378,8 @@ export default function Home() {
             </h2>
             <p>
               Apex Exec has a working local feedback loop and reviewed live
-              validation evidence. Bounded stabilization and M18 null-aware
-              expressions are complete; M19 is next.
+              validation evidence. M18 through M27 are complete, and M28 is
+              active on measured enterprise compatibility closure.
             </p>
           </div>
           <div className="decision-actions">

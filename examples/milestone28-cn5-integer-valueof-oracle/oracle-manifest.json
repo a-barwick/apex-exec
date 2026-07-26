@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "integer-valueof-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN5IntegerValueOfOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

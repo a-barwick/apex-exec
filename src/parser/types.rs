@@ -181,7 +181,7 @@ impl Parser {
         probe.advance();
         let numeric_scalar = matches!(
             candidate,
-            TypeName::Integer | TypeName::Long | TypeName::Decimal
+            TypeName::Integer | TypeName::Long | TypeName::Decimal | TypeName::Double
         );
         match &probe.current().kind {
             // Signed unary operands disambiguate only numeric scalar casts;

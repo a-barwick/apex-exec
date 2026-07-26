@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "dynamic-query-single-cast-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN11DynamicQuerySingleCastOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

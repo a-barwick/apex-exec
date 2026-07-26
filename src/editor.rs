@@ -355,6 +355,9 @@ impl<'ast> Visitor<'ast> for IndexBuilder<'_> {
                 ReferenceTarget::InstanceMember(target) | ReferenceTarget::StaticMember(target),
             ) => Some(Symbol::Member(target)),
             Some(ReferenceTarget::Super(class_id)) => Some(Symbol::Class(class_id)),
+            Some(ReferenceTarget::EnumConstant { class_id, .. }) => {
+                Some(Symbol::Class(class_id.index()))
+            }
             _ => None,
         };
         if let Some(symbol) = symbol {

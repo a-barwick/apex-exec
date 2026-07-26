@@ -46,6 +46,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &mut self,
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
+        single_record: bool,
         access_level_argument: Option<usize>,
         arguments: &[Expression],
         span: Span,
@@ -66,7 +67,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         };
-        let mut checked = self.check_dynamic_query(&source, expected_object_id, kind, span)?;
+        let mut checked =
+            self.check_dynamic_query(&source, expected_object_id, single_record, kind, span)?;
         if let Some(access) = access {
             checked.access = match access {
                 crate::platform::AccessLevel::UserMode => {
@@ -104,6 +106,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &self,
         source: &str,
         expected_object_id: Option<usize>,
+        single_record: bool,
         kind: DatabaseQueryKind,
         span: Span,
     ) -> Result<CheckedSoqlQuery, Diagnostic> {
@@ -115,7 +118,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             )
         })?;
         let bindings = self.visible_query_binding_types();
-        let expected_type = self.dynamic_query_expected_type(expected_object_id, span);
+        let expected_type =
+            self.dynamic_query_expected_type(expected_object_id, single_record, span);
         let checked = crate::semantic::check_dynamic_soql(
             &parsed,
             self.program().schema(),
@@ -160,6 +164,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn dynamic_query_expected_type(
         &self,
         expected_object_id: Option<usize>,
+        single_record: bool,
         span: Span,
     ) -> Option<TypeName> {
         expected_object_id.map(|object_id| {
@@ -168,10 +173,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .schema()
                 .object_at(object_id)
                 .expect("checked dynamic query object is valid");
-            TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+            let object_type = TypeName::Custom(crate::ast::NamedType::new(
                 object.api_name().to_owned(),
                 span,
-            ))))
+            ));
+            if single_record {
+                object_type
+            } else {
+                TypeName::List(Box::new(object_type))
+            }
         })
     }
 
@@ -922,7 +932,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     ) -> Result<TriggerContext, Diagnostic> {
         let object_type = TypeName::Custom(crate::ast::NamedType::new(object.to_owned(), span));
         let list_type = TypeName::List(Box::new(object_type.clone()));
-        let map_type = TypeName::Map(Box::new(TypeName::String), Box::new(object_type.clone()));
+        let map_type = TypeName::Map(Box::new(TypeName::Id), Box::new(object_type.clone()));
         let operation = event.operation();
         let new_available = operation != AstDmlOperation::Delete;
         let old_available = matches!(operation, AstDmlOperation::Update | AstDmlOperation::Delete);
@@ -989,11 +999,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 let Value::String(value) = instance.fields.get(&id_field)? else {
                     return None;
                 };
-                Some((Value::String(value.clone()), Value::SObject(*id)))
+                Some((Value::Id(value.clone()), Value::SObject(*id)))
             })
             .collect();
         let value = self.store.allocate_collection(Collection::Map {
-            key_type: TypeName::String,
+            key_type: TypeName::Id,
             value_type,
             entries,
         });
@@ -1078,10 +1088,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ));
         };
         let PlatformValue::DmlResult { ty, outcome } = self.store.platform(id).clone() else {
-            return Err(Diagnostic::new(
-                "invalid checked Database result receiver",
-                span,
-            ));
+            return Err(Diagnostic::new("invalid checked DML result receiver", span));
         };
         match target {
             DmlResultMethod::IsSuccess => Ok(Value::Boolean(outcome.is_success())),
@@ -1205,6 +1212,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .map(|value| self.query_usize(value, span))
                 .transpose()?
                 .unwrap_or(0),
+            all_rows: query.all_rows,
             count_scalar: query.result == QueryResultKind::Count,
             now_millis,
         })
@@ -1535,11 +1543,34 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn value_to_data(&self, value: &Value, span: Span) -> Result<DataValue, Diagnostic> {
         match value {
             Value::String(value) => Ok(DataValue::String(value.clone())),
+            Value::Id(value) => Ok(DataValue::String(value.clone())),
             Value::Boolean(value) => Ok(DataValue::Boolean(*value)),
             Value::Integer(value) => Ok(DataValue::Integer(*value)),
             Value::Date(value) => Ok(DataValue::Date(date_to_epoch_days(*value, span)?)),
             Value::Datetime(value) => Ok(DataValue::Datetime(value.timestamp_millis())),
             Value::Null(_) => Ok(DataValue::Null),
+            Value::SObject(id) => {
+                let instance = self.store.sobject(*id);
+                let object = self
+                    .program()
+                    .schema()
+                    .object_at(instance.object_id)
+                    .expect("runtime SObject schema index is valid");
+                let field_id = object
+                    .field_index("Id")
+                    .expect("schema-backed SObjects contain an Id field");
+                match instance.fields.get(&field_id) {
+                    Some(Value::String(value) | Value::Id(value)) => {
+                        Ok(DataValue::String(value.clone()))
+                    }
+                    Some(Value::Null(_)) | None => Ok(DataValue::Null),
+                    Some(_) => Err(runtime_exception(
+                        "QueryException",
+                        "SObject query bind has a non-Id value in its Id field",
+                        span,
+                    )),
+                }
+            }
             _ => Err(runtime_exception(
                 "QueryException",
                 "query bind evaluated to an unsupported value",
@@ -1992,9 +2023,13 @@ fn date_to_epoch_days(value: NaiveDate, span: Span) -> Result<i32, Diagnostic> {
 
 fn dynamic_query_result_is_valid(kind: DatabaseQueryKind, result: QueryResultKind) -> bool {
     match kind {
-        DatabaseQueryKind::Query | DatabaseQueryKind::QueryLocator => {
-            result == QueryResultKind::Records
+        DatabaseQueryKind::Query => {
+            matches!(
+                result,
+                QueryResultKind::Records | QueryResultKind::RecordSingle
+            )
         }
+        DatabaseQueryKind::QueryLocator => result == QueryResultKind::Records,
         DatabaseQueryKind::Count => result == QueryResultKind::Count,
     }
 }

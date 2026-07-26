@@ -21,6 +21,7 @@ pub(super) struct ExecutionStore {
     platform_values: Vec<PlatformValue>,
     static_fields: HashMap<ClassMemberId, Slot>,
     class_initialization: HashMap<usize, ClassInitializationState>,
+    single_email_reserved_capacity: i64,
 }
 
 impl ExecutionStore {
@@ -70,6 +71,7 @@ impl ExecutionStore {
             fields: BTreeMap::new(),
             relationships: BTreeMap::new(),
             children: BTreeMap::new(),
+            dml_options: None,
         });
         Value::SObject(id)
     }
@@ -105,6 +107,17 @@ impl ExecutionStore {
         self.platform_values
             .get_mut(id.0)
             .expect("runtime platform handles are always valid")
+    }
+
+    pub(super) fn single_email_reserved_capacity(&self) -> i64 {
+        self.single_email_reserved_capacity
+    }
+
+    pub(super) fn reserve_single_email_capacity(&mut self, amount: i64) {
+        self.single_email_reserved_capacity = self
+            .single_email_reserved_capacity
+            .checked_add(amount)
+            .expect("validated Integer reservations cannot overflow i64");
     }
 
     pub(super) fn sobject(&self, id: SObjectId) -> &SObjectInstance {
