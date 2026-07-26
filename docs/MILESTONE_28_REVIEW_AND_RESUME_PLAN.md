@@ -302,7 +302,9 @@ package after review and integration.
 | M28-CENSUS-10 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-10/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN9 integrated at `b014898` | Enterprise evidence only |
 | M28-CN10 | One next-ranked compatibility family | Complete (integrated at `9a96d1d`; independent review approved; checked `FlowDefinitionView.IsActive` Boolean field; Salesforce 2/2; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-10 complete | Standard schema and query typing |
 | M28-CENSUS-11 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-11/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN10 integrated at `9a96d1d` | Enterprise evidence only |
-| M28-CN11 | One next-ranked compatibility family | Review on `codex/m28-cn11-dynamic-query-cast` (typed single-record `Database.query` casts, Salesforce 2/2, candidate replay advances 1,117 tests to `Messaging.SingleEmailMessage`) | CENSUS-11 complete | Semantic and runtime dynamic-query cardinality |
+| M28-CN11 | One next-ranked compatibility family | Complete (integrated at `d0b829d`; independent review approved; typed single-record `Database.query` casts and assignment; Salesforce 2/2; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-11 complete | Semantic and runtime dynamic-query cardinality |
+| M28-CENSUS-12 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-12/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN11 integrated at `d0b829d` | Enterprise evidence only |
+| M28-CN12 | One next-ranked compatibility family | Ready (`Messaging.SingleEmailMessage`, affecting 1,117 tests) | CENSUS-12 complete | Messaging email platform surface |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -536,5 +538,9 @@ remains 0/1,159, and the same 1,121 tests now stop at missing
 integrated at `9a96d1d`. Its eleventh sealed census is recorded at
 `evidence/milestone28/census-11/report.json`; strict compatibility remains
 0/1,159, and the same 1,121 tests now stop at a `List<SObject>`-to-`Log__c`
-cast diagnostic. Claim that Ready CN11 family on a dedicated branch; do not
-start `Flow.Interview` or another later family first.
+cast diagnostic. CN11 passed independent review and was integrated at
+`d0b829d`. Its twelfth sealed census is recorded at
+`evidence/milestone28/census-12/report.json`; strict compatibility remains
+0/1,159, and 1,117 tests now stop at missing
+`Messaging.SingleEmailMessage`. Claim that Ready CN12 family on a dedicated
+branch; do not start `Flow.Interview` or another later family first.

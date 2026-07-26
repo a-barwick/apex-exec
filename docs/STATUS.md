@@ -610,17 +610,21 @@ execution, agreement, and strict compatibility. The `IsActive` blocker is
 gone; the same 1,121 tests now advance to a `List<SObject>`-to-`Log__c` cast
 diagnostic, so M28-CN11 is Ready.
 
-CN11 is implemented on `codex/m28-cn11-dynamic-query-cast` and is in Review.
-An SObject-typed `Database.query` result now carries a checked single-record
+CN11 passed independent review and was integrated at `d0b829d`. An
+SObject-typed `Database.query` result now carries a checked single-record
 target into runtime: exactly one row returns the concrete record, while zero
 or multiple rows raise `QueryException`. Arbitrary `List<SObject>`-to-record
 casts remain rejected, and the deterministic cost assertion fixes one host
 query per source query. Focused local/Salesforce evidence matches 2/2
 dimensions in `evidence/milestone28/cn11/`; temporary Account rows and the
-Apex class were removed after capture. A fresh candidate replay removes the
-cast blocker; 1,117 tests now advance to missing
-`Messaging.SingleEmailMessage`. CN11 is not integrated yet, so CN12 must not
-be claimed.
+Apex class were removed after capture.
+
+The post-CN11 frozen replay is
+`evidence/milestone28/census-12/report.json`. Across three deterministic runs,
+it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
+execution, agreement, and strict compatibility. The single-record
+dynamic-query blocker is gone; 1,117 tests now advance to missing
+`Messaging.SingleEmailMessage`, so M28-CN12 is Ready.
 
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
