@@ -841,22 +841,23 @@ The frozen post-CN12 replay is
 strict-compatible, removes the email blocker, and selects missing
 `Approval.LockResult` (1,005 affected tests) as CN13.
 
-CN13 is in Review on `codex/m28-cn13-approval-lock-result`. Apex Exec now
-recognizes `Approval.LockResult` and `List<Approval.LockResult>`, constructs
-deterministic success and failure values through `JSON.deserialize`, emits the
-Salesforce field order for compact and pretty JSON, and exposes
-`isSuccess()`, `getId()`, and `getErrors()`. Errors reuse the existing typed
-`Database.Error` and `StatusCode` representation, including
+CN13 passed independent review after generic-placement corrections and was
+integrated at `95ea6db`. Apex Exec recognizes `Approval.LockResult` and
+`List<Approval.LockResult>`, constructs deterministic success and failure
+values through `JSON.deserialize`, emits the Salesforce field order for
+compact and pretty JSON, and exposes `isSuccess()`, `getId()`, and
+`getErrors()`. Errors reuse the existing typed `Database.Error` and
+`StatusCode` representation, including
 `INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY`; conversion and serialization
 retain fixed node, depth, and element budgets. Focused API 65.0 Salesforce
 compile/value evidence matches 2/2 dimensions without approval or DML
 mutation. `Approval.ProcessResult`, `Approval.UnlockResult`, and approval
-operations remain explicitly unsupported.
+operations remain explicitly unsupported at this integration head.
 
-The candidate-only frozen replay is recorded in
-`evidence/milestone28/cn13/candidate-census.json`. It remains 0/1,159 strict
-compatible and selects missing `Approval.ProcessResult` (1,005 affected tests)
-as the census-derived next blocker; CN13 does not claim or implement it.
+The frozen post-CN13 replay is recorded in
+`evidence/milestone28/census-14/report.json`. It remains 0/1,159 strict
+compatible, removes the lock-result blocker, and selects missing
+`Approval.ProcessResult` (1,005 affected tests) as the Ready CN14 family.
 
 ## Platform surface
 

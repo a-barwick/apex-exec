@@ -38,7 +38,10 @@ denominator remains 1,159. Discovery and parsing are 1,159/1,159 while check,
 execution, agreement, and strict compatibility remain 0/1,159. CN13 removes
 the `Approval.LockResult` first blocker; the same 1,005 tests now first stop at
 missing `Approval.ProcessResult`. That is the census-derived next blocker, not
-part of this package and not a formal post-integration census.
+part of this package. CN13 later passed independent review after bounded
+generic-placement corrections and was integrated at `95ea6db`; the sealed
+census at `evidence/milestone28/census-14/report.json` reproduces the same
+funnel and blocker ranking across three deterministic runs.
 
 Credential-free focused replay:
 
