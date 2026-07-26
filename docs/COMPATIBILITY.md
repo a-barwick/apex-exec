@@ -798,16 +798,18 @@ The frozen post-CN9 replay is
 strict-compatible and selects the missing `FlowDefinitionView.IsActive`
 standard-schema field (1,121 affected tests) as the Ready CN10 family.
 
-The CN10 `FlowDefinitionView.IsActive` slice is implemented on
-`codex/m28-cn10-flow-definition-active` and is in Review. The field is a
-checked Boolean on the curated standard schema, its describe surface reports
-`IsActive`/`BOOLEAN`, and a filtered query result assigns to an Apex `Boolean`.
-Focused local/Salesforce evidence matches 2/2 dimensions in
-`evidence/milestone28/cn10/`; assigning a String is rejected, and the fixed
-standard-schema construction budget covers 153 fields. A candidate frozen
-replay removes this diagnostic and exposes a `List<SObject>`-to-`Log__c` cast
-diagnostic as the next first blocker for the same 1,121 tests. CN10 is not
-integrated yet.
+The CN10 `FlowDefinitionView.IsActive` slice passed independent review and was
+integrated at `9a96d1d`. The field is a checked Boolean on the curated
+standard schema, its describe surface reports `IsActive`/`BOOLEAN`, and a
+filtered query result assigns to an Apex `Boolean`. Focused local/Salesforce
+evidence matches 2/2 dimensions in `evidence/milestone28/cn10/`; assigning a
+String is rejected, and the fixed standard-schema construction budget covers
+153 fields.
+
+The frozen post-CN10 replay is
+`evidence/milestone28/census-11/report.json`; it remains 0/1,159
+strict-compatible and selects the `List<SObject>`-to-`Log__c` cast diagnostic
+(1,121 affected tests) as the Ready CN11 family.
 
 ## Platform surface
 
