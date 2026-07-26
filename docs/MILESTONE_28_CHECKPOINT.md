@@ -2,19 +2,23 @@
 
 ## 2026-07-26 transfer checkpoint
 
-M28-CN12 passed independent review and was integrated into
-`codex/milestone-28-enterprise-compatibility` at `b88a8f2`. Its focused local
-M28 suite passes 59/59, its guarded Salesforce comparison matches 2/2
-dimensions, and the temporary Salesforce class was deleted and verified
-absent.
+M28-CN13 is in Review on `codex/m28-cn13-approval-lock-result`. It implements
+only the census-selected `Approval.LockResult` type/value surface through the
+existing DML result/error model. Its focused local M28 suite passes 60/60, its
+guarded API 65.0 Salesforce comparison matches 2/2 dimensions with Salesforce
+CLI 2.144.6, and the temporary Salesforce class was Tooling-API deleted and
+verified absent. `Approval.ProcessResult` and `Approval.UnlockResult` remain
+unsupported and unclaimed.
 
 The sealed post-CN12 frozen replay is
 `evidence/milestone28/census-13/report.json`: all 1,159 tests discover and
 parse across three deterministic runs, but strict compatibility remains
 0/1,159. CN12 removes the 1,117-test `Messaging.SingleEmailMessage` blocker;
-the next first blocker is missing `Approval.LockResult`, affecting 1,005
-tests. M28-CN13 is Ready and must be claimed before implementation. Do not
-call M28 complete below 696/1,159.
+the selected CN13 blocker was missing `Approval.LockResult`, affecting 1,005
+tests. The candidate-only CN13 replay preserves the denominator and frozen
+bindings, remains 0/1,159 strict, and advances those 1,005 tests to missing
+`Approval.ProcessResult`. That later family is not claimed or implemented.
+Do not call M28 complete below 696/1,159.
 
 Date: 2026-07-20
 

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "approval-lock-result-surface",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN13ApprovalLockResultOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

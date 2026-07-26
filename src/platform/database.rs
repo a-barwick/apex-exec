@@ -49,6 +49,7 @@ pub enum DmlStatus {
     DuplicateValue,
     InvalidCrossReferenceKey,
     InvalidFieldForInsertUpdate,
+    InsufficientAccessOnCrossReferenceEntity,
     InsufficientAccessOrReadonly,
     MissingArgument,
     RequiredFieldMissing,
@@ -63,6 +64,9 @@ impl DmlStatus {
             "DUPLICATE_VALUE" => Some(Self::DuplicateValue),
             "INVALID_CROSS_REFERENCE_KEY" => Some(Self::InvalidCrossReferenceKey),
             "INVALID_FIELD_FOR_INSERT_UPDATE" => Some(Self::InvalidFieldForInsertUpdate),
+            "INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY" => {
+                Some(Self::InsufficientAccessOnCrossReferenceEntity)
+            }
             "INSUFFICIENT_ACCESS_OR_READONLY" => Some(Self::InsufficientAccessOrReadonly),
             "MISSING_ARGUMENT" => Some(Self::MissingArgument),
             "REQUIRED_FIELD_MISSING" => Some(Self::RequiredFieldMissing),
@@ -78,6 +82,9 @@ impl DmlStatus {
             Self::DuplicateValue => "DUPLICATE_VALUE",
             Self::InvalidCrossReferenceKey => "INVALID_CROSS_REFERENCE_KEY",
             Self::InvalidFieldForInsertUpdate => "INVALID_FIELD_FOR_INSERT_UPDATE",
+            Self::InsufficientAccessOnCrossReferenceEntity => {
+                "INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY"
+            }
             Self::InsufficientAccessOrReadonly => "INSUFFICIENT_ACCESS_OR_READONLY",
             Self::MissingArgument => "MISSING_ARGUMENT",
             Self::RequiredFieldMissing => "REQUIRED_FIELD_MISSING",

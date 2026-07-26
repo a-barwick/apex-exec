@@ -1088,10 +1088,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             ));
         };
         let PlatformValue::DmlResult { ty, outcome } = self.store.platform(id).clone() else {
-            return Err(Diagnostic::new(
-                "invalid checked Database result receiver",
-                span,
-            ));
+            return Err(Diagnostic::new("invalid checked DML result receiver", span));
         };
         match target {
             DmlResultMethod::IsSuccess => Ok(Value::Boolean(outcome.is_success())),

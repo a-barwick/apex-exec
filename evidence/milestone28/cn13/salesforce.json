@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "approval-lock-result-surface",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN13ApprovalLockResultOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "compact": {
+          "id": "001000000000001AAA",
+          "success": true,
+          "errors": []
+        },
+        "errors": 0,
+        "failureErrors": 1,
+        "failureFields": 0,
+        "failureId": "001000000000001AAA",
+        "failureMessage": "denied",
+        "failureStatus": "INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY",
+        "failureSuccess": false,
+        "id": "001000000000001AAA",
+        "listSize": 2,
+        "prettyStatus": "INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY",
+        "success": true,
+        "type": "Approval.LockResult"
+      }
+    }
+  ]
+}

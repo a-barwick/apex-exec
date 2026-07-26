@@ -657,7 +657,7 @@ impl Checker {
                     interface.span,
                 ));
             };
-            return self.validate_type(&argument.ty, argument.span);
+            return self.validate_type_placement(&argument.ty, argument.span, false);
         }
         if !interface.type_arguments.is_empty() {
             return Err(Diagnostic::new(
@@ -2074,7 +2074,20 @@ impl Checker {
     }
 
     fn validate_type(&self, ty: &TypeName, span: Span) -> Result<(), Diagnostic> {
+        self.validate_type_placement(ty, span, true)
+    }
+
+    fn validate_type_placement(
+        &self,
+        ty: &TypeName,
+        span: Span,
+        approval_lock_result_allowed: bool,
+    ) -> Result<(), Diagnostic> {
         match ty {
+            TypeName::ApprovalLockResult if !approval_lock_result_allowed => Err(Diagnostic::new(
+                "Approval.LockResult is supported only as a scalar or List element",
+                span,
+            )),
             TypeName::Custom(name)
                 if !self.class_ids.contains_key(&name.canonical)
                     && self.schema.object(hir::schema_api_name(name)).is_err()
@@ -2086,18 +2099,24 @@ impl Checker {
                 ))
             }
             TypeName::Custom(name) => {
+                for argument in &name.type_arguments {
+                    self.validate_type_placement(&argument.ty, argument.span, false)?;
+                }
                 if let Some(class_id) = self.class_ids.get(&name.canonical).copied() {
                     self.ensure_type_access(class_id, span)
                 } else {
                     Ok(())
                 }
             }
+            TypeName::List(element) if **element == TypeName::ApprovalLockResult => {
+                self.validate_type_placement(element, span, approval_lock_result_allowed)
+            }
             TypeName::List(element) | TypeName::Set(element) | TypeName::Iterable(element) => {
-                self.validate_type(element, span)
+                self.validate_type_placement(element, span, false)
             }
             TypeName::Map(key, value) => {
-                self.validate_type(key, span)?;
-                self.validate_type(value, span)
+                self.validate_type_placement(key, span, false)?;
+                self.validate_type_placement(value, span, false)
             }
             _ => Ok(()),
         }
@@ -2580,6 +2599,9 @@ impl Checker {
     fn check_method(&mut self, method: &MethodDeclaration) -> Result<(), Diagnostic> {
         self.validate_return_type(&method.return_type, method.name.span)?;
         let Some(body) = method.body.as_ref() else {
+            for parameter in &method.parameters {
+                self.validate_type(&parameter.ty, parameter.span)?;
+            }
             return Ok(());
         };
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
@@ -2707,6 +2729,7 @@ impl Checker {
                 body,
                 ..
             } => {
+                self.validate_type(element_type, name.span)?;
                 let actual_element_type = self.iterable_element_type(iterable)?;
                 self.require_assignable(
                     element_type,
@@ -3303,15 +3326,7 @@ impl Checker {
         let mut catches_everything = false;
         let mut seen = Vec::new();
         for catch in catches {
-            if !self.is_exception_type(&catch.exception_type) {
-                return Err(Diagnostic::new(
-                    format!(
-                        "catch type must be an Exception, found {}",
-                        catch.exception_type.apex_name()
-                    ),
-                    catch.span,
-                ));
-            }
+            self.validate_catch_type(catch)?;
             if self.catch_is_unreachable(&catch.exception_type, &seen, catches_everything) {
                 return Err(Diagnostic::new(
                     format!("unreachable catch for {}", catch.exception_type.apex_name()),
@@ -3329,6 +3344,20 @@ impl Checker {
             })?;
         }
         Ok(())
+    }
+
+    fn validate_catch_type(&self, catch: &CatchClause) -> Result<(), Diagnostic> {
+        self.validate_type(&catch.exception_type, catch.span)?;
+        if self.is_exception_type(&catch.exception_type) {
+            return Ok(());
+        }
+        Err(Diagnostic::new(
+            format!(
+                "catch type must be an Exception, found {}",
+                catch.exception_type.apex_name()
+            ),
+            catch.span,
+        ))
     }
 
     fn catch_is_unreachable(
@@ -3484,7 +3513,11 @@ impl Checker {
             Expression::MethodCall { .. } | Expression::MemberAccess { .. } => {
                 self.checked_navigation_expression_type(expression)
             }
-            Expression::Cast { ty, expression, .. } => self.cast_type(ty, expression),
+            Expression::Cast {
+                ty,
+                expression,
+                span,
+            } => self.cast_type(ty, expression, *span),
             Expression::Conditional {
                 condition,
                 when_true,
@@ -5251,7 +5284,9 @@ impl Checker {
         &mut self,
         target: &TypeName,
         expression: &Expression,
+        span: Span,
     ) -> Result<ExpressionType, Diagnostic> {
+        self.validate_type(target, span)?;
         let single_dynamic_query = self.is_sobject_type(target)
             && matches!(
                 expression,
@@ -6256,7 +6291,8 @@ impl Checker {
         }
         let is_result = matches!(
             receiver_type,
-            TypeName::SaveResult
+            TypeName::ApprovalLockResult
+                | TypeName::SaveResult
                 | TypeName::UpsertResult
                 | TypeName::DeleteResult
                 | TypeName::UndeleteResult

@@ -8,7 +8,7 @@ use crate::{
     ast::TypeName,
     diagnostic::Diagnostic,
     hir::{LimitIntrinsic, MessagingIntrinsic, PlatformIntrinsic},
-    platform::{LoggingLevel, ObjectSchema, RecordId},
+    platform::{DmlError, DmlRowOutcome, DmlStatus, LoggingLevel, ObjectSchema, RecordId},
     span::Span,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -18,8 +18,10 @@ use chrono::{
 };
 use regex::Regex;
 use rust_decimal::Decimal;
+use serde::Serialize;
+use serde_json::ser::{Formatter, Serializer};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-use std::{collections::BTreeMap, str::FromStr};
+use std::{collections::BTreeMap, io, str::FromStr};
 
 const STRIP_INACCESSIBLE_DEPTH_LIMIT: usize = 32;
 const STRIP_INACCESSIBLE_NODE_LIMIT: usize = 10_000;
@@ -1184,7 +1186,11 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 let json = self.value_to_json(&value.value, value.span)?;
                 let serialized = if intrinsic == P::JsonSerializePretty {
-                    serde_json::to_string_pretty(&json)
+                    if self.is_approval_lock_result_value(&value.value) {
+                        apex_pretty_json(&json)
+                    } else {
+                        serde_json::to_string_pretty(&json)
+                    }
                 } else {
                     serde_json::to_string(&json)
                 }
@@ -3151,6 +3157,25 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.value_to_json_inner(value, span, 0, &mut traversal)
     }
 
+    fn is_approval_lock_result_value(&self, value: &Value) -> bool {
+        match value {
+            Value::Platform(id) => matches!(
+                self.store.platform(*id),
+                PlatformValue::DmlResult {
+                    ty: TypeName::ApprovalLockResult,
+                    ..
+                }
+            ),
+            Value::Collection(id) => match self.store.collection(*id) {
+                Collection::List { element_type, .. } => {
+                    element_type == &TypeName::ApprovalLockResult
+                }
+                Collection::Set { .. } | Collection::Map { .. } => false,
+            },
+            _ => false,
+        }
+    }
+
     fn value_to_json_inner(
         &self,
         value: &Value,
@@ -3205,6 +3230,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             Value::Platform(id) => match self.store.platform(*id) {
                 PlatformValue::Blob(bytes) => JsonValue::String(BASE64.encode(bytes)),
+                PlatformValue::DmlResult { ty, outcome } if ty == &TypeName::ApprovalLockResult => {
+                    approval_lock_result_to_json(outcome, span, depth, traversal)?
+                }
                 _ => {
                     return Err(platform_error(
                         format!(
@@ -3299,6 +3327,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         depth: usize,
         traversal: &mut ValueGraphTraversal,
     ) -> Result<JsonValue, Diagnostic> {
+        if matches!(
+            self.collection(id),
+            Collection::Set {
+                element_type: TypeName::ApprovalLockResult,
+                ..
+            }
+        ) {
+            return Err(platform_error(
+                "JSON.serialize supports Approval.LockResult only as a scalar or List element",
+                span,
+            ));
+        }
         let identity = GraphIdentity::Collection(id);
         traversal
             .enter_identity(identity)
@@ -3352,6 +3392,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         if is_typed_json_scalar(target) {
             return typed_json_scalar_value(value, target, span);
+        }
+        if is_approval_json_target(target) {
+            return self.typed_json_approval_target(value, target, span, depth, state);
         }
         match target {
             TypeName::Object => self.bounded_untyped_json(value, span, depth, state),
@@ -3410,6 +3453,75 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             )),
         }
+    }
+
+    fn typed_json_approval_target(
+        &mut self,
+        value: JsonValue,
+        target: &TypeName,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            TypeName::ApprovalLockResult => {
+                self.typed_json_approval_lock_result(value, span, depth, state)
+            }
+            TypeName::Set(element) if **element == TypeName::ApprovalLockResult => {
+                Err(platform_error(
+                    "JSON.deserialize supports Approval.LockResult only as a scalar or List element",
+                    span,
+                ))
+            }
+            _ => unreachable!("caller selects Approval JSON targets"),
+        }
+    }
+
+    fn typed_json_approval_lock_result(
+        &mut self,
+        value: JsonValue,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        let JsonValue::Object(mut values) = value else {
+            return Err(typed_json_mismatch(&TypeName::ApprovalLockResult, span));
+        };
+        let success = take_json_field(&mut values, "success")
+            .and_then(|value| value.as_bool())
+            .ok_or_else(|| typed_json_mismatch(&TypeName::ApprovalLockResult, span))?;
+        let id = match take_json_field(&mut values, "id") {
+            Some(JsonValue::String(id)) => Some(
+                RecordId::parse(id)
+                    .map_err(|_| typed_json_mismatch(&TypeName::ApprovalLockResult, span))?,
+            ),
+            Some(JsonValue::Null) | None => None,
+            _ => return Err(typed_json_mismatch(&TypeName::ApprovalLockResult, span)),
+        };
+        let errors = match take_json_field(&mut values, "errors") {
+            Some(JsonValue::Array(errors)) => errors
+                .into_iter()
+                .map(|error| approval_lock_error_from_json(error, span, depth + 1, state))
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(JsonValue::Null) | None => Vec::new(),
+            _ => return Err(typed_json_mismatch(&TypeName::ApprovalLockResult, span)),
+        };
+        if success != errors.is_empty() {
+            return Err(platform_error(
+                "Approval.LockResult JSON has inconsistent success and errors values",
+                span,
+            ));
+        }
+        Ok(self.store.allocate_platform(PlatformValue::DmlResult {
+            ty: TypeName::ApprovalLockResult,
+            outcome: DmlRowOutcome {
+                input_index: 0,
+                id,
+                created: false,
+                record: None,
+                errors,
+            },
+        }))
     }
 
     fn bounded_untyped_json(
@@ -3609,6 +3721,230 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
         })
     }
+}
+
+fn is_approval_json_target(target: &TypeName) -> bool {
+    target == &TypeName::ApprovalLockResult
+        || matches!(target, TypeName::Set(element) if **element == TypeName::ApprovalLockResult)
+}
+
+fn take_json_field(values: &mut JsonMap<String, JsonValue>, name: &str) -> Option<JsonValue> {
+    let key = values
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(name))?
+        .clone();
+    values.remove(&key)
+}
+
+fn approval_lock_error_from_json(
+    value: JsonValue,
+    span: Span,
+    depth: usize,
+    state: &mut TypedJsonState,
+) -> Result<DmlError, Diagnostic> {
+    state.visit(depth, span)?;
+    let JsonValue::Object(mut values) = value else {
+        return Err(typed_json_mismatch(&TypeName::DatabaseError, span));
+    };
+    let status = match take_json_field(&mut values, "statusCode") {
+        Some(JsonValue::String(status)) => DmlStatus::from_apex_name(&status)
+            .ok_or_else(|| typed_json_mismatch(&TypeName::StatusCode, span))?,
+        _ => return Err(typed_json_mismatch(&TypeName::StatusCode, span)),
+    };
+    let message = match take_json_field(&mut values, "message") {
+        Some(JsonValue::String(message)) => message,
+        _ => return Err(typed_json_mismatch(&TypeName::String, span)),
+    };
+    let fields = match take_json_field(&mut values, "fields") {
+        Some(JsonValue::Array(fields)) => fields
+            .into_iter()
+            .map(|field| {
+                state.visit(depth + 1, span)?;
+                match field {
+                    JsonValue::String(field) => Ok(field),
+                    _ => Err(typed_json_mismatch(&TypeName::String, span)),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(JsonValue::Null) | None => Vec::new(),
+        _ => {
+            return Err(typed_json_mismatch(
+                &TypeName::List(Box::new(TypeName::String)),
+                span,
+            ));
+        }
+    };
+    Ok(DmlError::new(status, message, fields))
+}
+
+fn approval_lock_result_to_json(
+    outcome: &DmlRowOutcome,
+    span: Span,
+    depth: usize,
+    traversal: &mut ValueGraphTraversal,
+) -> Result<JsonValue, Diagnostic> {
+    let mut errors = Vec::with_capacity(outcome.errors.len());
+    for error in &outcome.errors {
+        traversal
+            .visit_element()
+            .map_err(|error| json_traversal_error(error, span))?;
+        traversal
+            .visit_node(depth + 2)
+            .map_err(|error| json_traversal_error(error, span))?;
+        let error_value = (|| {
+            let mut value = JsonMap::new();
+            visit_json_property(traversal, depth + 3, span)?;
+            value.insert(
+                "statusCode".to_owned(),
+                JsonValue::String(error.status.apex_name().to_owned()),
+            );
+            visit_json_property(traversal, depth + 3, span)?;
+            value.insert(
+                "message".to_owned(),
+                JsonValue::String(error.message.clone()),
+            );
+            visit_json_property(traversal, depth + 3, span)?;
+            let mut fields = Vec::with_capacity(error.fields.len());
+            for field in &error.fields {
+                traversal
+                    .visit_element()
+                    .map_err(|error| json_traversal_error(error, span))?;
+                traversal
+                    .visit_node(depth + 4)
+                    .map_err(|error| json_traversal_error(error, span))?;
+                fields.push(JsonValue::String(field.clone()));
+            }
+            value.insert("fields".to_owned(), JsonValue::Array(fields));
+            Ok(JsonValue::Object(value))
+        })()?;
+        errors.push(error_value);
+    }
+    let mut value = JsonMap::new();
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "id".to_owned(),
+        outcome
+            .id
+            .as_ref()
+            .map(|id| JsonValue::String(id.to_string()))
+            .unwrap_or(JsonValue::Null),
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert("success".to_owned(), JsonValue::Bool(outcome.is_success()));
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert("errors".to_owned(), JsonValue::Array(errors));
+    Ok(JsonValue::Object(value))
+}
+
+fn visit_json_property(
+    traversal: &mut ValueGraphTraversal,
+    depth: usize,
+    span: Span,
+) -> Result<(), Diagnostic> {
+    traversal
+        .visit_element()
+        .map_err(|error| json_traversal_error(error, span))?;
+    traversal
+        .visit_node(depth)
+        .map_err(|error| json_traversal_error(error, span))
+}
+
+#[derive(Default)]
+struct ApexPrettyFormatter {
+    current_indent: usize,
+    has_value: bool,
+}
+
+impl Formatter for ApexPrettyFormatter {
+    fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.has_value = false;
+        writer.write_all(b"[")
+    }
+
+    fn end_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b" ]")
+    }
+
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(if first { b" " } else { b", " })
+    }
+
+    fn end_array_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.has_value = true;
+        Ok(())
+    }
+
+    fn begin_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.current_indent += 1;
+        self.has_value = false;
+        writer.write_all(b"{")
+    }
+
+    fn end_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.current_indent -= 1;
+        if self.has_value {
+            writer.write_all(b"\n")?;
+            write_json_indent(writer, self.current_indent)?;
+        }
+        writer.write_all(b"}")
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(if first { b"\n" } else { b",\n" })?;
+        write_json_indent(writer, self.current_indent)
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b" : ")
+    }
+
+    fn end_object_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.has_value = true;
+        Ok(())
+    }
+}
+
+fn write_json_indent<W>(writer: &mut W, depth: usize) -> io::Result<()>
+where
+    W: ?Sized + io::Write,
+{
+    for _ in 0..depth {
+        writer.write_all(b"  ")?;
+    }
+    Ok(())
+}
+
+fn apex_pretty_json(value: &JsonValue) -> serde_json::Result<String> {
+    let mut serializer = Serializer::with_formatter(Vec::new(), ApexPrettyFormatter::default());
+    value.serialize(&mut serializer)?;
+    Ok(String::from_utf8(serializer.into_inner()).expect("JSON serializer output is UTF-8"))
 }
 
 pub(super) fn datetime_from_millis(millis: i64, span: Span) -> Result<DateTime<Utc>, Diagnostic> {
