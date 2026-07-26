@@ -918,6 +918,7 @@ pub enum TypeName {
     Request,
     QueryLocator,
     DmlOptions,
+    ApprovalLockResult,
     SaveResult,
     UpsertResult,
     DeleteResult,
@@ -1162,6 +1163,11 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         apex_name: "Database.DmlOptions",
         aliases: &["dmloptions", "database.dmloptions"],
         ty: TypeName::DmlOptions,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Approval.LockResult",
+        aliases: &["approval.lockresult"],
+        ty: TypeName::ApprovalLockResult,
     },
     BuiltInTypeSpec {
         apex_name: "Database.SaveResult",

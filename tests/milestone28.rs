@@ -811,6 +811,140 @@ fn single_email_message_surface_is_typed_recorded_and_capacity_bounded() {
 }
 
 #[test]
+fn approval_lock_result_reuses_typed_dml_results_and_bounded_json_conversion() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn13-approval-lock-result-oracle",
+    ))
+    .unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN13ApprovalLockResultOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|type|Approval.LockResult",
+            "APEX_EXEC_ORACLE_VALUE|listSize|2",
+            "APEX_EXEC_ORACLE_VALUE|success|true",
+            "APEX_EXEC_ORACLE_VALUE|id|001000000000001AAA",
+            "APEX_EXEC_ORACLE_VALUE|errors|0",
+            "APEX_EXEC_ORACLE_VALUE|failureSuccess|false",
+            "APEX_EXEC_ORACLE_VALUE|failureId|001000000000001AAA",
+            "APEX_EXEC_ORACLE_VALUE|failureErrors|1",
+            "APEX_EXEC_ORACLE_VALUE|failureStatus|INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY",
+            "APEX_EXEC_ORACLE_VALUE|failureMessage|denied",
+            "APEX_EXEC_ORACLE_VALUE|failureFields|0",
+            "APEX_EXEC_ORACLE_VALUE|compact|{\"id\":\"001000000000001AAA\",\"success\":true,\"errors\":[]}",
+            "APEX_EXEC_ORACLE_VALUE|prettyStatus|INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY",
+        ]
+    );
+
+    let pretty = execute(
+        r#"
+        Approval.LockResult value = (Approval.LockResult) JSON.deserialize(
+            '{"success":true,"id":"001000000000001AAA"}',
+            Approval.LockResult.class
+        );
+        System.debug(JSON.serializePretty(value));
+        System.debug(JSON.serializePretty(
+            new List<Approval.LockResult>{ value, value }
+        ));
+        "#,
+    )
+    .unwrap();
+    let pretty_result =
+        "{\n  \"id\" : \"001000000000001AAA\",\n  \"success\" : true,\n  \"errors\" : [ ]\n}";
+    assert_eq!(
+        pretty,
+        [
+            pretty_result.to_owned(),
+            format!("[ {pretty_result}, {pretty_result} ]"),
+        ]
+    );
+
+    for unsupported in ["Approval.ProcessResult", "Approval.UnlockResult"] {
+        let error = check(&format!("{unsupported} result;")).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains(&format!("unknown type `{unsupported}`"))
+        );
+    }
+
+    let unsupported_set = execute(
+        r#"
+        Set<Approval.LockResult> values =
+            (Set<Approval.LockResult>) JSON.deserialize(
+                '[]',
+                Set<Approval.LockResult>.class
+            );
+        "#,
+    )
+    .unwrap_err();
+    assert!(
+        unsupported_set
+            .message
+            .contains("only as a scalar or List element")
+    );
+
+    let inconsistent = execute(
+        r#"Approval.LockResult value = (Approval.LockResult) JSON.deserialize(
+            '{"success":true,"errors":[{"message":"denied","statusCode":"UNKNOWN_EXCEPTION"}]}',
+            Approval.LockResult.class
+        );"#,
+    )
+    .unwrap_err();
+    assert!(
+        inconsistent
+            .message
+            .contains("inconsistent success and errors values")
+    );
+
+    let errors = std::iter::repeat_n(
+        r#"{"message":"denied","statusCode":"UNKNOWN_EXCEPTION"}"#,
+        4_096,
+    )
+    .collect::<Vec<_>>()
+    .join(",");
+    let bounded = execute(&format!(
+        r#"Approval.LockResult value = (Approval.LockResult) JSON.deserialize(
+            '{{"success":false,"errors":[{errors}]}}',
+            Approval.LockResult.class
+        );"#
+    ))
+    .unwrap_err();
+    assert!(
+        bounded
+            .message
+            .contains("typed JSON exceeds the bounded conversion limits")
+    );
+
+    let nested_errors = std::iter::repeat_n(
+        r#"{"message":"denied","statusCode":"UNKNOWN_EXCEPTION"}"#,
+        100,
+    )
+    .collect::<Vec<_>>()
+    .join(",");
+    let serialization = execute(&format!(
+        r#"
+        Approval.LockResult value = (Approval.LockResult) JSON.deserialize(
+            '{{"success":false,"errors":[{nested_errors}]}}',
+            Approval.LockResult.class
+        );
+        List<Approval.LockResult> values = new List<Approval.LockResult>();
+        for (Integer i = 0; i < 50; i++) {{
+            values.add(value);
+        }}
+        System.debug(JSON.serialize(values));
+        "#
+    ))
+    .unwrap_err();
+    assert!(
+        serialization
+            .message
+            .contains("JSON serialization exceeded the runtime value")
+    );
+}
+
+#[test]
 fn generated_custom_share_sobjects_are_typed_from_metadata() {
     let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
     let compilation = project::compile(project_root).unwrap();

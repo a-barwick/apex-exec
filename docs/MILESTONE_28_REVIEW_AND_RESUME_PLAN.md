@@ -306,7 +306,7 @@ package after review and integration.
 | M28-CENSUS-12 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-12/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN11 integrated at `d0b829d` | Enterprise evidence only |
 | M28-CN12 | One next-ranked compatibility family | Complete (integrated at `b88a8f2`; independent review approved after corrections; typed message/setter/getter/capacity/send-result surface; local M28 59/59; Salesforce 2/2; fixture cleanup verified; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-12 complete | Messaging email platform surface |
 | M28-CENSUS-13 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-13/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN12 integrated at `b88a8f2` | Enterprise evidence only |
-| M28-CN13 | One next-ranked compatibility family | Active on `codex/m28-cn13-approval-lock-result` (`Approval.LockResult`, affecting 1,005 tests) | CENSUS-13 complete | Approval lock result type and value surface |
+| M28-CN13 | One next-ranked compatibility family | Review on `codex/m28-cn13-approval-lock-result` (`Approval.LockResult`; local M28 60/60; Salesforce 2/2; fixture cleanup verified; candidate census recorded) | CENSUS-13 complete | Approval lock result type and value surface |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -548,5 +548,8 @@ cast diagnostic. CN11 passed independent review and was integrated at
 corrections and was integrated at `b88a8f2`. Its thirteenth sealed census is
 recorded at `evidence/milestone28/census-13/report.json`; strict compatibility
 remains 0/1,159, and 1,005 tests now stop at missing
-`Approval.LockResult`. Claim that Ready CN13 family on a dedicated branch; do
-not start `Flow.Interview` or another later family first.
+`Approval.LockResult`. CN13 is in Review on its dedicated branch with matching
+focused Salesforce evidence and a candidate-only frozen replay. That replay
+remains 0/1,159 and advances the same 1,005 tests to missing
+`Approval.ProcessResult`; do not claim, implement, or integrate that later
+family as part of CN13.

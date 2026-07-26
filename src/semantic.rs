@@ -6256,7 +6256,8 @@ impl Checker {
         }
         let is_result = matches!(
             receiver_type,
-            TypeName::SaveResult
+            TypeName::ApprovalLockResult
+                | TypeName::SaveResult
                 | TypeName::UpsertResult
                 | TypeName::DeleteResult
                 | TypeName::UndeleteResult

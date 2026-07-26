@@ -640,8 +640,23 @@ The post-CN12 frozen replay is
 it preserves both frozen input bindings, discovers and parses 1,159/1,159
 tests, and remains 0/1,159 at checking, execution, agreement, and strict
 compatibility. The 1,117-test email blocker is gone; 1,005 tests now first
-stop at missing `Approval.LockResult` in `LogEntryEventBuilder.cls`, so
-M28-CN13 is Ready.
+stop at missing `Approval.LockResult` in `LogEntryEventBuilder.cls`.
+
+CN13 is in Review on `codex/m28-cn13-approval-lock-result`. The bounded slice
+adds `Approval.LockResult` type/list identity, JSON construction and
+serialization, and `isSuccess()`, `getId()`, and `getErrors()` through the
+existing typed DML result/error machinery. The guarded API 65.0 Salesforce
+comparison matches 2/2 compile/value dimensions without approval or DML
+mutation, and the temporary Apex class was deleted and verified absent. The
+focused M28 suite passes 60/60. `Approval.ProcessResult` and
+`Approval.UnlockResult` remain explicitly unsupported.
+
+The candidate-only post-CN13 replay in
+`evidence/milestone28/cn13/candidate-census.json` preserves the unchanged
+1,159-test denominator and frozen M22 bindings. Discovery and parsing remain
+1,159/1,159 while strict compatibility remains 0/1,159; the same 1,005 tests
+now first stop at missing `Approval.ProcessResult`. This is the census-derived
+next family, not a claim or implementation of it.
 
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in

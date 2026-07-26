@@ -839,7 +839,24 @@ sending an email, while local tests cover successful and failed send results.
 The frozen post-CN12 replay is
 `evidence/milestone28/census-13/report.json`; it remains 0/1,159
 strict-compatible, removes the email blocker, and selects missing
-`Approval.LockResult` (1,005 affected tests) as the Ready CN13 family.
+`Approval.LockResult` (1,005 affected tests) as CN13.
+
+CN13 is in Review on `codex/m28-cn13-approval-lock-result`. Apex Exec now
+recognizes `Approval.LockResult` and `List<Approval.LockResult>`, constructs
+deterministic success and failure values through `JSON.deserialize`, emits the
+Salesforce field order for compact and pretty JSON, and exposes
+`isSuccess()`, `getId()`, and `getErrors()`. Errors reuse the existing typed
+`Database.Error` and `StatusCode` representation, including
+`INSUFFICIENT_ACCESS_ON_CROSS_REFERENCE_ENTITY`; conversion and serialization
+retain fixed node, depth, and element budgets. Focused API 65.0 Salesforce
+compile/value evidence matches 2/2 dimensions without approval or DML
+mutation. `Approval.ProcessResult`, `Approval.UnlockResult`, and approval
+operations remain explicitly unsupported.
+
+The candidate-only frozen replay is recorded in
+`evidence/milestone28/cn13/candidate-census.json`. It remains 0/1,159 strict
+compatible and selects missing `Approval.ProcessResult` (1,005 affected tests)
+as the census-derived next blocker; CN13 does not claim or implement it.
 
 ## Platform surface
 
