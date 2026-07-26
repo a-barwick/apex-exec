@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly ROOT="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")/.."
+  pwd
+)"
+readonly RUST_VERSION="1.88.0"
+readonly NODE_VERSION="22.13.0"
+readonly UV_VERSION="0.7.12"
+
+export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+
+echo "==> Installing system build dependencies"
+packages=(build-essential ca-certificates curl git pkg-config xz-utils)
+missing_packages=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -Fq "install ok installed"; then
+    missing_packages+=("${package}")
+  fi
+done
+if ((${#missing_packages[@]})); then
+  apt=(apt-get)
+  if command -v sudo >/dev/null 2>&1; then
+    apt=(sudo apt-get)
+  fi
+  DEBIAN_FRONTEND=noninteractive "${apt[@]}" update
+  DEBIAN_FRONTEND=noninteractive "${apt[@]}" install -y "${missing_packages[@]}"
+fi
+
+echo "==> Installing Rust ${RUST_VERSION}"
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none
+fi
+# shellcheck disable=SC1091
+source "${HOME}/.cargo/env"
+rustup toolchain install "${RUST_VERSION}" \
+  --profile minimal \
+  --component clippy \
+  --component rustfmt
+rustup default "${RUST_VERSION}"
+
+case "$(uname -m)" in
+  x86_64)
+    node_arch="x64"
+    uv_target="x86_64-unknown-linux-gnu"
+    ;;
+  aarch64 | arm64)
+    node_arch="arm64"
+    uv_target="aarch64-unknown-linux-gnu"
+    ;;
+  *)
+    echo "unsupported orb architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+echo "==> Installing Node.js ${NODE_VERSION}"
+node_name="node-v${NODE_VERSION}-linux-${node_arch}"
+node_root="${HOME}/.local/lib/nodejs/${node_name}"
+if [[ ! -x "${node_root}/bin/node" ]]; then
+  mkdir -p "$(dirname "${node_root}")"
+  node_archive="$(mktemp)"
+  trap 'rm -f "${node_archive:-}" "${uv_archive:-}"' EXIT
+  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${node_name}.tar.xz" \
+    -o "${node_archive}"
+  tar -xJf "${node_archive}" -C "$(dirname "${node_root}")"
+  rm -f "${node_archive}"
+fi
+mkdir -p "${HOME}/.local/bin"
+for executable in node npm npx corepack; do
+  ln -sfn "${node_root}/bin/${executable}" "${HOME}/.local/bin/${executable}"
+done
+
+echo "==> Installing uv ${UV_VERSION}"
+if [[ "$(uv --version 2>/dev/null || true)" != "uv ${UV_VERSION}" ]]; then
+  uv_archive="$(mktemp)"
+  trap 'rm -f "${node_archive:-}" "${uv_archive:-}"' EXIT
+  curl -fsSL \
+    "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_target}.tar.gz" \
+    -o "${uv_archive}"
+  tar -xzf "${uv_archive}" -C "${HOME}/.local/bin" \
+    --strip-components=1 \
+    "uv-${uv_target}/uv" \
+    "uv-${uv_target}/uvx"
+  rm -f "${uv_archive}"
+fi
+
+profile_marker="# Apex Exec orb toolchains"
+if ! grep -Fqx "${profile_marker}" "${HOME}/.bash_profile" 2>/dev/null; then
+  cat >>"${HOME}/.bash_profile" <<'EOF'
+
+# Apex Exec orb toolchains
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+EOF
+fi
+
+cd "${ROOT}"
+echo "==> Initializing repository dependencies"
+git submodule update --init --recursive
+cargo fetch --locked
+npm ci --prefix website
+npm ci --prefix editors/vscode
+
+echo "==> Orb setup complete"
