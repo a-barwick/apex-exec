@@ -18,6 +18,27 @@ parse across three deterministic runs, but strict compatibility remains
 `LogEntryEventBuilder.cls`. M28-CN14 is Ready and must be claimed before
 implementation. Do not call M28 complete below 696/1,159.
 
+M28-CN14 is now in Review on
+`codex/m28-cn14-approval-process-result`. The bounded slice adds only
+`Approval.ProcessResult` scalar/direct-List identity, deterministic typed JSON
+construction and exact serialization, `isSuccess()`, `getEntityId()`,
+`getErrors()`, `getInstanceStatus()`, and `getNewWorkitemIds()`. Its distinct
+runtime state preserves Salesforce's nullable errors and hidden serialized
+actor/instance fields without changing the shared DML outcome contract. The
+guarded API 65.0 Salesforce comparison matches 2/2 dimensions with CLI
+2.144.6; no approval or DML mutation ran, and the temporary class was deleted
+and verified absent. `Approval.UnlockResult` and all approval operations remain
+unsupported. CN13 and CENSUS-14 remain Complete; CN14 must not be marked
+Complete or integrated by its implementation owner.
+
+The unchanged three-rerun candidate census is checked in at
+`evidence/milestone28/cn14/candidate-census.json`. It discovers and parses
+1,159/1,159 tests but remains 0/1,159 at checking, execution, agreement, and
+strict compatibility; cold/warm/warm timings are 470,593/103/103 ms. CN14
+removes the ProcessResult blocker, and the same 1,005 tests now first stop at
+missing `Approval.UnlockResult`. That census-derived family is not claimed or
+implemented here.
+
 Date: 2026-07-20
 
 Branch: `codex/milestone-28-enterprise-compatibility`

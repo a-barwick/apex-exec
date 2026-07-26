@@ -859,6 +859,33 @@ The frozen post-CN13 replay is recorded in
 compatible, removes the lock-result blocker, and selects missing
 `Approval.ProcessResult` (1,005 affected tests) as the Ready CN14 family.
 
+CN14 is in Review on `codex/m28-cn14-approval-process-result`. Apex Exec now
+recognizes `Approval.ProcessResult` and direct
+`List<Approval.ProcessResult>` values, constructs them deterministically
+through `JSON.deserialize`, preserves Salesforce's nullable/default state, and
+emits scalar/list compact and pretty JSON in the exact `actorIds`, `entityId`,
+`errors`, `instanceId`, `instanceStatus`, `newWorkitemIds`, `success` order.
+The supported accessors are `isSuccess()`, `getEntityId()`, `getErrors()`,
+`getInstanceStatus()`, and `getNewWorkitemIds()`; errors reuse typed
+`Database.Error`/`StatusCode`, including `NO_APPLICABLE_PROCESS`. Conversion
+and serialization use existing depth, node, and element budgets.
+
+The guarded API 65.0 compile/value comparison matches 2/2 without approval or
+DML mutation, and fixture cleanup was verified. ProcessResult is legal only as
+a scalar or direct List element; Set, Map, Iterable, nested/custom generic,
+bodyless-signature, cast, type-literal, typed-JSON, enhanced-for,
+`Database.Batchable`, and generic-catch leaks are rejected semantically.
+`Approval.UnlockResult`, approval requests, `Approval.process`, and all other
+approval operations remain unsupported. This is task-branch Review evidence,
+not an integrated or Complete claim.
+
+The unchanged three-rerun CN14 candidate census preserves the two frozen input
+hashes and 1,159 denominator. Discovery and parsing remain 1,159/1,159, while
+checking, execution, agreement, and strict compatibility remain 0/1,159.
+Cold/warm/warm timings are 470,593/103/103 ms. The same 1,005 tests now first
+stop at missing `Approval.UnlockResult`; that family is recorded only as the
+next blocker and is not claimed or implemented here.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

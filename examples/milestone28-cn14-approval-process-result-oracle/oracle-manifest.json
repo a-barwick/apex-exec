@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "approval-process-result-surface",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN14ApprovalProcessResultOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

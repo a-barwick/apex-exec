@@ -369,6 +369,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             PlatformValue::AsyncContext { .. } => render_async_context(value, traversal, output),
             value @ (PlatformValue::DmlResult { .. }
+            | PlatformValue::ApprovalProcessResult(_)
             | PlatformValue::DmlError(_)
             | PlatformValue::DmlStatus(_)) => render_dml_platform(value, traversal, output),
             PlatformValue::Request { .. } => render_request(value, traversal, output),
@@ -893,6 +894,14 @@ fn render_dml_platform(
                 },
             )
         }
+        PlatformValue::ApprovalProcessResult(result) => traversal.write(
+            output,
+            if result.success {
+                "Approval.ProcessResult[success]"
+            } else {
+                "Approval.ProcessResult[failure]"
+            },
+        ),
         PlatformValue::DmlError(error) => {
             traversal.write(output, error.status.apex_name())?;
             traversal.write(output, ": ")?;

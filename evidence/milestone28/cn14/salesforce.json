@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "approval-process-result-surface",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN14ApprovalProcessResultOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "compact": {
+          "actorIds": null,
+          "entityId": "001000000000001AAA",
+          "errors": null,
+          "instanceId": null,
+          "instanceStatus": "Approved",
+          "newWorkitemIds": [
+            "04i000000000001AAA"
+          ],
+          "success": true
+        },
+        "defaultCompact": {
+          "actorIds": null,
+          "entityId": null,
+          "errors": null,
+          "instanceId": null,
+          "instanceStatus": null,
+          "newWorkitemIds": [],
+          "success": false
+        },
+        "defaultEntityNull": true,
+        "defaultErrorsNull": true,
+        "defaultStatusNull": true,
+        "defaultSuccess": false,
+        "defaultWorkitems": 0,
+        "entityId": "001000000000001AAA",
+        "failureErrors": 1,
+        "failureFields": 0,
+        "failureMessage": "No applicable approval process was found.",
+        "failureStatus": "NO_APPLICABLE_PROCESS",
+        "failureSuccess": false,
+        "failureWorkitems": 0,
+        "hiddenCompact": {
+          "actorIds": [
+            "005000000000001AAA"
+          ],
+          "entityId": "001000000000001AAA",
+          "errors": null,
+          "instanceId": "04g000000000001AAA",
+          "instanceStatus": null,
+          "newWorkitemIds": [],
+          "success": false
+        },
+        "hiddenErrorsNull": true,
+        "hiddenSuccess": false,
+        "hiddenWorkitems": 0,
+        "instanceStatus": "Approved",
+        "listCompact": [
+          {
+            "actorIds": null,
+            "entityId": "001000000000001AAA",
+            "errors": null,
+            "instanceId": null,
+            "instanceStatus": "Approved",
+            "newWorkitemIds": [
+              "04i000000000001AAA"
+            ],
+            "success": true
+          },
+          {
+            "actorIds": null,
+            "entityId": "001000000000001AAA",
+            "errors": [
+              {
+                "statusCode": "NO_APPLICABLE_PROCESS",
+                "message": "No applicable approval process was found.",
+                "fields": []
+              }
+            ],
+            "instanceId": null,
+            "instanceStatus": null,
+            "newWorkitemIds": [],
+            "success": false
+          }
+        ],
+        "listPretty": "[ {\n  \"actorIds\" : null,\n  \"entityId\" : \"001000000000001AAA\",\n  \"errors\" : null,\n  \"instanceId\" : null,\n  \"instanceStatus\" : \"Approved\",\n  \"newWorkitemIds\" : [ \"04i000000000001AAA\" ],\n  \"success\" : true\n}, {\n  \"actorIds\" : null,\n  \"entityId\" : \"001000000000001AAA\",\n  \"errors\" : [ {\n    \"statusCode\" : \"NO_APPLICABLE_PROCESS\",\n    \"message\" : \"No applicable approval process was found.\",\n    \"fields\" : [ ]\n  } ],\n  \"instanceId\" : null,\n  \"instanceStatus\" : null,\n  \"newWorkitemIds\" : [ ],\n  \"success\" : false\n} ]",
+        "listSize": 2,
+        "pretty": "{\n  \"actorIds\" : null,\n  \"entityId\" : \"001000000000001AAA\",\n  \"errors\" : null,\n  \"instanceId\" : null,\n  \"instanceStatus\" : \"Approved\",\n  \"newWorkitemIds\" : [ \"04i000000000001AAA\" ],\n  \"success\" : true\n}",
+        "prettyStatus": "NO_APPLICABLE_PROCESS",
+        "success": true,
+        "successErrorsNull": true,
+        "type": "Approval.ProcessResult",
+        "typedListFailureStatus": "NO_APPLICABLE_PROCESS",
+        "typedListSize": 2,
+        "workitemId": "04i000000000001AAA",
+        "workitems": 1
+      }
+    }
+  ]
+}

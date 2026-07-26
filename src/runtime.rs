@@ -72,6 +72,17 @@ impl PartialEq for ApexDouble {
 
 impl Eq for ApexDouble {}
 
+#[derive(Clone, Debug)]
+struct ApprovalProcessResultValue {
+    actor_ids: Option<Vec<crate::platform::RecordId>>,
+    entity_id: Option<crate::platform::RecordId>,
+    errors: Option<Vec<PlatformDmlError>>,
+    instance_id: Option<crate::platform::RecordId>,
+    instance_status: Option<String>,
+    new_workitem_ids: Vec<crate::platform::RecordId>,
+    success: bool,
+}
+
 /// Complete deterministic trace from one debugger launch.
 #[derive(Clone, Debug)]
 pub struct DebugExecution {
@@ -188,6 +199,7 @@ enum PlatformValue {
         ty: TypeName,
         outcome: DmlRowOutcome,
     },
+    ApprovalProcessResult(ApprovalProcessResultValue),
     DmlError(PlatformDmlError),
     DmlStatus(crate::platform::DmlStatus),
     AccessLevel(crate::platform::AccessLevel),
@@ -232,6 +244,7 @@ impl PlatformValue {
             Self::AsyncContext { ty, .. } => ty.clone(),
             Self::QueryLocator(_) => TypeName::QueryLocator,
             Self::DmlResult { ty, .. } => ty.clone(),
+            Self::ApprovalProcessResult(_) => TypeName::ApprovalProcessResult,
             Self::DmlError(_) => TypeName::DatabaseError,
             Self::DmlStatus(_) => TypeName::StatusCode,
             Self::AccessLevel(_) => TypeName::AccessLevel,

@@ -2081,13 +2081,20 @@ impl Checker {
         &self,
         ty: &TypeName,
         span: Span,
-        approval_lock_result_allowed: bool,
+        approval_result_allowed: bool,
     ) -> Result<(), Diagnostic> {
         match ty {
-            TypeName::ApprovalLockResult if !approval_lock_result_allowed => Err(Diagnostic::new(
-                "Approval.LockResult is supported only as a scalar or List element",
-                span,
-            )),
+            ty @ (TypeName::ApprovalLockResult | TypeName::ApprovalProcessResult)
+                if !approval_result_allowed =>
+            {
+                Err(Diagnostic::new(
+                    format!(
+                        "{} is supported only as a scalar or List element",
+                        ty.apex_name()
+                    ),
+                    span,
+                ))
+            }
             TypeName::Custom(name)
                 if !self.class_ids.contains_key(&name.canonical)
                     && self.schema.object(hir::schema_api_name(name)).is_err()
@@ -2108,8 +2115,8 @@ impl Checker {
                     Ok(())
                 }
             }
-            TypeName::List(element) if **element == TypeName::ApprovalLockResult => {
-                self.validate_type_placement(element, span, approval_lock_result_allowed)
+            TypeName::List(element) if is_restricted_approval_result(element) => {
+                self.validate_type_placement(element, span, approval_result_allowed)
             }
             TypeName::List(element) | TypeName::Set(element) | TypeName::Iterable(element) => {
                 self.validate_type_placement(element, span, false)
@@ -6292,6 +6299,7 @@ impl Checker {
         let is_result = matches!(
             receiver_type,
             TypeName::ApprovalLockResult
+                | TypeName::ApprovalProcessResult
                 | TypeName::SaveResult
                 | TypeName::UpsertResult
                 | TypeName::DeleteResult
@@ -6304,19 +6312,9 @@ impl Checker {
             return Some(Err(unknown_method(receiver_type, method)));
         }
         let (target, result) = if is_result {
-            let target = match method.canonical.as_str() {
-                "issuccess" => DmlResultMethod::IsSuccess,
-                "getid" => DmlResultMethod::GetId,
-                "geterrors" => DmlResultMethod::GetErrors,
-                "iscreated" if receiver_type == &TypeName::UpsertResult => {
-                    DmlResultMethod::IsCreated
-                }
-                _ => return Some(Err(unknown_method(receiver_type, method))),
-            };
-            let result = match target {
-                DmlResultMethod::IsSuccess | DmlResultMethod::IsCreated => TypeName::Boolean,
-                DmlResultMethod::GetId => TypeName::Id,
-                DmlResultMethod::GetErrors => TypeName::List(Box::new(TypeName::DatabaseError)),
+            let Some((target, result)) = result_method_signature(receiver_type, &method.canonical)
+            else {
+                return Some(Err(unknown_method(receiver_type, method)));
             };
             (CallTarget::DmlResultMethod(target), result)
         } else {
@@ -7383,6 +7381,42 @@ fn is_queueable_interface(name: &str) -> bool {
 
 fn is_batchable_interface(name: &str) -> bool {
     matches!(name, "batchable" | "database.batchable")
+}
+
+fn is_restricted_approval_result(ty: &TypeName) -> bool {
+    matches!(
+        ty,
+        TypeName::ApprovalLockResult | TypeName::ApprovalProcessResult
+    )
+}
+
+fn result_method_signature(
+    receiver_type: &TypeName,
+    method: &str,
+) -> Option<(DmlResultMethod, TypeName)> {
+    let errors = || TypeName::List(Box::new(TypeName::DatabaseError));
+    if receiver_type == &TypeName::ApprovalProcessResult {
+        return match method {
+            "issuccess" => Some((DmlResultMethod::IsSuccess, TypeName::Boolean)),
+            "getentityid" => Some((DmlResultMethod::GetEntityId, TypeName::Id)),
+            "geterrors" => Some((DmlResultMethod::GetErrors, errors())),
+            "getinstancestatus" => Some((DmlResultMethod::GetInstanceStatus, TypeName::String)),
+            "getnewworkitemids" => Some((
+                DmlResultMethod::GetNewWorkitemIds,
+                TypeName::List(Box::new(TypeName::Id)),
+            )),
+            _ => None,
+        };
+    }
+    match method {
+        "issuccess" => Some((DmlResultMethod::IsSuccess, TypeName::Boolean)),
+        "getid" => Some((DmlResultMethod::GetId, TypeName::Id)),
+        "geterrors" => Some((DmlResultMethod::GetErrors, errors())),
+        "iscreated" if receiver_type == &TypeName::UpsertResult => {
+            Some((DmlResultMethod::IsCreated, TypeName::Boolean))
+        }
+        _ => None,
+    }
 }
 
 fn is_schedulable_interface(name: &str) -> bool {

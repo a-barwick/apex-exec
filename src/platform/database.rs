@@ -52,6 +52,7 @@ pub enum DmlStatus {
     InsufficientAccessOnCrossReferenceEntity,
     InsufficientAccessOrReadonly,
     MissingArgument,
+    NoApplicableProcess,
     RequiredFieldMissing,
     UnknownException,
 }
@@ -69,6 +70,7 @@ impl DmlStatus {
             }
             "INSUFFICIENT_ACCESS_OR_READONLY" => Some(Self::InsufficientAccessOrReadonly),
             "MISSING_ARGUMENT" => Some(Self::MissingArgument),
+            "NO_APPLICABLE_PROCESS" => Some(Self::NoApplicableProcess),
             "REQUIRED_FIELD_MISSING" => Some(Self::RequiredFieldMissing),
             "UNKNOWN_EXCEPTION" => Some(Self::UnknownException),
             _ => None,
@@ -87,6 +89,7 @@ impl DmlStatus {
             }
             Self::InsufficientAccessOrReadonly => "INSUFFICIENT_ACCESS_OR_READONLY",
             Self::MissingArgument => "MISSING_ARGUMENT",
+            Self::NoApplicableProcess => "NO_APPLICABLE_PROCESS",
             Self::RequiredFieldMissing => "REQUIRED_FIELD_MISSING",
             Self::UnknownException => "UNKNOWN_EXCEPTION",
         }

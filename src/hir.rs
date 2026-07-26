@@ -520,7 +520,10 @@ pub struct DatabaseDmlTarget {
 pub enum DmlResultMethod {
     IsSuccess,
     GetId,
+    GetEntityId,
     GetErrors,
+    GetInstanceStatus,
+    GetNewWorkitemIds,
     IsCreated,
 }
 

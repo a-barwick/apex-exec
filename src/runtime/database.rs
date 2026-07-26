@@ -1,6 +1,7 @@
 use super::{
-    ActiveCall, Collection, Flow, Interpreter, PlatformHost, PlatformValue, RuntimeTriggerEvent,
-    SObjectId, TriggerContext, TriggerPhase, TriggerStage, Value, runtime_exception,
+    ActiveCall, ApprovalProcessResultValue, Collection, Flow, Interpreter, PlatformHost,
+    PlatformValue, RuntimeTriggerEvent, SObjectId, TriggerContext, TriggerPhase, TriggerStage,
+    Value, runtime_exception,
 };
 use crate::{
     ast::{
@@ -1087,9 +1088,24 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         };
-        let PlatformValue::DmlResult { ty, outcome } = self.store.platform(id).clone() else {
-            return Err(Diagnostic::new("invalid checked DML result receiver", span));
-        };
+        match self.store.platform(id).clone() {
+            PlatformValue::DmlResult { ty, outcome } => {
+                self.evaluate_standard_dml_result_method(target, ty, outcome, span)
+            }
+            PlatformValue::ApprovalProcessResult(result) => {
+                self.evaluate_approval_process_result_method(target, result, span)
+            }
+            _ => Err(Diagnostic::new("invalid checked DML result receiver", span)),
+        }
+    }
+
+    fn evaluate_standard_dml_result_method(
+        &mut self,
+        target: DmlResultMethod,
+        ty: TypeName,
+        outcome: DmlRowOutcome,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
         match target {
             DmlResultMethod::IsSuccess => Ok(Value::Boolean(outcome.is_success())),
             DmlResultMethod::GetId => Ok(outcome.id.map_or_else(
@@ -1113,6 +1129,62 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             }
             DmlResultMethod::IsCreated => Err(Diagnostic::new(
                 "isCreated target attached to a non-UpsertResult",
+                span,
+            )),
+            DmlResultMethod::GetEntityId
+            | DmlResultMethod::GetInstanceStatus
+            | DmlResultMethod::GetNewWorkitemIds => Err(Diagnostic::new(
+                "Approval.ProcessResult target attached to a Database result",
+                span,
+            )),
+        }
+    }
+
+    fn evaluate_approval_process_result_method(
+        &mut self,
+        target: DmlResultMethod,
+        result: ApprovalProcessResultValue,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        match target {
+            DmlResultMethod::IsSuccess => Ok(Value::Boolean(result.success)),
+            DmlResultMethod::GetEntityId => Ok(result.entity_id.map_or_else(
+                || Value::Null(Some(TypeName::Id)),
+                |id| Value::Id(id.to_string()),
+            )),
+            DmlResultMethod::GetErrors => match result.errors {
+                Some(errors) => {
+                    let elements = errors
+                        .into_iter()
+                        .map(|error| self.store.allocate_platform(PlatformValue::DmlError(error)))
+                        .collect();
+                    Ok(self.store.allocate_collection(Collection::List {
+                        element_type: TypeName::DatabaseError,
+                        elements,
+                        iteration_depth: 0,
+                    }))
+                }
+                None => Ok(Value::Null(Some(TypeName::List(Box::new(
+                    TypeName::DatabaseError,
+                ))))),
+            },
+            DmlResultMethod::GetInstanceStatus => Ok(result
+                .instance_status
+                .map_or_else(|| Value::Null(Some(TypeName::String)), Value::String)),
+            DmlResultMethod::GetNewWorkitemIds => {
+                let elements = result
+                    .new_workitem_ids
+                    .into_iter()
+                    .map(|id| Value::Id(id.to_string()))
+                    .collect();
+                Ok(self.store.allocate_collection(Collection::List {
+                    element_type: TypeName::Id,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            DmlResultMethod::GetId | DmlResultMethod::IsCreated => Err(Diagnostic::new(
+                "Database result target attached to Approval.ProcessResult",
                 span,
             )),
         }

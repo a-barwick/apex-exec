@@ -1,7 +1,7 @@
 use super::{
-    ApexDouble, Collection, CollectionId, EvaluatedArgument, Interpreter, PlatformHost,
-    PlatformValue, SObjectId, SObjectInstance, Value, apex_field_type, invalid_runtime_operands,
-    runtime_exception,
+    ApexDouble, ApprovalProcessResultValue, Collection, CollectionId, EvaluatedArgument,
+    Interpreter, PlatformHost, PlatformValue, SObjectId, SObjectInstance, Value, apex_field_type,
+    invalid_runtime_operands, runtime_exception,
     value_graph::{CycleBehavior, GraphIdentity, TraversalError, ValueGraphTraversal},
 };
 use crate::{
@@ -1186,7 +1186,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 let json = self.value_to_json(&value.value, value.span)?;
                 let serialized = if intrinsic == P::JsonSerializePretty {
-                    if self.is_approval_lock_result_value(&value.value) {
+                    if self.is_approval_result_value(&value.value) {
                         apex_pretty_json(&json)
                     } else {
                         serde_json::to_string_pretty(&json)
@@ -3157,18 +3157,18 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         self.value_to_json_inner(value, span, 0, &mut traversal)
     }
 
-    fn is_approval_lock_result_value(&self, value: &Value) -> bool {
+    fn is_approval_result_value(&self, value: &Value) -> bool {
         match value {
             Value::Platform(id) => matches!(
                 self.store.platform(*id),
                 PlatformValue::DmlResult {
                     ty: TypeName::ApprovalLockResult,
                     ..
-                }
+                } | PlatformValue::ApprovalProcessResult(_)
             ),
             Value::Collection(id) => match self.store.collection(*id) {
                 Collection::List { element_type, .. } => {
-                    element_type == &TypeName::ApprovalLockResult
+                    is_restricted_approval_result(element_type)
                 }
                 Collection::Set { .. } | Collection::Map { .. } => false,
             },
@@ -3232,6 +3232,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 PlatformValue::Blob(bytes) => JsonValue::String(BASE64.encode(bytes)),
                 PlatformValue::DmlResult { ty, outcome } if ty == &TypeName::ApprovalLockResult => {
                     approval_lock_result_to_json(outcome, span, depth, traversal)?
+                }
+                PlatformValue::ApprovalProcessResult(result) => {
+                    approval_process_result_to_json(result, span, depth, traversal)?
                 }
                 _ => {
                     return Err(platform_error(
@@ -3327,15 +3330,14 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         depth: usize,
         traversal: &mut ValueGraphTraversal,
     ) -> Result<JsonValue, Diagnostic> {
-        if matches!(
-            self.collection(id),
-            Collection::Set {
-                element_type: TypeName::ApprovalLockResult,
-                ..
-            }
-        ) {
+        if let Collection::Set { element_type, .. } = self.collection(id)
+            && is_restricted_approval_result(element_type)
+        {
             return Err(platform_error(
-                "JSON.serialize supports Approval.LockResult only as a scalar or List element",
+                format!(
+                    "JSON.serialize supports {} only as a scalar or List element",
+                    element_type.apex_name()
+                ),
                 span,
             ));
         }
@@ -3467,9 +3469,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             TypeName::ApprovalLockResult => {
                 self.typed_json_approval_lock_result(value, span, depth, state)
             }
-            TypeName::Set(element) if **element == TypeName::ApprovalLockResult => {
+            TypeName::ApprovalProcessResult => {
+                self.typed_json_approval_process_result(value, span, depth, state)
+            }
+            TypeName::Set(element) if is_restricted_approval_result(element) => {
                 Err(platform_error(
-                    "JSON.deserialize supports Approval.LockResult only as a scalar or List element",
+                    format!(
+                        "JSON.deserialize supports {} only as a scalar or List element",
+                        element.apex_name()
+                    ),
                     span,
                 ))
             }
@@ -3501,7 +3509,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         let errors = match take_json_field(&mut values, "errors") {
             Some(JsonValue::Array(errors)) => errors
                 .into_iter()
-                .map(|error| approval_lock_error_from_json(error, span, depth + 1, state))
+                .map(|error| approval_error_from_json(error, span, depth + 1, state))
                 .collect::<Result<Vec<_>, _>>()?,
             Some(JsonValue::Null) | None => Vec::new(),
             _ => return Err(typed_json_mismatch(&TypeName::ApprovalLockResult, span)),
@@ -3522,6 +3530,69 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 errors,
             },
         }))
+    }
+
+    fn typed_json_approval_process_result(
+        &mut self,
+        value: JsonValue,
+        span: Span,
+        depth: usize,
+        state: &mut TypedJsonState,
+    ) -> Result<Value, Diagnostic> {
+        let target = TypeName::ApprovalProcessResult;
+        let JsonValue::Object(mut values) = value else {
+            return Err(typed_json_mismatch(&target, span));
+        };
+        let actor_ids = approval_id_list_from_json(
+            take_json_field(&mut values, "actorIds"),
+            span,
+            depth + 1,
+            state,
+        )?;
+        let entity_id =
+            approval_id_from_json(take_json_field(&mut values, "entityId"), &target, span)?;
+        let errors = match take_json_field(&mut values, "errors") {
+            Some(JsonValue::Array(errors)) => Some(
+                errors
+                    .into_iter()
+                    .map(|error| approval_error_from_json(error, span, depth + 1, state))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            Some(JsonValue::Null) | None => None,
+            _ => return Err(typed_json_mismatch(&target, span)),
+        };
+        let instance_id =
+            approval_id_from_json(take_json_field(&mut values, "instanceId"), &target, span)?;
+        let instance_status = match take_json_field(&mut values, "instanceStatus") {
+            Some(JsonValue::String(status)) => Some(status),
+            Some(JsonValue::Null) | None => None,
+            _ => return Err(typed_json_mismatch(&target, span)),
+        };
+        let new_workitem_ids = approval_id_list_from_json(
+            take_json_field(&mut values, "newWorkitemIds"),
+            span,
+            depth + 1,
+            state,
+        )?
+        .unwrap_or_default();
+        let success = match take_json_field(&mut values, "success") {
+            Some(JsonValue::Bool(success)) => success,
+            None => false,
+            _ => return Err(typed_json_mismatch(&target, span)),
+        };
+        Ok(self
+            .store
+            .allocate_platform(PlatformValue::ApprovalProcessResult(
+                ApprovalProcessResultValue {
+                    actor_ids,
+                    entity_id,
+                    errors,
+                    instance_id,
+                    instance_status,
+                    new_workitem_ids,
+                    success,
+                },
+            )))
     }
 
     fn bounded_untyped_json(
@@ -3724,8 +3795,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
 }
 
 fn is_approval_json_target(target: &TypeName) -> bool {
-    target == &TypeName::ApprovalLockResult
-        || matches!(target, TypeName::Set(element) if **element == TypeName::ApprovalLockResult)
+    is_restricted_approval_result(target)
+        || matches!(target, TypeName::Set(element) if is_restricted_approval_result(element))
+}
+
+fn is_restricted_approval_result(target: &TypeName) -> bool {
+    matches!(
+        target,
+        TypeName::ApprovalLockResult | TypeName::ApprovalProcessResult
+    )
 }
 
 fn take_json_field(values: &mut JsonMap<String, JsonValue>, name: &str) -> Option<JsonValue> {
@@ -3736,7 +3814,53 @@ fn take_json_field(values: &mut JsonMap<String, JsonValue>, name: &str) -> Optio
     values.remove(&key)
 }
 
-fn approval_lock_error_from_json(
+fn approval_id_from_json(
+    value: Option<JsonValue>,
+    target: &TypeName,
+    span: Span,
+) -> Result<Option<RecordId>, Diagnostic> {
+    match value {
+        Some(JsonValue::String(id)) => RecordId::parse(id)
+            .map(Some)
+            .map_err(|_| typed_json_mismatch(target, span)),
+        Some(JsonValue::Null) | None => Ok(None),
+        _ => Err(typed_json_mismatch(target, span)),
+    }
+}
+
+fn approval_id_list_from_json(
+    value: Option<JsonValue>,
+    span: Span,
+    depth: usize,
+    state: &mut TypedJsonState,
+) -> Result<Option<Vec<RecordId>>, Diagnostic> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let JsonValue::Array(values) = value else {
+        return if value.is_null() {
+            Ok(None)
+        } else {
+            Err(typed_json_mismatch(
+                &TypeName::List(Box::new(TypeName::Id)),
+                span,
+            ))
+        };
+    };
+    values
+        .into_iter()
+        .map(|value| {
+            state.visit(depth, span)?;
+            let JsonValue::String(id) = value else {
+                return Err(typed_json_mismatch(&TypeName::Id, span));
+            };
+            RecordId::parse(id).map_err(|_| typed_json_mismatch(&TypeName::Id, span))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn approval_error_from_json(
     value: JsonValue,
     span: Span,
     depth: usize,
@@ -3783,42 +3907,7 @@ fn approval_lock_result_to_json(
     depth: usize,
     traversal: &mut ValueGraphTraversal,
 ) -> Result<JsonValue, Diagnostic> {
-    let mut errors = Vec::with_capacity(outcome.errors.len());
-    for error in &outcome.errors {
-        traversal
-            .visit_element()
-            .map_err(|error| json_traversal_error(error, span))?;
-        traversal
-            .visit_node(depth + 2)
-            .map_err(|error| json_traversal_error(error, span))?;
-        let error_value = (|| {
-            let mut value = JsonMap::new();
-            visit_json_property(traversal, depth + 3, span)?;
-            value.insert(
-                "statusCode".to_owned(),
-                JsonValue::String(error.status.apex_name().to_owned()),
-            );
-            visit_json_property(traversal, depth + 3, span)?;
-            value.insert(
-                "message".to_owned(),
-                JsonValue::String(error.message.clone()),
-            );
-            visit_json_property(traversal, depth + 3, span)?;
-            let mut fields = Vec::with_capacity(error.fields.len());
-            for field in &error.fields {
-                traversal
-                    .visit_element()
-                    .map_err(|error| json_traversal_error(error, span))?;
-                traversal
-                    .visit_node(depth + 4)
-                    .map_err(|error| json_traversal_error(error, span))?;
-                fields.push(JsonValue::String(field.clone()));
-            }
-            value.insert("fields".to_owned(), JsonValue::Array(fields));
-            Ok(JsonValue::Object(value))
-        })()?;
-        errors.push(error_value);
-    }
+    let errors = approval_errors_to_json(&outcome.errors, span, depth, traversal)?;
     let mut value = JsonMap::new();
     visit_json_property(traversal, depth + 1, span)?;
     value.insert(
@@ -3834,6 +3923,126 @@ fn approval_lock_result_to_json(
     visit_json_property(traversal, depth + 1, span)?;
     value.insert("errors".to_owned(), JsonValue::Array(errors));
     Ok(JsonValue::Object(value))
+}
+
+fn approval_process_result_to_json(
+    result: &ApprovalProcessResultValue,
+    span: Span,
+    depth: usize,
+    traversal: &mut ValueGraphTraversal,
+) -> Result<JsonValue, Diagnostic> {
+    let mut value = JsonMap::new();
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "actorIds".to_owned(),
+        approval_ids_to_json(result.actor_ids.as_deref(), span, depth + 1, traversal)?,
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "entityId".to_owned(),
+        optional_approval_id_to_json(result.entity_id.as_ref()),
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "errors".to_owned(),
+        match result.errors.as_deref() {
+            Some(errors) => {
+                JsonValue::Array(approval_errors_to_json(errors, span, depth, traversal)?)
+            }
+            None => JsonValue::Null,
+        },
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "instanceId".to_owned(),
+        optional_approval_id_to_json(result.instance_id.as_ref()),
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "instanceStatus".to_owned(),
+        result
+            .instance_status
+            .as_ref()
+            .map(|status| JsonValue::String(status.clone()))
+            .unwrap_or(JsonValue::Null),
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert(
+        "newWorkitemIds".to_owned(),
+        approval_ids_to_json(Some(&result.new_workitem_ids), span, depth + 1, traversal)?,
+    );
+    visit_json_property(traversal, depth + 1, span)?;
+    value.insert("success".to_owned(), JsonValue::Bool(result.success));
+    Ok(JsonValue::Object(value))
+}
+
+fn approval_errors_to_json(
+    source: &[DmlError],
+    span: Span,
+    depth: usize,
+    traversal: &mut ValueGraphTraversal,
+) -> Result<Vec<JsonValue>, Diagnostic> {
+    let mut errors = Vec::with_capacity(source.len());
+    for error in source {
+        traversal
+            .visit_element()
+            .map_err(|error| json_traversal_error(error, span))?;
+        traversal
+            .visit_node(depth + 2)
+            .map_err(|error| json_traversal_error(error, span))?;
+        let mut value = JsonMap::new();
+        visit_json_property(traversal, depth + 3, span)?;
+        value.insert(
+            "statusCode".to_owned(),
+            JsonValue::String(error.status.apex_name().to_owned()),
+        );
+        visit_json_property(traversal, depth + 3, span)?;
+        value.insert(
+            "message".to_owned(),
+            JsonValue::String(error.message.clone()),
+        );
+        visit_json_property(traversal, depth + 3, span)?;
+        let mut fields = Vec::with_capacity(error.fields.len());
+        for field in &error.fields {
+            traversal
+                .visit_element()
+                .map_err(|error| json_traversal_error(error, span))?;
+            traversal
+                .visit_node(depth + 4)
+                .map_err(|error| json_traversal_error(error, span))?;
+            fields.push(JsonValue::String(field.clone()));
+        }
+        value.insert("fields".to_owned(), JsonValue::Array(fields));
+        errors.push(JsonValue::Object(value));
+    }
+    Ok(errors)
+}
+
+fn approval_ids_to_json(
+    source: Option<&[RecordId]>,
+    span: Span,
+    depth: usize,
+    traversal: &mut ValueGraphTraversal,
+) -> Result<JsonValue, Diagnostic> {
+    let Some(source) = source else {
+        return Ok(JsonValue::Null);
+    };
+    let mut values = Vec::with_capacity(source.len());
+    for id in source {
+        traversal
+            .visit_element()
+            .map_err(|error| json_traversal_error(error, span))?;
+        traversal
+            .visit_node(depth + 1)
+            .map_err(|error| json_traversal_error(error, span))?;
+        values.push(JsonValue::String(id.to_string()));
+    }
+    Ok(JsonValue::Array(values))
+}
+
+fn optional_approval_id_to_json(id: Option<&RecordId>) -> JsonValue {
+    id.map(|id| JsonValue::String(id.to_string()))
+        .unwrap_or(JsonValue::Null)
 }
 
 fn visit_json_property(

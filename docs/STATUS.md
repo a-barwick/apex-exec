@@ -660,6 +660,26 @@ compatibility. The `Approval.LockResult` blocker is gone; 1,005 tests now first
 stop at missing `Approval.ProcessResult` in `LogEntryEventBuilder.cls`, so
 M28-CN14 is Ready.
 
+CN14 is now in Review on `codex/m28-cn14-approval-process-result`. It adds the
+bounded Salesforce-compatible `Approval.ProcessResult` scalar/direct-List
+value surface selected by CENSUS-14: typed JSON construction, exact seven-field
+compact/pretty serialization, class-literal identity, nullable/default state,
+typed `Database.Error` values including `NO_APPLICABLE_PROCESS`, and the five
+enterprise-required accessors. Placement validation rejects every other
+generic position during checking. The focused M28 suite passes 61/61, and the
+guarded API 65.0 Salesforce comparison matches 2/2 dimensions with CLI
+2.144.6. No approval or DML mutation ran; both temporary classes were deleted
+and separately verified absent. `Approval.UnlockResult`, requests,
+`Approval.process`, and all other approval operations remain unsupported.
+CN13 and CENSUS-14 remain Complete; CN14 is not integrated or Complete.
+
+The CN14 candidate census preserves the frozen hashes and denominator across
+three deterministic runs. It discovers and parses 1,159/1,159 tests but
+remains 0/1,159 at checking, execution, agreement, and strict compatibility;
+cold/warm/warm timings are 470,593/103/103 ms. The same 1,005 tests now first
+stop at missing `Approval.UnlockResult`. That is a census-derived next blocker,
+not a claim or implementation in CN14.
+
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff

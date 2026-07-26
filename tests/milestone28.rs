@@ -860,49 +860,62 @@ fn approval_lock_result_reuses_typed_dml_results_and_bounded_json_conversion() {
         ]
     );
 
-    for unsupported in ["Approval.ProcessResult", "Approval.UnlockResult"] {
-        let error = check(&format!("{unsupported} result;")).unwrap_err();
-        assert!(
-            error
-                .message
-                .contains(&format!("unknown type `{unsupported}`"))
-        );
-    }
+    let unsupported = "Approval.UnlockResult";
+    let error = check(&format!("{unsupported} result;")).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains(&format!("unknown type `{unsupported}`"))
+    );
 
-    for unsupported_placement in [
-        "Set<Approval.LockResult> values;",
-        "Map<String, Approval.LockResult> values;",
-        "Iterable<Approval.LockResult> values;",
-        "List<List<Approval.LockResult>> values;",
-        "Set<List<Approval.LockResult>> values;",
-        "public interface Leak { void consume(Set<Approval.LockResult> values); }",
-        "public class Leak implements Database.Batchable<Approval.LockResult> {}",
-        "public class Leak { public class Wrapper {} Wrapper<Approval.LockResult> value; }",
-        "public class E extends Exception {} try {} catch (E<Approval.LockResult> error) {}",
-        r#"public class Leak {
-            public class Wrapper {}
-            public static Object run() {
+    for approval_result in ["Approval.LockResult", "Approval.ProcessResult"] {
+        for unsupported_placement in [
+            format!("Set<{approval_result}> values;"),
+            format!("Map<String, {approval_result}> values;"),
+            format!("Iterable<{approval_result}> values;"),
+            format!("List<List<{approval_result}>> values;"),
+            format!("Set<List<{approval_result}>> values;"),
+            format!("public interface Leak {{ void consume(Set<{approval_result}> values); }}"),
+            format!("public class Leak implements Database.Batchable<{approval_result}> {{}}"),
+            format!(
+                "public class Leak {{ public class Wrapper {{}} Wrapper<{approval_result}> value; }}"
+            ),
+            format!(
+                "public class E extends Exception {{}} try {{}} catch (E<{approval_result}> error) {{}}"
+            ),
+            format!(
+                r#"public class Leak {{
+            public class Wrapper {{}}
+            public static Object run() {{
                 return JSON.deserialize(
-                    '{}',
-                    Wrapper<Approval.LockResult>.class
+                    '{{}}',
+                    Wrapper<{approval_result}>.class
                 );
-            }
-        }"#,
-        r#"Object value;
+            }}
+        }}"#
+            ),
+            format!(
+                r#"Object value;
             Object result =
-                (Map<String, Approval.LockResult>) value;"#,
-        r#"Object result = JSON.deserialize(
-                '{}',
-                Map<String, Approval.LockResult>.class
-            );"#,
-        r#"List<Object> values;
-            for (Set<Approval.LockResult> value : values) {}"#,
-    ] {
-        let error = check(unsupported_placement).unwrap_err();
-        assert!(
-            error.message.contains("only as a scalar or List element"),
-            "{error}"
-        );
+                (Map<String, {approval_result}>) value;"#
+            ),
+            format!(
+                r#"Object result = JSON.deserialize(
+                '{{}}',
+                Map<String, {approval_result}>.class
+            );"#
+            ),
+            format!(
+                r#"List<Object> values;
+            for (Set<{approval_result}> value : values) {{}}"#
+            ),
+        ] {
+            let error = check(&unsupported_placement).unwrap_err();
+            assert!(
+                error.message.contains("only as a scalar or List element"),
+                "{error}"
+            );
+        }
     }
 
     let inconsistent = execute(
@@ -961,6 +974,198 @@ fn approval_lock_result_reuses_typed_dml_results_and_bounded_json_conversion() {
         serialization
             .message
             .contains("JSON serialization exceeded the runtime value")
+    );
+}
+
+#[test]
+fn approval_process_result_matches_salesforce_json_defaults_and_accessors() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn14-approval-process-result-oracle",
+    ))
+    .unwrap();
+    let output = compilation
+        .invoke("M28CN14ApprovalProcessResultOracle.run")
+        .unwrap();
+    assert_eq!(
+        &output[..19],
+        [
+            "APEX_EXEC_ORACLE_VALUE|type|Approval.ProcessResult",
+            "APEX_EXEC_ORACLE_VALUE|listSize|2",
+            "APEX_EXEC_ORACLE_VALUE|success|true",
+            "APEX_EXEC_ORACLE_VALUE|entityId|001000000000001AAA",
+            "APEX_EXEC_ORACLE_VALUE|successErrorsNull|true",
+            "APEX_EXEC_ORACLE_VALUE|instanceStatus|Approved",
+            "APEX_EXEC_ORACLE_VALUE|workitems|1",
+            "APEX_EXEC_ORACLE_VALUE|workitemId|04i000000000001AAA",
+            "APEX_EXEC_ORACLE_VALUE|failureSuccess|false",
+            "APEX_EXEC_ORACLE_VALUE|failureErrors|1",
+            "APEX_EXEC_ORACLE_VALUE|failureStatus|NO_APPLICABLE_PROCESS",
+            "APEX_EXEC_ORACLE_VALUE|failureMessage|No applicable approval process was found.",
+            "APEX_EXEC_ORACLE_VALUE|failureFields|0",
+            "APEX_EXEC_ORACLE_VALUE|failureWorkitems|0",
+            "APEX_EXEC_ORACLE_VALUE|defaultSuccess|false",
+            "APEX_EXEC_ORACLE_VALUE|defaultEntityNull|true",
+            "APEX_EXEC_ORACLE_VALUE|defaultErrorsNull|true",
+            "APEX_EXEC_ORACLE_VALUE|defaultStatusNull|true",
+            "APEX_EXEC_ORACLE_VALUE|defaultWorkitems|0",
+        ]
+    );
+    let hidden_compact = "{\"actorIds\":[\"005000000000001AAA\"],\"entityId\":\"001000000000001AAA\",\"errors\":null,\"instanceId\":\"04g000000000001AAA\",\"instanceStatus\":null,\"newWorkitemIds\":[],\"success\":false}";
+    assert_eq!(
+        &output[19..25],
+        [
+            format!("APEX_EXEC_ORACLE_VALUE|hiddenCompact|{hidden_compact}"),
+            "APEX_EXEC_ORACLE_VALUE|hiddenErrorsNull|true".to_owned(),
+            "APEX_EXEC_ORACLE_VALUE|hiddenWorkitems|0".to_owned(),
+            "APEX_EXEC_ORACLE_VALUE|hiddenSuccess|false".to_owned(),
+            "APEX_EXEC_ORACLE_VALUE|typedListSize|2".to_owned(),
+            "APEX_EXEC_ORACLE_VALUE|typedListFailureStatus|NO_APPLICABLE_PROCESS".to_owned(),
+        ]
+    );
+    let compact =
+        "APEX_EXEC_ORACLE_VALUE|compact|{\"actorIds\":null,\"entityId\":\"001000000000001AAA\",\"errors\":null,\"instanceId\":null,\"instanceStatus\":\"Approved\",\"newWorkitemIds\":[\"04i000000000001AAA\"],\"success\":true}"
+            .to_owned();
+    let failure_compact = "{\"actorIds\":null,\"entityId\":\"001000000000001AAA\",\"errors\":[{\"statusCode\":\"NO_APPLICABLE_PROCESS\",\"message\":\"No applicable approval process was found.\",\"fields\":[]}],\"instanceId\":null,\"instanceStatus\":null,\"newWorkitemIds\":[],\"success\":false}";
+    let success_pretty = concat!(
+        "{\n",
+        "  \"actorIds\" : null,\n",
+        "  \"entityId\" : \"001000000000001AAA\",\n",
+        "  \"errors\" : null,\n",
+        "  \"instanceId\" : null,\n",
+        "  \"instanceStatus\" : \"Approved\",\n",
+        "  \"newWorkitemIds\" : [ \"04i000000000001AAA\" ],\n",
+        "  \"success\" : true\n",
+        "}"
+    );
+    let failure_pretty = concat!(
+        "{\n",
+        "  \"actorIds\" : null,\n",
+        "  \"entityId\" : \"001000000000001AAA\",\n",
+        "  \"errors\" : [ {\n",
+        "    \"statusCode\" : \"NO_APPLICABLE_PROCESS\",\n",
+        "    \"message\" : \"No applicable approval process was found.\",\n",
+        "    \"fields\" : [ ]\n",
+        "  } ],\n",
+        "  \"instanceId\" : null,\n",
+        "  \"instanceStatus\" : null,\n",
+        "  \"newWorkitemIds\" : [ ],\n",
+        "  \"success\" : false\n",
+        "}"
+    );
+    assert_eq!(output[25], compact);
+    assert_eq!(
+        output[26],
+        format!(
+            "APEX_EXEC_ORACLE_VALUE|listCompact|[{},{failure_compact}]",
+            &compact[31..]
+        )
+    );
+    assert_eq!(
+        output[27],
+        format!(
+            "APEX_EXEC_ORACLE_VALUE|pretty|{}",
+            serde_json::to_string(success_pretty).unwrap()
+        )
+    );
+    assert_eq!(
+        output[28],
+        format!(
+            "APEX_EXEC_ORACLE_VALUE|listPretty|{}",
+            serde_json::to_string(&format!("[ {success_pretty}, {failure_pretty} ]")).unwrap()
+        )
+    );
+    assert_eq!(
+        output[29],
+        "APEX_EXEC_ORACLE_VALUE|defaultCompact|{\"actorIds\":null,\"entityId\":null,\"errors\":null,\"instanceId\":null,\"instanceStatus\":null,\"newWorkitemIds\":[],\"success\":false}"
+    );
+    assert_eq!(
+        output[30],
+        "APEX_EXEC_ORACLE_VALUE|prettyStatus|NO_APPLICABLE_PROCESS"
+    );
+    assert_eq!(output.len(), 31);
+
+    let pretty = execute(
+        r#"
+        Approval.ProcessResult value = (Approval.ProcessResult) JSON.deserialize(
+            '{"success":true,"entityId":"001000000000001AAA"}',
+            Approval.ProcessResult.class
+        );
+        System.debug(JSON.serializePretty(value));
+        System.debug(JSON.serializePretty(
+            new List<Approval.ProcessResult>{ value, value }
+        ));
+        "#,
+    )
+    .unwrap();
+    let pretty_result = concat!(
+        "{\n",
+        "  \"actorIds\" : null,\n",
+        "  \"entityId\" : \"001000000000001AAA\",\n",
+        "  \"errors\" : null,\n",
+        "  \"instanceId\" : null,\n",
+        "  \"instanceStatus\" : null,\n",
+        "  \"newWorkitemIds\" : [ ],\n",
+        "  \"success\" : true\n",
+        "}"
+    );
+    assert_eq!(
+        pretty,
+        [
+            pretty_result.to_owned(),
+            format!("[ {pretty_result}, {pretty_result} ]"),
+        ]
+    );
+
+    let errors = std::iter::repeat_n(
+        r#"{"message":"No applicable approval process was found.","statusCode":"NO_APPLICABLE_PROCESS"}"#,
+        4_096,
+    )
+    .collect::<Vec<_>>()
+    .join(",");
+    let bounded = execute(&format!(
+        r#"Approval.ProcessResult value = (Approval.ProcessResult) JSON.deserialize(
+            '{{"success":false,"errors":[{errors}]}}',
+            Approval.ProcessResult.class
+        );"#
+    ))
+    .unwrap_err();
+    assert!(
+        bounded
+            .message
+            .contains("typed JSON exceeds the bounded conversion limits")
+    );
+
+    let nested_errors = std::iter::repeat_n(
+        r#"{"message":"No applicable approval process was found.","statusCode":"NO_APPLICABLE_PROCESS"}"#,
+        100,
+    )
+    .collect::<Vec<_>>()
+    .join(",");
+    let serialization = execute(&format!(
+        r#"
+        Approval.ProcessResult value = (Approval.ProcessResult) JSON.deserialize(
+            '{{"success":false,"errors":[{nested_errors}]}}',
+            Approval.ProcessResult.class
+        );
+        List<Approval.ProcessResult> values = new List<Approval.ProcessResult>();
+        for (Integer i = 0; i < 50; i++) {{
+            values.add(value);
+        }}
+        System.debug(JSON.serialize(values));
+        "#
+    ))
+    .unwrap_err();
+    assert!(
+        serialization
+            .message
+            .contains("JSON serialization exceeded the runtime value")
+    );
+
+    let error = check("Approval.UnlockResult result;").unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("unknown type `Approval.UnlockResult`")
     );
 }
 
