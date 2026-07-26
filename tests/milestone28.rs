@@ -8,7 +8,10 @@ use apex_exec::{
         metadata,
     },
     project,
-    runtime::{HttpResponseData, Interpreter, NetworkContext, OrganizationLimit, RecordingHost},
+    runtime::{
+        HttpResponseData, Interpreter, NetworkContext, OrganizationLimit, PlatformHost,
+        RecordingHost, SendEmailErrorData, SendEmailResultData,
+    },
     test_runner::{self, TestOptions},
 };
 use std::{
@@ -657,6 +660,151 @@ fn dynamic_query_cast_to_one_sobject_enforces_single_row_cardinality() {
         error
             .to_string()
             .contains("cannot cast List<SObject> to Account"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
+fn single_email_message_surface_is_typed_recorded_and_capacity_bounded() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn12-single-email-message-oracle",
+    ))
+    .unwrap();
+    let mut host = RecordingHost::default();
+    let program = &compilation.program;
+    assert_eq!(
+        Interpreter::with_host(&mut host)
+            .invoke_static(program, "M28CN12SingleEmailMessageOracle", "run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|subject|M28 CN12",
+            "APEX_EXEC_ORACLE_VALUE|htmlBody|<p>deterministic</p>",
+            "APEX_EXEC_ORACLE_VALUE|targetSet|true",
+            "APEX_EXEC_ORACLE_VALUE|saveAsActivity|false",
+            "APEX_EXEC_ORACLE_VALUE|toAddresses|nobody@example.invalid",
+        ]
+    );
+    assert_eq!(
+        Interpreter::with_host(&mut host)
+            .invoke_static(
+                program,
+                "M28CN12SingleEmailMessageOracle",
+                "exerciseLocalSend",
+            )
+            .unwrap(),
+        [
+            "APEX_EXEC_LOCAL_VALUE|success|true",
+            "APEX_EXEC_LOCAL_VALUE|errors|0",
+        ]
+    );
+    assert_eq!(host.organization_limit_reads(), 1);
+    assert_eq!(host.limit_usage().email_invocations, 1);
+    assert_eq!(host.sent_emails().len(), 1);
+    assert_eq!(host.sent_emails()[0].subject.as_deref(), Some("M28 CN12"));
+    assert_eq!(
+        host.sent_emails()[0].to_addresses,
+        ["nobody@example.invalid"]
+    );
+
+    let cumulative_capacity = check(
+        r#"
+        System.OrgLimit singleEmail = System.OrgLimits.getMap().get('SingleEmail');
+        Messaging.reserveSingleEmailCapacity(1);
+        Messaging.reserveSingleEmailCapacity(
+            singleEmail.getLimit() - singleEmail.getValue() - 1
+        );
+        Boolean handled = false;
+        try {
+            Messaging.reserveSingleEmailCapacity(1);
+        } catch (System.HandledException expected) {
+            handled = true;
+        }
+        System.debug(handled);
+        "#,
+    )
+    .unwrap();
+    let mut cumulative_host = RecordingHost::default();
+    assert_eq!(
+        Interpreter::with_host(&mut cumulative_host)
+            .execute(&cumulative_capacity)
+            .unwrap(),
+        ["true"]
+    );
+    assert_eq!(cumulative_host.organization_limit_reads(), 4);
+
+    let mut failure_host = RecordingHost::default();
+    failure_host.enqueue_send_email_results(vec![SendEmailResultData {
+        success: false,
+        errors: vec![SendEmailErrorData {
+            message: "rejected deterministically".to_owned(),
+        }],
+    }]);
+    assert_eq!(
+        Interpreter::with_host(&mut failure_host)
+            .invoke_static(
+                program,
+                "M28CN12SingleEmailMessageOracle",
+                "exerciseLocalFailure",
+            )
+            .unwrap(),
+        [
+            "APEX_EXEC_LOCAL_VALUE|failureSuccess|false",
+            "APEX_EXEC_LOCAL_VALUE|failureMessage|rejected deterministically",
+        ]
+    );
+    assert_eq!(failure_host.sent_emails().len(), 1);
+
+    let mut invalid_result_host = RecordingHost::default();
+    invalid_result_host.enqueue_send_email_results(Vec::new());
+    let error = Interpreter::with_host(&mut invalid_result_host)
+        .invoke_static(
+            program,
+            "M28CN12SingleEmailMessageOracle",
+            "exerciseLocalSend",
+        )
+        .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("EmailException"));
+    assert_eq!(invalid_result_host.sent_emails().len(), 1);
+
+    let mut unavailable = RecordingHost::default();
+    unavailable.set_organization_limits(Vec::new());
+    let error = Interpreter::with_host(&mut unavailable)
+        .invoke_static(
+            program,
+            "M28CN12SingleEmailMessageOracle",
+            "exerciseLocalSend",
+        )
+        .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("NoAccessException"));
+    assert!(unavailable.sent_emails().is_empty());
+
+    let mut exhausted = RecordingHost::default();
+    exhausted.set_organization_limits(vec![OrganizationLimit::new("SingleEmail", 15, 15)]);
+    let error = Interpreter::with_host(&mut exhausted)
+        .invoke_static(
+            program,
+            "M28CN12SingleEmailMessageOracle",
+            "exerciseLocalSend",
+        )
+        .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("HandledException"));
+    assert!(exhausted.sent_emails().is_empty());
+
+    let invalid_root = test_project(
+        "InvalidSingleEmailSetter",
+        "public class InvalidSingleEmailSetter {
+            public static void run() {
+                Messaging.SingleEmailMessage message =
+                    new Messaging.SingleEmailMessage();
+                message.setSaveAsActivity('false');
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error.to_string().contains("expects Boolean, found String"),
         "{error}"
     );
     fs::remove_dir_all(invalid_root).unwrap();

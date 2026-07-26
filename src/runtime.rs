@@ -40,8 +40,8 @@ use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
     LimitUsage, M11_ASYNC_PROFILE, NetworkContext, OrganizationLimit, PlatformHost, QueryEvent,
-    QueryKind, RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
-    TriggerStage, UserContext,
+    QueryKind, RecordingHost, SendEmailErrorData, SendEmailResultData, SingleEmailMessageData,
+    TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase, TriggerStage, UserContext,
 };
 use image::RuntimeImage;
 pub(crate) use instrumentation::{BranchHits, ExecutionTrace};
@@ -149,6 +149,9 @@ enum PlatformValue {
     Http,
     HttpRequest(HttpRequestData),
     HttpResponse(HttpResponseData),
+    SingleEmailMessage(SingleEmailMessageData),
+    SendEmailResult(SendEmailResultData),
+    SendEmailError(SendEmailErrorData),
     DmlOptions(DmlOptionsValue),
     VisualEditorDataRow {
         label: String,
@@ -211,6 +214,9 @@ impl PlatformValue {
             Self::Http => TypeName::Http,
             Self::HttpRequest(_) => TypeName::HttpRequest,
             Self::HttpResponse(_) => TypeName::HttpResponse,
+            Self::SingleEmailMessage(_) => TypeName::SingleEmailMessage,
+            Self::SendEmailResult(_) => TypeName::SendEmailResult,
+            Self::SendEmailError(_) => TypeName::SendEmailError,
             Self::DmlOptions(_) => TypeName::DmlOptions,
             Self::VisualEditorDataRow { .. } => TypeName::VisualEditorDataRow,
             Self::VisualEditorDynamicPickListRows(_) => TypeName::VisualEditorDynamicPickListRows,
@@ -2249,6 +2255,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 };
                 self.read_dml_option_field(receiver, field, span)
             }
+            target @ (MemberTarget::SendEmailResultSuccess
+            | MemberTarget::SendEmailResultErrors
+            | MemberTarget::SendEmailErrorMessage) => {
+                let receiver = match evaluated_receiver {
+                    Some(receiver) => receiver,
+                    None => self.evaluate(receiver)?,
+                };
+                self.read_send_email_member(target, receiver, span)
+            }
             target @ (MemberTarget::SObjectRelationship { .. }
             | MemberTarget::SObjectChildRelationship { .. }) => self
                 .evaluate_sobject_relationship_member(target, receiver, evaluated_receiver, span),
@@ -2288,6 +2303,50 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 self.read_property_storage(target, Some(receiver), span)
             }
             _ => unreachable!("only class member targets use this helper"),
+        }
+    }
+
+    fn read_send_email_member(
+        &mut self,
+        target: MemberTarget,
+        receiver: Value,
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let Value::Platform(id) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match target {
+            MemberTarget::SendEmailResultSuccess => {
+                let PlatformValue::SendEmailResult(result) = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::Boolean(result.success))
+            }
+            MemberTarget::SendEmailResultErrors => {
+                let PlatformValue::SendEmailResult(result) = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                let errors = result.errors.clone();
+                let elements = errors
+                    .into_iter()
+                    .map(|error| {
+                        self.store
+                            .allocate_platform(PlatformValue::SendEmailError(error))
+                    })
+                    .collect();
+                Ok(self.allocate(Collection::List {
+                    element_type: TypeName::SendEmailError,
+                    elements,
+                    iteration_depth: 0,
+                }))
+            }
+            MemberTarget::SendEmailErrorMessage => {
+                let PlatformValue::SendEmailError(error) = self.store.platform(id) else {
+                    return Err(invalid_runtime_operands(span));
+                };
+                Ok(Value::String(error.message.clone()))
+            }
+            _ => unreachable!("only send-email result members use this helper"),
         }
     }
 
@@ -3181,6 +3240,10 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             crate::hir::PlatformConstructor::HttpResponse => {
                 require_no_constructor_arguments(arguments, span)?;
                 PlatformValue::HttpResponse(HttpResponseData::default())
+            }
+            crate::hir::PlatformConstructor::SingleEmailMessage => {
+                require_no_constructor_arguments(arguments, span)?;
+                PlatformValue::SingleEmailMessage(SingleEmailMessageData::default())
             }
             crate::hir::PlatformConstructor::DmlOptions => {
                 require_no_constructor_arguments(arguments, span)?;

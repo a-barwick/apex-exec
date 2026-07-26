@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "single-email-message-surface",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN12SingleEmailMessageOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

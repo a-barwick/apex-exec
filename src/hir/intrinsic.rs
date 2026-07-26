@@ -54,6 +54,7 @@ pub enum PlatformConstructor {
     Http,
     HttpRequest,
     HttpResponse,
+    SingleEmailMessage,
     DmlOptions,
     VisualEditorDataRow,
     VisualEditorDynamicPickListRows,
@@ -102,6 +103,32 @@ pub enum LimitIntrinsic {
     LimitQueryRows,
     LimitQueueableJobs,
     LimitSoslQueries,
+}
+
+/// Operations on the bounded `System.Messaging` surface and its email values.
+///
+/// Keeping the family closed avoids growing the top-level platform dispatcher
+/// for every modeled message field while preserving checker-selected targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessagingIntrinsic {
+    SingleEmailSetSubject,
+    SingleEmailGetSubject,
+    SingleEmailSetHtmlBody,
+    SingleEmailGetHtmlBody,
+    SingleEmailSetTargetObjectId,
+    SingleEmailGetTargetObjectId,
+    SingleEmailSetSaveAsActivity,
+    SingleEmailGetSaveAsActivity,
+    SingleEmailSetToAddresses,
+    SingleEmailGetToAddresses,
+    ReserveSingleEmailCapacity,
+    SendEmail,
+}
+
+impl MessagingIntrinsic {
+    pub fn is_static(self) -> bool {
+        matches!(self, Self::ReserveSingleEmailCapacity | Self::SendEmail)
+    }
 }
 
 /// Curated M10 platform calls. This remains a closed checker-selected set so
@@ -249,6 +276,7 @@ pub enum PlatformIntrinsic {
     TypeGetName,
     TypeNewInstance,
     Limits(LimitIntrinsic),
+    Messaging(MessagingIntrinsic),
     OrgLimitsGetMap,
     OrgLimitGetName,
     OrgLimitGetValue,
@@ -346,7 +374,7 @@ impl PlatformIntrinsic {
                 | Self::EncodingBase64Encode
                 | Self::EncodingBase64Decode
                 | Self::SecurityStripInaccessible
-        )
+        ) || matches!(self, Self::Messaging(intrinsic) if intrinsic.is_static())
     }
 }
 

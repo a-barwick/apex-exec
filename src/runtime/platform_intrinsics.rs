@@ -7,7 +7,7 @@ use super::{
 use crate::{
     ast::TypeName,
     diagnostic::Diagnostic,
-    hir::{LimitIntrinsic, PlatformIntrinsic},
+    hir::{LimitIntrinsic, MessagingIntrinsic, PlatformIntrinsic},
     platform::{LoggingLevel, ObjectSchema, RecordId},
     span::Span,
 };
@@ -109,6 +109,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 | P::NetworkGetSelfRegUrl
         ) {
             return self.call_network(intrinsic, arguments, span);
+        }
+        if let P::Messaging(intrinsic) = intrinsic {
+            return self.call_messaging(intrinsic, receiver, arguments, span);
         }
         match intrinsic {
             P::BooleanValueOf => self.call_boolean_value_of(arguments, span),
@@ -648,6 +651,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::OrgLimitsGetMap | P::OrgLimitGetName | P::OrgLimitGetValue | P::OrgLimitGetLimit => {
                 unreachable!("organization-limit intrinsics are dispatched before the match")
             }
+            P::Messaging(_) => unreachable!("messaging intrinsic was not pre-dispatched"),
         }
     }
 
@@ -1390,6 +1394,239 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             P::OrgLimitsGetMap => unreachable!(),
             _ => return Err(invalid_runtime_operands(span)),
         })
+    }
+
+    fn call_messaging(
+        &mut self,
+        intrinsic: MessagingIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use MessagingIntrinsic as M;
+        match intrinsic {
+            M::SingleEmailSetSubject
+            | M::SingleEmailSetHtmlBody
+            | M::SingleEmailSetTargetObjectId
+            | M::SingleEmailSetSaveAsActivity
+            | M::SingleEmailSetToAddresses => {
+                self.mutate_single_email(receiver, intrinsic, arguments, span)
+            }
+            M::SingleEmailGetSubject
+            | M::SingleEmailGetHtmlBody
+            | M::SingleEmailGetTargetObjectId
+            | M::SingleEmailGetSaveAsActivity
+            | M::SingleEmailGetToAddresses => {
+                self.read_single_email(receiver, intrinsic, arguments, span)
+            }
+            M::ReserveSingleEmailCapacity => {
+                let [requested] = arguments else {
+                    return Err(invalid_call_arguments(span));
+                };
+                let requested_span = requested.span;
+                let requested = expect_integer(&requested.value, requested_span)?;
+                if requested < 0 {
+                    return Err(runtime_exception(
+                        "IllegalArgumentException",
+                        "reserved email capacity must be nonnegative",
+                        requested_span,
+                    ));
+                }
+                let limits = self
+                    .host
+                    .organization_limits()
+                    .map_err(|message| runtime_exception("NoAccessException", message, span))?;
+                let Some(limit) = limits
+                    .iter()
+                    .find(|limit| limit.name.eq_ignore_ascii_case("SingleEmail"))
+                else {
+                    return Err(runtime_exception(
+                        "NoAccessException",
+                        "SingleEmail organization capacity is unavailable",
+                        span,
+                    ));
+                };
+                let available = limit.limit.saturating_sub(limit.value);
+                let remaining =
+                    available.saturating_sub(self.store.single_email_reserved_capacity());
+                if requested > remaining {
+                    return Err(runtime_exception(
+                        "HandledException",
+                        format!("requested {requested} email messages but only {remaining} remain"),
+                        span,
+                    ));
+                }
+                self.store.reserve_single_email_capacity(requested);
+                Ok(Value::Void)
+            }
+            M::SendEmail => self.send_email(arguments, span),
+        }
+    }
+
+    fn mutate_single_email(
+        &mut self,
+        receiver: Option<Value>,
+        intrinsic: MessagingIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use MessagingIntrinsic as M;
+        let id = platform_id(receiver, span)?;
+        let to_addresses = if intrinsic == M::SingleEmailSetToAddresses {
+            let [addresses] = arguments else {
+                return Err(invalid_call_arguments(span));
+            };
+            let Value::Collection(addresses_id) = addresses.value else {
+                return Err(invalid_runtime_operands(addresses.span));
+            };
+            let Collection::List { elements, .. } = self.store.collection(addresses_id) else {
+                return Err(invalid_runtime_operands(addresses.span));
+            };
+            Some(
+                elements
+                    .iter()
+                    .map(|value| expect_string(value, addresses.span).map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
+        };
+        let PlatformValue::SingleEmailMessage(message) = self.store.platform_mut(id) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        match (intrinsic, arguments) {
+            (M::SingleEmailSetSubject, [value]) => {
+                message.subject = Some(expect_string(&value.value, value.span)?.to_owned())
+            }
+            (M::SingleEmailSetHtmlBody, [value]) => {
+                message.html_body = Some(expect_string(&value.value, value.span)?.to_owned())
+            }
+            (M::SingleEmailSetTargetObjectId, [value]) => {
+                let Value::Id(value) = &value.value else {
+                    return Err(invalid_runtime_operands(value.span));
+                };
+                message.target_object_id = Some(value.clone());
+            }
+            (M::SingleEmailSetSaveAsActivity, [value]) => {
+                let Value::Boolean(value) = value.value else {
+                    return Err(invalid_runtime_operands(value.span));
+                };
+                message.save_as_activity = value;
+            }
+            (M::SingleEmailSetToAddresses, [_]) => {
+                message.to_addresses =
+                    to_addresses.expect("address list was evaluated before the mutable borrow");
+            }
+            _ => return Err(invalid_call_arguments(span)),
+        }
+        Ok(Value::Void)
+    }
+
+    fn read_single_email(
+        &mut self,
+        receiver: Option<Value>,
+        intrinsic: MessagingIntrinsic,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use MessagingIntrinsic as M;
+        expect_no_arguments(arguments, span)?;
+        let id = platform_id(receiver, span)?;
+        let PlatformValue::SingleEmailMessage(message) = self.store.platform(id) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        Ok(match intrinsic {
+            M::SingleEmailGetSubject => message
+                .subject
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null(Some(TypeName::String))),
+            M::SingleEmailGetHtmlBody => message
+                .html_body
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null(Some(TypeName::String))),
+            M::SingleEmailGetTargetObjectId => message
+                .target_object_id
+                .clone()
+                .map(Value::Id)
+                .unwrap_or(Value::Null(Some(TypeName::Id))),
+            M::SingleEmailGetSaveAsActivity => Value::Boolean(message.save_as_activity),
+            M::SingleEmailGetToAddresses => {
+                let elements = message
+                    .to_addresses
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect();
+                self.allocate(Collection::List {
+                    element_type: TypeName::String,
+                    elements,
+                    iteration_depth: 0,
+                })
+            }
+            M::SingleEmailSetSubject
+            | M::SingleEmailSetHtmlBody
+            | M::SingleEmailSetTargetObjectId
+            | M::SingleEmailSetSaveAsActivity
+            | M::SingleEmailSetToAddresses
+            | M::ReserveSingleEmailCapacity
+            | M::SendEmail => return Err(invalid_runtime_operands(span)),
+        })
+    }
+
+    fn send_email(
+        &mut self,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        let [messages] = arguments else {
+            return Err(invalid_call_arguments(span));
+        };
+        let Value::Collection(messages_id) = messages.value else {
+            return Err(invalid_runtime_operands(messages.span));
+        };
+        let Collection::List { elements, .. } = self.store.collection(messages_id) else {
+            return Err(invalid_runtime_operands(messages.span));
+        };
+        let elements = elements.clone();
+        let mut email_messages = Vec::with_capacity(elements.len());
+        for element in elements {
+            let Value::Platform(message_id) = element else {
+                return Err(invalid_runtime_operands(messages.span));
+            };
+            let PlatformValue::SingleEmailMessage(message) = self.store.platform(message_id) else {
+                return Err(invalid_runtime_operands(messages.span));
+            };
+            email_messages.push(message.clone());
+        }
+        let results = self
+            .host
+            .send_email(&email_messages)
+            .map_err(|message| runtime_exception("EmailException", message, span))?;
+        if results.len() != email_messages.len() {
+            return Err(runtime_exception(
+                "EmailException",
+                format!(
+                    "platform host returned {} email results for {} messages",
+                    results.len(),
+                    email_messages.len()
+                ),
+                span,
+            ));
+        }
+        let elements = results
+            .into_iter()
+            .map(|result| {
+                self.store
+                    .allocate_platform(PlatformValue::SendEmailResult(result))
+            })
+            .collect();
+        Ok(self.allocate(Collection::List {
+            element_type: TypeName::SendEmailResult,
+            elements,
+            iteration_depth: 0,
+        }))
     }
 
     fn call_logging_level(

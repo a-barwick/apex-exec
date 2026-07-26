@@ -51,6 +51,38 @@ pub struct OrganizationLimit {
     pub limit: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SingleEmailMessageData {
+    pub subject: Option<String>,
+    pub html_body: Option<String>,
+    pub target_object_id: Option<String>,
+    pub save_as_activity: bool,
+    pub to_addresses: Vec<String>,
+}
+
+impl Default for SingleEmailMessageData {
+    fn default() -> Self {
+        Self {
+            subject: None,
+            html_body: None,
+            target_object_id: None,
+            save_as_activity: true,
+            to_addresses: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SendEmailErrorData {
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SendEmailResultData {
+    pub success: bool,
+    pub errors: Vec<SendEmailErrorData>,
+}
+
 impl OrganizationLimit {
     pub fn new(name: impl Into<String>, value: i64, limit: i64) -> Self {
         Self {
@@ -367,6 +399,13 @@ pub trait PlatformHost {
         Err("organization limits are unavailable from this platform host".to_owned())
     }
 
+    fn send_email(
+        &mut self,
+        _messages: &[SingleEmailMessageData],
+    ) -> Result<Vec<SendEmailResultData>, String> {
+        Err("Messaging.sendEmail is unavailable from this platform host".to_owned())
+    }
+
     fn begin_test_window(&mut self) {}
 
     fn end_test_window(&mut self) {}
@@ -505,6 +544,13 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).organization_limits()
     }
 
+    fn send_email(
+        &mut self,
+        messages: &[SingleEmailMessageData],
+    ) -> Result<Vec<SendEmailResultData>, String> {
+        (**self).send_email(messages)
+    }
+
     fn begin_test_window(&mut self) {
         (**self).begin_test_window();
     }
@@ -546,6 +592,9 @@ pub struct RecordingHost {
     test_window_baseline: Option<LimitUsage>,
     organization_limits: Vec<OrganizationLimit>,
     organization_limit_reads: usize,
+    sent_emails: Vec<SingleEmailMessageData>,
+    email_invocations: i64,
+    email_results: VecDeque<Vec<SendEmailResultData>>,
 }
 
 impl RecordingHost {
@@ -567,6 +616,14 @@ impl RecordingHost {
 
     pub fn organization_limit_reads(&self) -> usize {
         self.organization_limit_reads
+    }
+
+    pub fn sent_emails(&self) -> &[SingleEmailMessageData] {
+        &self.sent_emails
+    }
+
+    pub fn enqueue_send_email_results(&mut self, results: Vec<SendEmailResultData>) {
+        self.email_results.push_back(results);
     }
 
     pub fn set_security_policy(&mut self, security: SecurityPolicy) {
@@ -664,6 +721,9 @@ impl Default for RecordingHost {
             test_window_baseline: None,
             organization_limits: vec![OrganizationLimit::new("SingleEmail", 0, 15)],
             organization_limit_reads: 0,
+            sent_emails: Vec::new(),
+            email_invocations: 0,
+            email_results: VecDeque::new(),
         }
     }
 }
@@ -952,7 +1012,7 @@ impl PlatformHost for RecordingHost {
             sosl_queries: self.sosl_queries,
             dml_statements: i64::try_from(self.dml_statements).unwrap_or(i64::MAX),
             dml_rows: self.dml_rows,
-            email_invocations: 0,
+            email_invocations: self.email_invocations,
             future_calls: self.future_calls,
             cpu_time_millis: 0,
             heap_size_bytes: 0,
@@ -968,6 +1028,26 @@ impl PlatformHost for RecordingHost {
     fn organization_limits(&mut self) -> Result<Vec<OrganizationLimit>, String> {
         self.organization_limit_reads = self.organization_limit_reads.saturating_add(1);
         Ok(self.organization_limits.clone())
+    }
+
+    fn send_email(
+        &mut self,
+        messages: &[SingleEmailMessageData],
+    ) -> Result<Vec<SendEmailResultData>, String> {
+        // Success means this deterministic local sink accepted and recorded
+        // the request; it never claims or attempts external delivery.
+        self.email_invocations = self.email_invocations.saturating_add(1);
+        self.sent_emails.extend_from_slice(messages);
+        if let Some(results) = self.email_results.pop_front() {
+            return Ok(results);
+        }
+        Ok(messages
+            .iter()
+            .map(|_| SendEmailResultData {
+                success: true,
+                errors: Vec::new(),
+            })
+            .collect())
     }
 
     fn begin_test_window(&mut self) {

@@ -1,5 +1,23 @@
 # Milestone 28 checkpoint
 
+## 2026-07-25 transfer checkpoint
+
+The current published resume point is the tip of
+`codex/m28-cn12-single-email-message`. M28-CN12 is in Review, not integrated
+or Complete. Its focused local M28 suite passes 59/59, its guarded Salesforce
+comparison matches 2/2 dimensions, and the temporary Salesforce class was
+deleted and verified absent.
+
+The candidate frozen replay is
+`evidence/milestone28/cn12/candidate-census.json`: all 1,159 tests discover
+and parse across three deterministic runs, but strict compatibility remains
+0/1,159. CN12 removes the 1,117-test `Messaging.SingleEmailMessage` blocker;
+the next first blocker is missing `Approval.LockResult`, affecting 1,005
+tests. Resume by independently reviewing the published CN12 commit. If it
+passes, merge it into `codex/milestone-28-enterprise-compatibility`, run and
+record the formal post-integration census, then select the next Ready package.
+Do not call M28 complete below 696/1,159.
+
 Date: 2026-07-20
 
 Branch: `codex/milestone-28-enterprise-compatibility`

@@ -4121,6 +4121,9 @@ impl Checker {
         if let Some(result) = self.dml_options_member_access_type(receiver, name, span) {
             return result;
         }
+        if let Some(result) = self.send_email_member_access_type(receiver, name, span, for_write) {
+            return result;
+        }
         self.class_member_access_type(receiver, name, span, for_write)
     }
 
@@ -4697,6 +4700,55 @@ impl Checker {
         self.members
             .insert(span, MemberTarget::DmlOptionField(field));
         Some(Ok(ExpressionType::Value(TypeName::Boolean)))
+    }
+
+    fn send_email_member_access_type(
+        &mut self,
+        receiver: &Expression,
+        name: &Identifier,
+        span: Span,
+        for_write: bool,
+    ) -> Option<Result<ExpressionType, Diagnostic>> {
+        let receiver_type = match self.expression_type(receiver) {
+            Ok(ExpressionType::Value(ty)) => ty,
+            Ok(ExpressionType::Null | ExpressionType::Void) => return None,
+            Err(_) => return None,
+        };
+        let (target, ty) = match (&receiver_type, name.canonical.as_str()) {
+            (TypeName::SendEmailResult, "success") => {
+                (MemberTarget::SendEmailResultSuccess, TypeName::Boolean)
+            }
+            (TypeName::SendEmailResult, "errors") => (
+                MemberTarget::SendEmailResultErrors,
+                TypeName::List(Box::new(TypeName::SendEmailError)),
+            ),
+            (TypeName::SendEmailError, "message") => {
+                (MemberTarget::SendEmailErrorMessage, TypeName::String)
+            }
+            (TypeName::SendEmailResult | TypeName::SendEmailError, _) => {
+                return Some(Err(Diagnostic::new(
+                    format!(
+                        "unknown member `{}` on {}",
+                        name.spelling,
+                        receiver_type.apex_name()
+                    ),
+                    name.span,
+                )));
+            }
+            _ => return None,
+        };
+        if for_write {
+            return Some(Err(Diagnostic::new(
+                format!(
+                    "member `{}` on {} is read-only",
+                    name.spelling,
+                    receiver_type.apex_name()
+                ),
+                name.span,
+            )));
+        }
+        self.members.insert(span, target);
+        Some(Ok(ExpressionType::Value(ty)))
     }
 
     fn typed_sobject_member_access(
@@ -5569,6 +5621,9 @@ impl Checker {
                 | MemberTarget::AccessLevel(_)
                 | MemberTarget::AccessType(_)
                 | MemberTarget::PlatformEnum(_)
+                | MemberTarget::SendEmailResultSuccess
+                | MemberTarget::SendEmailResultErrors
+                | MemberTarget::SendEmailErrorMessage
                 | MemberTarget::EnumConstant { .. }
                 | MemberTarget::TypeReference { .. }
                 | MemberTarget::Schema(_),
@@ -5964,6 +6019,7 @@ impl Checker {
             | TypeName::Http
             | TypeName::HttpRequest
             | TypeName::HttpResponse
+            | TypeName::SingleEmailMessage
             | TypeName::HttpCalloutMock
             | TypeName::Callable
             | TypeName::QueueableContext
@@ -6847,6 +6903,9 @@ impl Checker {
                     | MemberTarget::SObjectField { .. }
                     | MemberTarget::DynamicSObjectId
                     | MemberTarget::DmlOptionField(_)
+                    | MemberTarget::SendEmailResultSuccess
+                    | MemberTarget::SendEmailResultErrors
+                    | MemberTarget::SendEmailErrorMessage
                     | MemberTarget::SObjectRelationship { .. }
             )
         );
@@ -7544,6 +7603,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "encodingutil"
             | "security"
             | "eventbus"
+            | "messaging"
             | "type"
             | "logginglevel"
             | "database"
@@ -7775,6 +7835,7 @@ fn platform_constructor_for_type(ty: &TypeName) -> Option<PlatformConstructor> {
         TypeName::Http => Some(PlatformConstructor::Http),
         TypeName::HttpRequest => Some(PlatformConstructor::HttpRequest),
         TypeName::HttpResponse => Some(PlatformConstructor::HttpResponse),
+        TypeName::SingleEmailMessage => Some(PlatformConstructor::SingleEmailMessage),
         TypeName::DmlOptions => Some(PlatformConstructor::DmlOptions),
         TypeName::VisualEditorDataRow => Some(PlatformConstructor::VisualEditorDataRow),
         TypeName::VisualEditorDynamicPickListRows => {

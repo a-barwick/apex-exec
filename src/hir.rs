@@ -13,8 +13,8 @@ mod intrinsic;
 
 pub use intrinsic::{
     ExceptionIntrinsic, IntrinsicId, LimitIntrinsic, ListIntrinsic, MapIntrinsic, MathIntrinsic,
-    PlatformConstructor, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
-    SystemIntrinsic,
+    MessagingIntrinsic, PlatformConstructor, PlatformIntrinsic, SetIntrinsic,
+    StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
 };
 
 pub(crate) fn schema_api_name(name: &ast::NamedType) -> &str {
@@ -671,6 +671,9 @@ pub enum MemberTarget {
     },
     DynamicSObjectId,
     DmlOptionField(DmlOptionField),
+    SendEmailResultSuccess,
+    SendEmailResultErrors,
+    SendEmailErrorMessage,
     SObjectRelationship {
         object_id: usize,
         reference_field_id: usize,
