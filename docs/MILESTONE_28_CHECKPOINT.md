@@ -39,6 +39,14 @@ removes the ProcessResult blocker, and the same 1,005 tests now first stop at
 missing `Approval.UnlockResult`. That census-derived family is not claimed or
 implemented here.
 
+Integration review subsequently blocked immutable candidate `bd267585`.
+Unknown JSON fields on ProcessResult and its typed error objects can contain
+more than the 4,096-node conversion budget because discarded nested values are
+not charged to `TypedJsonState`. Reproductions with 5,000-element unknown
+arrays exited zero. Preserve unknown-field tolerance, account every discarded
+value against the existing node/depth budget, add both focused regressions, and
+obtain re-review at a new SHA before integration or CENSUS-15.
+
 Date: 2026-07-20
 
 Branch: `codex/milestone-28-enterprise-compatibility`

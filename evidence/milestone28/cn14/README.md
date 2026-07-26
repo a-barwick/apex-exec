@@ -42,6 +42,14 @@ census artifact. The oracle, local assertions, Salesforce snapshot, and census
 were corrected accordingly. Focused re-review approved all corrections with no
 new blocker.
 
+The later integration-owner review of immutable candidate `bd267585` found one
+remaining blocker: unknown fields on ProcessResult and nested error objects are
+discarded without charging their nested JSON values to the typed conversion
+node/depth budget. Independent 5,000-element unknown-array reproductions exited
+zero, bypassing the 4,096-node limit. This bundle remains valid Salesforce
+provenance for the measured value surface, but it is not integration approval.
+CN14 requires bounded accounting regressions and a new reviewed SHA.
+
 Credential-free focused replay:
 
 ```bash

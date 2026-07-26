@@ -859,8 +859,9 @@ The frozen post-CN13 replay is recorded in
 compatible, removes the lock-result blocker, and selects missing
 `Approval.ProcessResult` (1,005 affected tests) as the Ready CN14 family.
 
-CN14 is in Review on `codex/m28-cn14-approval-process-result`. Apex Exec now
-recognizes `Approval.ProcessResult` and direct
+CN14 candidate `bd267585` is blocked after integration review on
+`codex/m28-cn14-approval-process-result`. The candidate recognizes
+`Approval.ProcessResult` and direct
 `List<Approval.ProcessResult>` values, constructs them deterministically
 through `JSON.deserialize`, preserves Salesforce's nullable/default state, and
 emits scalar/list compact and pretty JSON in the exact `actorIds`, `entityId`,
@@ -877,7 +878,9 @@ bodyless-signature, cast, type-literal, typed-JSON, enhanced-for,
 `Database.Batchable`, and generic-catch leaks are rejected semantically.
 `Approval.UnlockResult`, approval requests, `Approval.process`, and all other
 approval operations remain unsupported. This is task-branch Review evidence,
-not an integrated or Complete claim.
+not an integrated or Complete claim. Integration review found that unknown
+ProcessResult/error fields discard nested JSON without charging the 4,096-node
+typed conversion budget; correction and re-review are required.
 
 The unchanged three-rerun CN14 candidate census preserves the two frozen input
 hashes and 1,159 denominator. Discovery and parsing remain 1,159/1,159, while

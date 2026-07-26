@@ -660,7 +660,8 @@ compatibility. The `Approval.LockResult` blocker is gone; 1,005 tests now first
 stop at missing `Approval.ProcessResult` in `LogEntryEventBuilder.cls`, so
 M28-CN14 is Ready.
 
-CN14 is now in Review on `codex/m28-cn14-approval-process-result`. It adds the
+CN14 is blocked after integration review of `bd267585` on
+`codex/m28-cn14-approval-process-result`. That candidate adds the
 bounded Salesforce-compatible `Approval.ProcessResult` scalar/direct-List
 value surface selected by CENSUS-14: typed JSON construction, exact seven-field
 compact/pretty serialization, class-literal identity, nullable/default state,
@@ -671,7 +672,10 @@ guarded API 65.0 Salesforce comparison matches 2/2 dimensions with CLI
 2.144.6. No approval or DML mutation ran; both temporary classes were deleted
 and separately verified absent. `Approval.UnlockResult`, requests,
 `Approval.process`, and all other approval operations remain unsupported.
-CN13 and CENSUS-14 remain Complete; CN14 is not integrated or Complete.
+Unknown ProcessResult/error JSON fields can bypass the 4,096-node typed
+conversion budget through discarded nested values. CN13 and CENSUS-14 remain
+Complete; CN14 requires correction and re-review and is not integrated or
+Complete.
 
 The CN14 candidate census preserves the frozen hashes and denominator across
 three deterministic runs. It discovers and parses 1,159/1,159 tests but
