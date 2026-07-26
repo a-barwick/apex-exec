@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "user-is-active-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN8UserIsActiveOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

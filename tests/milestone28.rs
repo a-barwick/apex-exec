@@ -507,6 +507,39 @@ fn organization_limits_are_typed_configurable_and_bounded_to_one_host_snapshot()
 }
 
 #[test]
+fn user_is_active_is_a_typed_boolean_field_in_relationship_filters() {
+    let compilation =
+        project::compile(Path::new("examples/milestone28-cn8-user-is-active-oracle")).unwrap();
+    assert_eq!(
+        compilation.invoke("M28CN8UserIsActiveOracle.run").unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|assignedValue|true",
+            "APEX_EXEC_ORACLE_VALUE|fieldName|IsActive",
+            "APEX_EXEC_ORACLE_VALUE|fieldType|BOOLEAN",
+            "APEX_EXEC_ORACLE_VALUE|relationshipFilterExecuted|true",
+        ]
+    );
+
+    let invalid_root = test_project(
+        "InvalidUserIsActive",
+        "public class InvalidUserIsActive {
+            public static void run() {
+                User user = new User(IsActive = 'true');
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign String to Boolean"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
 fn generated_custom_share_sobjects_are_typed_from_metadata() {
     let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
     let compilation = project::compile(project_root).unwrap();
