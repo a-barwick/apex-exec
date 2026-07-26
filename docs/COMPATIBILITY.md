@@ -771,16 +771,19 @@ The frozen post-CN7 replay is
 strict-compatible and selects the missing `User.IsActive` Boolean
 standard-schema field (1,121 affected tests) as the Ready CN8 family.
 
-The CN8 `User.IsActive` slice is implemented on
-`codex/m28-cn8-user-is-active` and is in Review. The field is a checked Boolean
-on the curated standard `User` schema, its describe surface reports
-`IsActive`/`BOOLEAN`, and the enterprise `ApexEmailNotification.User`
-relationship filter compiles and executes. Focused local/Salesforce evidence
-matches 2/2 dimensions in `evidence/milestone28/cn8/`; assigning a String is
-rejected, and the fixed standard-schema construction budget covers 151 fields.
-A candidate frozen replay removes this diagnostic and exposes missing
-`FlowDefinitionView.VersionNumber` as the next first blocker for the same 1,121
-tests. CN8 is not integrated yet.
+The CN8 `User.IsActive` slice passed independent review and was integrated at
+`d679e6e`. The field is a checked Boolean on the curated standard `User`
+schema, its describe surface reports `IsActive`/`BOOLEAN`, and the enterprise
+`ApexEmailNotification.User` relationship filter compiles and executes.
+Focused local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn8/`; assigning a String is rejected, and the fixed
+standard-schema construction budget covers 151 fields.
+
+The frozen post-CN8 replay is
+`evidence/milestone28/census-9/report.json`; it remains 0/1,159
+strict-compatible and selects the missing
+`FlowDefinitionView.VersionNumber` standard-schema field (1,121 affected
+tests) as the Ready CN9 family.
 
 ## Platform surface
 
