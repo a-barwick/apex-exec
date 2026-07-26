@@ -851,6 +851,11 @@ fn render_simple_platform(
         PlatformValue::AccessType(access) => traversal.write(output, access.apex_name()),
         PlatformValue::PlatformEnum(value) => traversal.write(output, value.apex_name()),
         PlatformValue::CachePartition => traversal.write(output, "Cache.Partition[unavailable]"),
+        PlatformValue::OrgLimit(limit) => {
+            traversal.write(output, "System.OrgLimit[")?;
+            traversal.write(output, &limit.name)?;
+            traversal.write(output, "]")
+        }
         _ => unreachable!("caller selects simple platform values"),
     }
 }

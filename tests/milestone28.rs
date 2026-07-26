@@ -8,7 +8,7 @@ use apex_exec::{
         metadata,
     },
     project,
-    runtime::{HttpResponseData, Interpreter, NetworkContext, RecordingHost},
+    runtime::{HttpResponseData, Interpreter, NetworkContext, OrganizationLimit, RecordingHost},
     test_runner::{self, TestOptions},
 };
 use std::{
@@ -442,6 +442,68 @@ fn integer_valueof_resolves_string_and_integer_overloads() {
         execute("System.debug(SyStEm.InTeGeR.VaLuEoF('2147483647'));").unwrap(),
         ["2147483647"]
     );
+}
+
+#[test]
+fn organization_limits_are_typed_configurable_and_bounded_to_one_host_snapshot() {
+    let compilation =
+        project::compile(Path::new("examples/milestone28-cn7-org-limits-oracle")).unwrap();
+    assert_eq!(
+        compilation.invoke("M28CN7OrgLimitsOracle.run").unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|containsSingleEmail|true",
+            "APEX_EXEC_ORACLE_VALUE|nameMatchesKey|true",
+            "APEX_EXEC_ORACLE_VALUE|usageNonnegative|true",
+            "APEX_EXEC_ORACLE_VALUE|capacityAvailable|true",
+            "APEX_EXEC_ORACLE_VALUE|aliasesAgree|true",
+        ]
+    );
+
+    let checked = check(
+        r#"
+        Map<String, System.OrgLimit> limits = System.OrgLimits.getMap();
+        System.OrgLimit alpha = limits.get('Alpha');
+        System.debug(limits.size());
+        System.debug(alpha.getName());
+        System.debug(alpha.getValue());
+        System.debug(alpha.getLimit());
+        "#,
+    )
+    .unwrap();
+    let mut host = RecordingHost::default();
+    host.set_organization_limits(vec![
+        OrganizationLimit::new("Zulu", 3, 30),
+        OrganizationLimit::new("Alpha", 2, 20),
+    ]);
+    let output = Interpreter::with_host(&mut host).execute(&checked).unwrap();
+    assert_eq!(output, ["2", "Alpha", "2", "20"]);
+    assert_eq!(host.organization_limit_reads(), 1);
+
+    let get_map = check("System.OrgLimits.getMap();").unwrap();
+    let mut duplicate_host = RecordingHost::default();
+    duplicate_host.set_organization_limits(vec![
+        OrganizationLimit::new("Alpha", 0, 1),
+        OrganizationLimit::new("alpha", 0, 1),
+    ]);
+    let error = Interpreter::with_host(&mut duplicate_host)
+        .execute(&get_map)
+        .unwrap_err();
+    assert!(error.message.contains("duplicate organization limit"));
+
+    let mut invalid_value_host = RecordingHost::default();
+    invalid_value_host.set_organization_limits(vec![OrganizationLimit::new("Alpha", -1, 1)]);
+    let error = Interpreter::with_host(&mut invalid_value_host)
+        .execute(&get_map)
+        .unwrap_err();
+    assert!(error.message.contains("nonnegative Integer values"));
+
+    for invalid in [
+        "Map<String, System.OrgLimit> limits = System.OrgLimits.getMap(1);",
+        "System.OrgLimit limit; Integer value = limit.getValue(1);",
+        "System.OrgLimit limit; Integer value = limit.unknown();",
+    ] {
+        assert!(check(invalid).is_err(), "{invalid}");
+    }
 }
 
 #[test]

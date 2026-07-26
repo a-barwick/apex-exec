@@ -97,6 +97,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         }
         if matches!(
             intrinsic,
+            P::OrgLimitsGetMap | P::OrgLimitGetName | P::OrgLimitGetValue | P::OrgLimitGetLimit
+        ) {
+            return self.call_org_limits(intrinsic, receiver, arguments, span);
+        }
+        if matches!(
+            intrinsic,
             P::NetworkGetNetworkId
                 | P::NetworkGetLoginUrl
                 | P::NetworkGetLogoutUrl
@@ -638,6 +644,9 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 Ok(self
                     .store
                     .allocate_platform(PlatformValue::HttpResponse(response)))
+            }
+            P::OrgLimitsGetMap | P::OrgLimitGetName | P::OrgLimitGetValue | P::OrgLimitGetLimit => {
+                unreachable!("organization-limit intrinsics are dispatched before the match")
             }
         }
     }
@@ -1305,6 +1314,82 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             _ => return Err(invalid_runtime_operands(span)),
         };
         Ok(value.map_or_else(|| Value::Null(Some(TypeName::String)), Value::String))
+    }
+
+    fn call_org_limits(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver: Option<Value>,
+        arguments: &[EvaluatedArgument],
+        span: Span,
+    ) -> Result<Value, Diagnostic> {
+        use PlatformIntrinsic as P;
+        expect_no_arguments(arguments, span)?;
+        if intrinsic == P::OrgLimitsGetMap {
+            let mut limits = self
+                .host
+                .organization_limits()
+                .map_err(|message| platform_error(message, span))?;
+            limits.sort_by(|left, right| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            let mut previous_name: Option<String> = None;
+            let mut entries = Vec::with_capacity(limits.len());
+            for limit in limits {
+                if limit.name.is_empty() {
+                    return Err(platform_error(
+                        "organization limit names must not be empty",
+                        span,
+                    ));
+                }
+                if limit.value < 0
+                    || limit.limit < 0
+                    || i32::try_from(limit.value).is_err()
+                    || i32::try_from(limit.limit).is_err()
+                {
+                    return Err(platform_error(
+                        format!(
+                            "organization limit `{}` must use nonnegative Integer values",
+                            limit.name
+                        ),
+                        span,
+                    ));
+                }
+                let canonical = limit.name.to_ascii_lowercase();
+                if previous_name.as_deref() == Some(canonical.as_str()) {
+                    return Err(platform_error(
+                        format!("duplicate organization limit `{}`", limit.name),
+                        span,
+                    ));
+                }
+                previous_name = Some(canonical);
+                let name = limit.name.clone();
+                let value = self.store.allocate_platform(PlatformValue::OrgLimit(limit));
+                entries.push((Value::String(name), value));
+            }
+            return Ok(self.allocate(Collection::Map {
+                key_type: TypeName::String,
+                value_type: TypeName::OrgLimit,
+                entries,
+            }));
+        }
+
+        let Some(Value::Platform(id)) = receiver else {
+            return Err(invalid_runtime_operands(span));
+        };
+        let PlatformValue::OrgLimit(limit) = self.store.platform(id) else {
+            return Err(invalid_runtime_operands(span));
+        };
+        Ok(match intrinsic {
+            P::OrgLimitGetName => Value::String(limit.name.clone()),
+            P::OrgLimitGetValue => Value::Integer(limit.value),
+            P::OrgLimitGetLimit => Value::Integer(limit.limit),
+            P::OrgLimitsGetMap => unreachable!(),
+            _ => return Err(invalid_runtime_operands(span)),
+        })
     }
 
     fn call_logging_level(

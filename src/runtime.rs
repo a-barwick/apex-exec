@@ -39,8 +39,8 @@ use class_initialization::{ClassInitializationState, MAX_CLASS_INITIALIZATION_DE
 use context::ExecutionContext;
 pub use host::{
     AsyncEvent, AsyncJobKind, AsyncStage, DebugEvent, DmlEvent, HttpRequestData, HttpResponseData,
-    LimitUsage, M11_ASYNC_PROFILE, NetworkContext, PlatformHost, QueryEvent, QueryKind,
-    RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
+    LimitUsage, M11_ASYNC_PROFILE, NetworkContext, OrganizationLimit, PlatformHost, QueryEvent,
+    QueryKind, RecordingHost, TransactionEvent, TriggerEvent as RuntimeTriggerEvent, TriggerPhase,
     TriggerStage, UserContext,
 };
 use image::RuntimeImage;
@@ -195,6 +195,7 @@ enum PlatformValue {
         request_id: String,
         quiddity: crate::platform::Quiddity,
     },
+    OrgLimit(OrganizationLimit),
     SecurityDecision {
         records: CollectionId,
         removed_fields: BTreeMap<String, Vec<String>>,
@@ -232,6 +233,7 @@ impl PlatformValue {
             Self::PlatformEnum(value) => value.ty(),
             Self::CachePartition => TypeName::CachePartition,
             Self::Request { .. } => TypeName::Request,
+            Self::OrgLimit(_) => TypeName::OrgLimit,
             Self::SecurityDecision { .. } => TypeName::SObjectAccessDecision,
         }
     }

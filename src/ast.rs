@@ -909,6 +909,7 @@ pub enum TypeName {
     Quiddity,
     TriggerOperation,
     LoggingLevel,
+    OrgLimit,
     CacheVisibility,
     CachePartition,
     Request,
@@ -1103,6 +1104,11 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         apex_name: "System.LoggingLevel",
         aliases: &["logginglevel", "system.logginglevel"],
         ty: TypeName::LoggingLevel,
+    },
+    BuiltInTypeSpec {
+        apex_name: "System.OrgLimit",
+        aliases: &["orglimit", "system.orglimit"],
+        ty: TypeName::OrgLimit,
     },
     BuiltInTypeSpec {
         apex_name: "Cache.Visibility",

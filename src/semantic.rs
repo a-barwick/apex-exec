@@ -5960,6 +5960,7 @@ impl Checker {
             | TypeName::Quiddity
             | TypeName::TriggerOperation
             | TypeName::LoggingLevel
+            | TypeName::OrgLimit
             | TypeName::CacheVisibility
             | TypeName::CachePartition
             | TypeName::Request
@@ -7524,6 +7525,7 @@ fn is_platform_static_owner(name: &str) -> bool {
             | "schema"
             | "test"
             | "limits"
+            | "orglimits"
             | "network"
             | "userinfo"
             | "encodingutil"

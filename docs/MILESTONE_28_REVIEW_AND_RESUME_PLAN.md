@@ -294,7 +294,7 @@ package after review and integration.
 | M28-CENSUS-6 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-6/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN5 integrated at `e0ebfe5` | Enterprise evidence only |
 | M28-CN6 | One next-ranked compatibility family | Complete (integrated at `798c438`; independent review approved; generated custom-share SObject resolution for `Log__Share`; Salesforce 2/2 and guarded eight-field schema evidence; fresh SHA-isolated full Rust, Clippy, documentation, Lizard, and replay gates pass; post-slice census recorded) | CENSUS-6 complete | Normalized schema and typed generated-share SObject surface |
 | M28-CENSUS-7 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-7/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN6 integrated at `798c438` | Enterprise evidence only |
-| M28-CN7 | One next-ranked compatibility family | Ready (`System.OrgLimit` and `System.OrgLimits.getMap`, affecting 1,121 tests) | CENSUS-7 complete | Typed organization-limit platform values and host boundary |
+| M28-CN7 | One next-ranked compatibility family | Review on `codex/m28-cn7-org-limits` (typed `System.OrgLimit`, one-snapshot `System.OrgLimits.getMap`, focused Salesforce 2/2, candidate replay advances 1,121 tests to `User.IsActive`) | CENSUS-7 complete | Typed organization-limit platform values and host boundary |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
@@ -510,6 +510,11 @@ local/Salesforce 2/2 evidence. Its sixth sealed census selected generated
 custom-share SObject resolution for `Log__Share` (1,121 affected tests).
 CN6 passed independent review and was integrated at `798c438`. Its seventh
 sealed census remains 0/1,159 and selects `System.OrgLimit` plus
-`System.OrgLimits.getMap` (1,121 affected tests) as Ready CN7. Claim CN7 on a
-dedicated branch before implementation; do not start `Flow.Interview` or
-another later family first.
+`System.OrgLimits.getMap` (1,121 affected tests) as CN7. CN7 is implemented on
+`codex/m28-cn7-org-limits` with one explicit host snapshot per map request,
+typed name/value/limit accessors, focused local/Salesforce evidence matching
+2/2 dimensions, and guarded fixture cleanup. Its candidate frozen replay
+removes the organization-limit blocker and exposes unknown `User.IsActive` for
+the same 1,121 tests, while strict compatibility remains 0/1,159. Finish CN7's
+independent review and integration before claiming that next family; do not
+start `Flow.Interview` or another later family first.

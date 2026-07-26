@@ -1023,6 +1023,9 @@ impl Checker {
         if canonical_owner == "limits" {
             return self.limits_static_method_type(owner, method, arguments);
         }
+        if canonical_owner == "orglimits" {
+            return self.org_limits_static_method_type(owner, method, arguments);
+        }
         if canonical_owner == "network" {
             return self.network_static_method_type(owner, method, arguments);
         }
@@ -1480,6 +1483,25 @@ impl Checker {
         Ok((
             IntrinsicId::Platform(PlatformIntrinsic::Limits(intrinsic)),
             ExpressionType::Value(TypeName::Integer),
+        ))
+    }
+
+    fn org_limits_static_method_type(
+        &mut self,
+        owner: &str,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        if method.canonical != "getmap" {
+            return Err(self.unsupported_platform_api(owner, method));
+        }
+        require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
+        Ok((
+            IntrinsicId::Platform(PlatformIntrinsic::OrgLimitsGetMap),
+            ExpressionType::Value(TypeName::Map(
+                Box::new(TypeName::String),
+                Box::new(TypeName::OrgLimit),
+            )),
         ))
     }
 
@@ -1945,6 +1967,20 @@ impl Checker {
                     arguments,
                 )?;
                 TypeName::Object
+            }
+            P::OrgLimitGetName | P::OrgLimitGetValue | P::OrgLimitGetLimit => {
+                require_arity(
+                    receiver_type,
+                    &method.spelling,
+                    arguments.len(),
+                    &[0],
+                    arguments,
+                )?;
+                if intrinsic == P::OrgLimitGetName {
+                    TypeName::String
+                } else {
+                    TypeName::Integer
+                }
             }
             _ => unreachable!("static intrinsic selected as instance"),
         };
@@ -2537,6 +2573,7 @@ fn platform_instance_intrinsic(
         .or_else(|| http_instance_intrinsic(receiver_type, method))
         .or_else(|| visual_editor_instance_intrinsic(receiver_type, method))
         .or_else(|| async_context_instance_intrinsic(receiver_type, method))
+        .or_else(|| org_limit_instance_intrinsic(receiver_type, method))
         .or_else(|| cache_and_type_instance_intrinsic(receiver_type, method))
 }
 
@@ -2684,6 +2721,19 @@ fn async_context_instance_intrinsic(
         (TypeName::SchedulableContext, "gettriggerid") => Some(P::SchedulableContextGetTriggerId),
         (TypeName::Request, "getrequestid") => Some(P::RequestGetRequestId),
         (TypeName::Request, "getquiddity") => Some(P::RequestGetQuiddity),
+        _ => None,
+    }
+}
+
+fn org_limit_instance_intrinsic(
+    receiver_type: &TypeName,
+    method: &str,
+) -> Option<PlatformIntrinsic> {
+    use PlatformIntrinsic as P;
+    match (receiver_type, method) {
+        (TypeName::OrgLimit, "getname") => Some(P::OrgLimitGetName),
+        (TypeName::OrgLimit, "getvalue") => Some(P::OrgLimitGetValue),
+        (TypeName::OrgLimit, "getlimit") => Some(P::OrgLimitGetLimit),
         _ => None,
     }
 }
