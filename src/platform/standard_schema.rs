@@ -204,6 +204,7 @@ fn flow_definition_objects() -> Vec<ObjectSchema> {
                 F::String("ManageableState"),
                 F::String("ProcessType"),
                 F::String("RecordTriggerType"),
+                F::Integer("VersionNumber"),
                 F::Reference {
                     name: "TriggerObjectOrEventId",
                     target: "EntityDefinition",
@@ -470,7 +471,7 @@ mod tests {
     use super::*;
 
     const STANDARD_OBJECT_COUNT: usize = 29;
-    const STANDARD_FIELD_COUNT: usize = 151;
+    const STANDARD_FIELD_COUNT: usize = 152;
 
     #[test]
     fn user_schema_supports_the_deterministic_run_as_fixture_fields() {
@@ -501,6 +502,20 @@ mod tests {
             &FieldType::Boolean
         );
         assert!(user.field("UnmodeledField__c").is_err());
+    }
+
+    #[test]
+    fn flow_definition_view_exposes_its_integer_version_number() {
+        let objects = standard_objects();
+        let flow_definition = objects
+            .iter()
+            .find(|object| object.api_name() == "FlowDefinitionView")
+            .expect("curated standard schema contains FlowDefinitionView");
+
+        assert_eq!(
+            flow_definition.field("VersionNumber").unwrap().data_type(),
+            &FieldType::Integer
+        );
     }
 
     #[test]

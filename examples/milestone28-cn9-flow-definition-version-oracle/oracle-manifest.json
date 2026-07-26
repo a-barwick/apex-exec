@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "flow-definition-version-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN9FlowDefinitionVersionOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}

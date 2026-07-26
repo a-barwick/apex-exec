@@ -540,6 +540,43 @@ fn user_is_active_is_a_typed_boolean_field_in_relationship_filters() {
 }
 
 #[test]
+fn flow_definition_version_number_is_a_typed_integer_query_field() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn9-flow-definition-version-oracle",
+    ))
+    .unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN9FlowDefinitionVersionOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|fieldName|VersionNumber",
+            "APEX_EXEC_ORACLE_VALUE|fieldType|INTEGER",
+            "APEX_EXEC_ORACLE_VALUE|queryExecuted|true",
+        ]
+    );
+
+    let invalid_root = test_project(
+        "InvalidFlowDefinitionVersion",
+        "public class InvalidFlowDefinitionVersion {
+            public static void run() {
+                FlowDefinitionView definition =
+                    new FlowDefinitionView(VersionNumber = '7');
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign String to Integer"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
 fn generated_custom_share_sobjects_are_typed_from_metadata() {
     let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
     let compilation = project::compile(project_root).unwrap();
