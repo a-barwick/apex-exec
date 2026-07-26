@@ -869,21 +869,41 @@ fn approval_lock_result_reuses_typed_dml_results_and_bounded_json_conversion() {
         );
     }
 
-    let unsupported_set = execute(
-        r#"
-        Set<Approval.LockResult> values =
-            (Set<Approval.LockResult>) JSON.deserialize(
-                '[]',
-                Set<Approval.LockResult>.class
-            );
-        "#,
-    )
-    .unwrap_err();
-    assert!(
-        unsupported_set
-            .message
-            .contains("only as a scalar or List element")
-    );
+    for unsupported_placement in [
+        "Set<Approval.LockResult> values;",
+        "Map<String, Approval.LockResult> values;",
+        "Iterable<Approval.LockResult> values;",
+        "List<List<Approval.LockResult>> values;",
+        "Set<List<Approval.LockResult>> values;",
+        "public interface Leak { void consume(Set<Approval.LockResult> values); }",
+        "public class Leak implements Database.Batchable<Approval.LockResult> {}",
+        "public class Leak { public class Wrapper {} Wrapper<Approval.LockResult> value; }",
+        "public class E extends Exception {} try {} catch (E<Approval.LockResult> error) {}",
+        r#"public class Leak {
+            public class Wrapper {}
+            public static Object run() {
+                return JSON.deserialize(
+                    '{}',
+                    Wrapper<Approval.LockResult>.class
+                );
+            }
+        }"#,
+        r#"Object value;
+            Object result =
+                (Map<String, Approval.LockResult>) value;"#,
+        r#"Object result = JSON.deserialize(
+                '{}',
+                Map<String, Approval.LockResult>.class
+            );"#,
+        r#"List<Object> values;
+            for (Set<Approval.LockResult> value : values) {}"#,
+    ] {
+        let error = check(unsupported_placement).unwrap_err();
+        assert!(
+            error.message.contains("only as a scalar or List element"),
+            "{error}"
+        );
+    }
 
     let inconsistent = execute(
         r#"Approval.LockResult value = (Approval.LockResult) JSON.deserialize(
