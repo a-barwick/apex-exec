@@ -39,6 +39,28 @@ pub struct NetworkContext {
     pub self_registration_url: Option<String>,
 }
 
+/// One host-provided organization-wide allocation and its current usage.
+///
+/// Salesforce exposes these values through `System.OrgLimits.getMap()`.
+/// Keeping the snapshot behind `PlatformHost` makes org-specific values
+/// explicit while preserving deterministic local execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrganizationLimit {
+    pub name: String,
+    pub value: i64,
+    pub limit: i64,
+}
+
+impl OrganizationLimit {
+    pub fn new(name: impl Into<String>, value: i64, limit: i64) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            limit,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpRequestData {
     pub endpoint: String,
@@ -341,6 +363,10 @@ pub trait PlatformHost {
         LimitUsage::default()
     }
 
+    fn organization_limits(&mut self) -> Result<Vec<OrganizationLimit>, String> {
+        Err("organization limits are unavailable from this platform host".to_owned())
+    }
+
     fn begin_test_window(&mut self) {}
 
     fn end_test_window(&mut self) {}
@@ -475,6 +501,10 @@ impl<T: PlatformHost + ?Sized> PlatformHost for &mut T {
         (**self).limit_usage()
     }
 
+    fn organization_limits(&mut self) -> Result<Vec<OrganizationLimit>, String> {
+        (**self).organization_limits()
+    }
+
     fn begin_test_window(&mut self) {
         (**self).begin_test_window();
     }
@@ -514,6 +544,8 @@ pub struct RecordingHost {
     publish_immediate_dml: i64,
     queueable_jobs: i64,
     test_window_baseline: Option<LimitUsage>,
+    organization_limits: Vec<OrganizationLimit>,
+    organization_limit_reads: usize,
 }
 
 impl RecordingHost {
@@ -527,6 +559,14 @@ impl RecordingHost {
 
     pub fn set_network_context(&mut self, network: Option<NetworkContext>) {
         self.network = network;
+    }
+
+    pub fn set_organization_limits(&mut self, limits: Vec<OrganizationLimit>) {
+        self.organization_limits = limits;
+    }
+
+    pub fn organization_limit_reads(&self) -> usize {
+        self.organization_limit_reads
     }
 
     pub fn set_security_policy(&mut self, security: SecurityPolicy) {
@@ -622,6 +662,8 @@ impl Default for RecordingHost {
             publish_immediate_dml: 0,
             queueable_jobs: 0,
             test_window_baseline: None,
+            organization_limits: vec![OrganizationLimit::new("SingleEmail", 0, 15)],
+            organization_limit_reads: 0,
         }
     }
 }
@@ -921,6 +963,11 @@ impl PlatformHost for RecordingHost {
         };
         let baseline = self.test_window_baseline.unwrap_or_default();
         absolute.since(baseline)
+    }
+
+    fn organization_limits(&mut self) -> Result<Vec<OrganizationLimit>, String> {
+        self.organization_limit_reads = self.organization_limit_reads.saturating_add(1);
+        Ok(self.organization_limits.clone())
     }
 
     fn begin_test_window(&mut self) {

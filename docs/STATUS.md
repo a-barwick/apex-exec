@@ -549,8 +549,21 @@ The post-CN6 frozen replay is
 `evidence/milestone28/census-7/report.json`. Across three deterministic runs,
 it discovers and parses 1,159/1,159 tests but remains 0/1,159 at checking,
 execution, agreement, and strict compatibility. `System.OrgLimit` is now the
-first blocker (1,121 tests), so M28-CN7 is Ready. `Flow.Interview` remains
-second at 18 tests.
+first blocker (1,121 tests), so M28-CN7 was selected.
+
+CN7 is implemented on `codex/m28-cn7-org-limits` and is in Review. Checked HIR
+now distinguishes `System.OrgLimits.getMap()` and the three zero-argument
+`System.OrgLimit` accessors. Runtime values come from one explicit,
+deterministic platform-host snapshot; unavailable custom hosts fail explicitly,
+and malformed snapshots are rejected. Focused local/Salesforce evidence
+matches 2/2 dimensions in `evidence/milestone28/cn7/`, and the temporary Apex
+class was removed after capture. A fresh candidate replay removes the
+organization-limit first blocker; all 1,121 affected tests now advance to
+unknown `User.IsActive`. The strict score remains 0/1,159 until that next
+shared-source error is cleared. CN7 is not integrated yet, so CN8 must not be
+claimed.
+
+`Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
 prompt are in `docs/MILESTONE_28_REVIEW_AND_RESUME_PLAN.md`.

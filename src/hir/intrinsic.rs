@@ -249,6 +249,10 @@ pub enum PlatformIntrinsic {
     TypeGetName,
     TypeNewInstance,
     Limits(LimitIntrinsic),
+    OrgLimitsGetMap,
+    OrgLimitGetName,
+    OrgLimitGetValue,
+    OrgLimitGetLimit,
     NetworkGetNetworkId,
     NetworkGetLoginUrl,
     NetworkGetLogoutUrl,
@@ -331,6 +335,7 @@ impl PlatformIntrinsic {
                 | Self::LoggingLevelValues
                 | Self::LoggingLevelValueOf
                 | Self::Limits(_)
+                | Self::OrgLimitsGetMap
                 | Self::NetworkGetNetworkId
                 | Self::NetworkGetLoginUrl
                 | Self::NetworkGetLogoutUrl

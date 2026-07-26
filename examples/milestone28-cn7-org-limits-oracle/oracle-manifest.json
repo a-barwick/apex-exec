@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "name": "organization-limits-fidelity",
+      "project": ".",
+      "entrypoint": {"kind": "invoke", "target": "M28CN7OrgLimitsOracle.run"},
+      "compare": ["compile", "values"]
+    }
+  ]
+}
