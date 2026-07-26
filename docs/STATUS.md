@@ -596,6 +596,16 @@ execution, agreement, and strict compatibility. The `VersionNumber` blocker
 is gone; the same 1,121 tests now advance to missing
 `FlowDefinitionView.IsActive`, so M28-CN10 is Ready.
 
+CN10 is implemented on `codex/m28-cn10-flow-definition-active` and is in
+Review. The curated standard schema now types `FlowDefinitionView.IsActive` as
+Boolean for filtered static queries, record access, and describe metadata. Its
+focused local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn10/`, and the temporary Apex class was removed after
+capture. The fixed standard-schema construction budget is 153 fields. A fresh
+candidate replay removes the `IsActive` blocker; the same 1,121 tests now
+advance to a `List<SObject>`-to-`Log__c` cast diagnostic. CN10 is not integrated
+yet, so CN11 must not be claimed.
+
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff

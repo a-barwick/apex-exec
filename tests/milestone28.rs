@@ -577,6 +577,43 @@ fn flow_definition_version_number_is_a_typed_integer_query_field() {
 }
 
 #[test]
+fn flow_definition_is_active_is_a_typed_boolean_query_field() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn10-flow-definition-active-oracle",
+    ))
+    .unwrap();
+    assert_eq!(
+        compilation
+            .invoke("M28CN10FlowDefinitionActiveOracle.run")
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|fieldName|IsActive",
+            "APEX_EXEC_ORACLE_VALUE|fieldType|BOOLEAN",
+            "APEX_EXEC_ORACLE_VALUE|queryExecuted|true",
+        ]
+    );
+
+    let invalid_root = test_project(
+        "InvalidFlowDefinitionActive",
+        "public class InvalidFlowDefinitionActive {
+            public static void run() {
+                FlowDefinitionView definition =
+                    new FlowDefinitionView(IsActive = 'true');
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign String to Boolean"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
 fn generated_custom_share_sobjects_are_typed_from_metadata() {
     let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
     let compilation = project::compile(project_root).unwrap();
