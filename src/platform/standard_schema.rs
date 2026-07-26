@@ -198,6 +198,7 @@ fn flow_definition_objects() -> Vec<ObjectSchema> {
                 F::String("ApiName"),
                 F::String("Description"),
                 F::String("DurableId"),
+                F::Boolean("IsActive"),
                 F::String("Label"),
                 F::String("LastModifiedBy"),
                 F::Datetime("LastModifiedDate"),
@@ -471,7 +472,7 @@ mod tests {
     use super::*;
 
     const STANDARD_OBJECT_COUNT: usize = 29;
-    const STANDARD_FIELD_COUNT: usize = 152;
+    const STANDARD_FIELD_COUNT: usize = 153;
 
     #[test]
     fn user_schema_supports_the_deterministic_run_as_fixture_fields() {
@@ -515,6 +516,20 @@ mod tests {
         assert_eq!(
             flow_definition.field("VersionNumber").unwrap().data_type(),
             &FieldType::Integer
+        );
+    }
+
+    #[test]
+    fn flow_definition_view_exposes_its_boolean_active_state() {
+        let objects = standard_objects();
+        let flow_definition = objects
+            .iter()
+            .find(|object| object.api_name() == "FlowDefinitionView")
+            .expect("curated standard schema contains FlowDefinitionView");
+
+        assert_eq!(
+            flow_definition.field("IsActive").unwrap().data_type(),
+            &FieldType::Boolean
         );
     }
 
