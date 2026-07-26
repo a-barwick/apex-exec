@@ -1879,10 +1879,12 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             CallTarget::DatabaseQuery {
                 kind,
                 expected_object_id,
+                single_record,
                 access_level_argument,
             } => self.evaluate_database_query_call(
                 kind,
                 expected_object_id,
+                single_record,
                 access_level_argument,
                 arguments,
                 span,

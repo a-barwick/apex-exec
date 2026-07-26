@@ -811,6 +811,16 @@ The frozen post-CN10 replay is
 strict-compatible and selects the `List<SObject>`-to-`Log__c` cast diagnostic
 (1,121 affected tests) as the Ready CN11 family.
 
+The CN11 dynamic-query single-record cast slice is implemented on
+`codex/m28-cn11-dynamic-query-cast` and is in Review. A concrete SObject cast
+provides the expected dynamic-query type and cardinality: one row returns the
+record, while zero or multiple rows raise `QueryException`. An arbitrary
+`List<SObject>` cast remains invalid, and each source query issues exactly one
+host query. Focused local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn11/`. A candidate frozen replay removes this diagnostic
+and exposes missing `Messaging.SingleEmailMessage` as the next first blocker
+for 1,117 tests. CN11 is not integrated yet.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |

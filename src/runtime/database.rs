@@ -46,6 +46,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &mut self,
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
+        single_record: bool,
         access_level_argument: Option<usize>,
         arguments: &[Expression],
         span: Span,
@@ -66,7 +67,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 span,
             ));
         };
-        let mut checked = self.check_dynamic_query(&source, expected_object_id, kind, span)?;
+        let mut checked =
+            self.check_dynamic_query(&source, expected_object_id, single_record, kind, span)?;
         if let Some(access) = access {
             checked.access = match access {
                 crate::platform::AccessLevel::UserMode => {
@@ -104,6 +106,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
         &self,
         source: &str,
         expected_object_id: Option<usize>,
+        single_record: bool,
         kind: DatabaseQueryKind,
         span: Span,
     ) -> Result<CheckedSoqlQuery, Diagnostic> {
@@ -115,7 +118,8 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
             )
         })?;
         let bindings = self.visible_query_binding_types();
-        let expected_type = self.dynamic_query_expected_type(expected_object_id, span);
+        let expected_type =
+            self.dynamic_query_expected_type(expected_object_id, single_record, span);
         let checked = crate::semantic::check_dynamic_soql(
             &parsed,
             self.program().schema(),
@@ -160,6 +164,7 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
     fn dynamic_query_expected_type(
         &self,
         expected_object_id: Option<usize>,
+        single_record: bool,
         span: Span,
     ) -> Option<TypeName> {
         expected_object_id.map(|object_id| {
@@ -168,10 +173,15 @@ impl<'program, H: PlatformHost> Interpreter<'program, H> {
                 .schema()
                 .object_at(object_id)
                 .expect("checked dynamic query object is valid");
-            TypeName::List(Box::new(TypeName::Custom(crate::ast::NamedType::new(
+            let object_type = TypeName::Custom(crate::ast::NamedType::new(
                 object.api_name().to_owned(),
                 span,
-            ))))
+            ));
+            if single_record {
+                object_type
+            } else {
+                TypeName::List(Box::new(object_type))
+            }
         })
     }
 
@@ -2016,9 +2026,13 @@ fn date_to_epoch_days(value: NaiveDate, span: Span) -> Result<i32, Diagnostic> {
 
 fn dynamic_query_result_is_valid(kind: DatabaseQueryKind, result: QueryResultKind) -> bool {
     match kind {
-        DatabaseQueryKind::Query | DatabaseQueryKind::QueryLocator => {
-            result == QueryResultKind::Records
+        DatabaseQueryKind::Query => {
+            matches!(
+                result,
+                QueryResultKind::Records | QueryResultKind::RecordSingle
+            )
         }
+        DatabaseQueryKind::QueryLocator => result == QueryResultKind::Records,
         DatabaseQueryKind::Count => result == QueryResultKind::Count,
     }
 }
