@@ -105,6 +105,32 @@ pub enum LimitIntrinsic {
     LimitSoslQueries,
 }
 
+/// Operations on the bounded `System.Messaging` surface and its email values.
+///
+/// Keeping the family closed avoids growing the top-level platform dispatcher
+/// for every modeled message field while preserving checker-selected targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessagingIntrinsic {
+    SingleEmailSetSubject,
+    SingleEmailGetSubject,
+    SingleEmailSetHtmlBody,
+    SingleEmailGetHtmlBody,
+    SingleEmailSetTargetObjectId,
+    SingleEmailGetTargetObjectId,
+    SingleEmailSetSaveAsActivity,
+    SingleEmailGetSaveAsActivity,
+    SingleEmailSetToAddresses,
+    SingleEmailGetToAddresses,
+    ReserveSingleEmailCapacity,
+    SendEmail,
+}
+
+impl MessagingIntrinsic {
+    pub fn is_static(self) -> bool {
+        matches!(self, Self::ReserveSingleEmailCapacity | Self::SendEmail)
+    }
+}
+
 /// Curated M10 platform calls. This remains a closed checker-selected set so
 /// unsupported APIs cannot fall through to name-based runtime behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -250,6 +276,7 @@ pub enum PlatformIntrinsic {
     TypeGetName,
     TypeNewInstance,
     Limits(LimitIntrinsic),
+    Messaging(MessagingIntrinsic),
     OrgLimitsGetMap,
     OrgLimitGetName,
     OrgLimitGetValue,
@@ -284,18 +311,6 @@ pub enum PlatformIntrinsic {
     HttpResponseGetStatus,
     HttpSend,
     HttpCalloutMockRespond,
-    SingleEmailSetSubject,
-    SingleEmailGetSubject,
-    SingleEmailSetHtmlBody,
-    SingleEmailGetHtmlBody,
-    SingleEmailSetTargetObjectId,
-    SingleEmailGetTargetObjectId,
-    SingleEmailSetSaveAsActivity,
-    SingleEmailGetSaveAsActivity,
-    SingleEmailSetToAddresses,
-    SingleEmailGetToAddresses,
-    MessagingReserveSingleEmailCapacity,
-    MessagingSendEmail,
     VisualEditorDataRowGetLabel,
     VisualEditorDataRowGetValue,
     VisualEditorRowsAddRow,
@@ -359,9 +374,7 @@ impl PlatformIntrinsic {
                 | Self::EncodingBase64Encode
                 | Self::EncodingBase64Decode
                 | Self::SecurityStripInaccessible
-                | Self::MessagingReserveSingleEmailCapacity
-                | Self::MessagingSendEmail
-        )
+        ) || matches!(self, Self::Messaging(intrinsic) if intrinsic.is_static())
     }
 }
 

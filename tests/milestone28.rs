@@ -707,6 +707,32 @@ fn single_email_message_surface_is_typed_recorded_and_capacity_bounded() {
         ["nobody@example.invalid"]
     );
 
+    let cumulative_capacity = check(
+        r#"
+        System.OrgLimit singleEmail = System.OrgLimits.getMap().get('SingleEmail');
+        Messaging.reserveSingleEmailCapacity(1);
+        Messaging.reserveSingleEmailCapacity(
+            singleEmail.getLimit() - singleEmail.getValue() - 1
+        );
+        Boolean handled = false;
+        try {
+            Messaging.reserveSingleEmailCapacity(1);
+        } catch (System.HandledException expected) {
+            handled = true;
+        }
+        System.debug(handled);
+        "#,
+    )
+    .unwrap();
+    let mut cumulative_host = RecordingHost::default();
+    assert_eq!(
+        Interpreter::with_host(&mut cumulative_host)
+            .execute(&cumulative_capacity)
+            .unwrap(),
+        ["true"]
+    );
+    assert_eq!(cumulative_host.organization_limit_reads(), 4);
+
     let mut failure_host = RecordingHost::default();
     failure_host.enqueue_send_email_results(vec![SendEmailResultData {
         success: false,
@@ -728,6 +754,18 @@ fn single_email_message_surface_is_typed_recorded_and_capacity_bounded() {
         ]
     );
     assert_eq!(failure_host.sent_emails().len(), 1);
+
+    let mut invalid_result_host = RecordingHost::default();
+    invalid_result_host.enqueue_send_email_results(Vec::new());
+    let error = Interpreter::with_host(&mut invalid_result_host)
+        .invoke_static(
+            program,
+            "M28CN12SingleEmailMessageOracle",
+            "exerciseLocalSend",
+        )
+        .unwrap_err();
+    assert_eq!(error.exception_type.as_deref(), Some("EmailException"));
+    assert_eq!(invalid_result_host.sent_emails().len(), 1);
 
     let mut unavailable = RecordingHost::default();
     unavailable.set_organization_limits(Vec::new());

@@ -1034,6 +1034,8 @@ impl PlatformHost for RecordingHost {
         &mut self,
         messages: &[SingleEmailMessageData],
     ) -> Result<Vec<SendEmailResultData>, String> {
+        // Success means this deterministic local sink accepted and recorded
+        // the request; it never claims or attempts external delivery.
         self.email_invocations = self.email_invocations.saturating_add(1);
         self.sent_emails.extend_from_slice(messages);
         if let Some(results) = self.email_results.pop_front() {

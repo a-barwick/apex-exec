@@ -1347,7 +1347,7 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         ty: TypeName::NoAccessException,
     },
     BuiltInTypeSpec {
-        apex_name: "System.HandledException",
+        apex_name: "HandledException",
         aliases: &["handledexception", "system.handledexception"],
         ty: TypeName::HandledException,
     },
@@ -1594,7 +1594,7 @@ mod tests {
             "DmlException",
             "SObjectException",
             "NoAccessException",
-            "System.HandledException",
+            "HandledException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");
@@ -1603,6 +1603,10 @@ mod tests {
         }
 
         assert_eq!(TypeName::from_apex_name("OBJECT"), Some(TypeName::Object));
+        assert_eq!(
+            TypeName::from_apex_name("SYSTEM.HANDLEDEXCEPTION"),
+            Some(TypeName::HandledException)
+        );
         assert!(!TypeName::Object.is_exception());
     }
 

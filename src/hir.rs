@@ -13,8 +13,8 @@ mod intrinsic;
 
 pub use intrinsic::{
     ExceptionIntrinsic, IntrinsicId, LimitIntrinsic, ListIntrinsic, MapIntrinsic, MathIntrinsic,
-    PlatformConstructor, PlatformIntrinsic, SetIntrinsic, StaticStringIntrinsic, StringIntrinsic,
-    SystemIntrinsic,
+    MessagingIntrinsic, PlatformConstructor, PlatformIntrinsic, SetIntrinsic,
+    StaticStringIntrinsic, StringIntrinsic, SystemIntrinsic,
 };
 
 pub(crate) fn schema_api_name(name: &ast::NamedType) -> &str {
