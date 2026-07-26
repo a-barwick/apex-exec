@@ -306,7 +306,7 @@ package after review and integration.
 | M28-CENSUS-12 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-12/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN11 integrated at `d0b829d` | Enterprise evidence only |
 | M28-CN12 | One next-ranked compatibility family | Complete (integrated at `b88a8f2`; independent review approved after corrections; typed message/setter/getter/capacity/send-result surface; local M28 59/59; Salesforce 2/2; fixture cleanup verified; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-12 complete | Messaging email platform surface |
 | M28-CENSUS-13 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-13/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN12 integrated at `b88a8f2` | Enterprise evidence only |
-| M28-CN13 | One next-ranked compatibility family | Ready (`Approval.LockResult`, affecting 1,005 tests) | CENSUS-13 complete | Approval lock result type and value surface |
+| M28-CN13 | One next-ranked compatibility family | Active on `codex/m28-cn13-approval-lock-result` (`Approval.LockResult`, affecting 1,005 tests) | CENSUS-13 complete | Approval lock result type and value surface |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
