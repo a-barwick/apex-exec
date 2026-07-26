@@ -581,6 +581,16 @@ execution, agreement, and strict compatibility. The `User.IsActive` blocker is
 gone; the same 1,121 tests now advance to missing
 `FlowDefinitionView.VersionNumber`, so M28-CN9 is Ready.
 
+CN9 is implemented on `codex/m28-cn9-flow-definition-version` and is in
+Review. The curated standard schema now types
+`FlowDefinitionView.VersionNumber` as Integer for static queries, record
+access, and describe metadata. Its focused local/Salesforce evidence matches
+2/2 dimensions in `evidence/milestone28/cn9/`, and the temporary Apex class
+was removed after capture. The fixed standard-schema construction budget is
+152 fields. A fresh candidate replay removes the `VersionNumber` blocker; the
+same 1,121 tests now advance to missing `FlowDefinitionView.IsActive`. CN9 is
+not integrated yet, so CN10 must not be claimed.
+
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "flow-definition-version-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN9FlowDefinitionVersionOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "fieldName": "VersionNumber",
+        "fieldType": "INTEGER",
+        "queryExecuted": true
+      }
+    }
+  ]
+}

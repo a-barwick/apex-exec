@@ -785,6 +785,17 @@ strict-compatible and selects the missing
 `FlowDefinitionView.VersionNumber` standard-schema field (1,121 affected
 tests) as the Ready CN9 family.
 
+The CN9 `FlowDefinitionView.VersionNumber` slice is implemented on
+`codex/m28-cn9-flow-definition-version` and is in Review. The field is a
+checked Integer on the curated standard schema, its describe surface reports
+`VersionNumber`/`INTEGER`, and a queried value assigns to an Apex `Integer`.
+Focused local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn9/`; assigning a String is rejected, and the fixed
+standard-schema construction budget covers 152 fields. A candidate frozen
+replay removes this diagnostic and exposes missing
+`FlowDefinitionView.IsActive` as the next first blocker for the same 1,121
+tests. CN9 is not integrated yet.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
