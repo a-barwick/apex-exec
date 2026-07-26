@@ -845,6 +845,22 @@ fn render_simple_platform(
         PlatformValue::Pattern(pattern) => traversal.write(output, pattern),
         PlatformValue::Matcher { .. } => traversal.write(output, "Matcher"),
         PlatformValue::Http => traversal.write(output, "Http"),
+        PlatformValue::SingleEmailMessage(_) => {
+            traversal.write(output, "Messaging.SingleEmailMessage")
+        }
+        PlatformValue::SendEmailResult(result) => traversal.write(
+            output,
+            if result.success {
+                "Messaging.SendEmailResult[success]"
+            } else {
+                "Messaging.SendEmailResult[failure]"
+            },
+        ),
+        PlatformValue::SendEmailError(error) => {
+            traversal.write(output, "Messaging.SendEmailError[")?;
+            traversal.write(output, &error.message)?;
+            traversal.write(output, "]")
+        }
         PlatformValue::DmlOptions(_) => traversal.write(output, "Database.DmlOptions"),
         PlatformValue::QueryLocator(_) => traversal.write(output, "Database.QueryLocator"),
         PlatformValue::AccessLevel(access) => traversal.write(output, access.apex_name()),

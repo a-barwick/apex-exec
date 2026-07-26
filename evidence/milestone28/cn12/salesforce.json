@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "single-email-message-surface",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN12SingleEmailMessageOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "htmlBody": "<p>deterministic</p>",
+        "saveAsActivity": false,
+        "subject": "M28 CN12",
+        "targetSet": true,
+        "toAddresses": "nobody@example.invalid"
+      }
+    }
+  ]
+}

@@ -899,6 +899,9 @@ pub enum TypeName {
     Http,
     HttpRequest,
     HttpResponse,
+    SingleEmailMessage,
+    SendEmailResult,
+    SendEmailError,
     HttpCalloutMock,
     Callable,
     Queueable,
@@ -951,6 +954,7 @@ pub enum TypeName {
     DmlException,
     SObjectException,
     NoAccessException,
+    HandledException,
     AsyncException,
     OrgCacheException,
     SessionCacheException,
@@ -1054,6 +1058,30 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         apex_name: "HttpResponse",
         aliases: &["httpresponse", "system.httpresponse"],
         ty: TypeName::HttpResponse,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Messaging.SingleEmailMessage",
+        aliases: &[
+            "messaging.singleemailmessage",
+            "system.messaging.singleemailmessage",
+        ],
+        ty: TypeName::SingleEmailMessage,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Messaging.SendEmailResult",
+        aliases: &[
+            "messaging.sendemailresult",
+            "system.messaging.sendemailresult",
+        ],
+        ty: TypeName::SendEmailResult,
+    },
+    BuiltInTypeSpec {
+        apex_name: "Messaging.SendEmailError",
+        aliases: &[
+            "messaging.sendemailerror",
+            "system.messaging.sendemailerror",
+        ],
+        ty: TypeName::SendEmailError,
     },
     BuiltInTypeSpec {
         apex_name: "System.HttpCalloutMock",
@@ -1319,6 +1347,11 @@ const BUILTIN_TYPE_SPECS: &[BuiltInTypeSpec] = &[
         ty: TypeName::NoAccessException,
     },
     BuiltInTypeSpec {
+        apex_name: "System.HandledException",
+        aliases: &["handledexception", "system.handledexception"],
+        ty: TypeName::HandledException,
+    },
+    BuiltInTypeSpec {
         apex_name: "AsyncException",
         aliases: &["asyncexception", "system.asyncexception"],
         ty: TypeName::AsyncException,
@@ -1381,6 +1414,7 @@ impl TypeName {
                 | Self::DmlException
                 | Self::SObjectException
                 | Self::NoAccessException
+                | Self::HandledException
                 | Self::AsyncException
                 | Self::OrgCacheException
                 | Self::SessionCacheException
@@ -1560,6 +1594,7 @@ mod tests {
             "DmlException",
             "SObjectException",
             "NoAccessException",
+            "System.HandledException",
         ] {
             let ty = TypeName::from_apex_name(&name.to_ascii_uppercase())
                 .expect("core exception should be a known type");

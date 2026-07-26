@@ -671,6 +671,9 @@ pub enum MemberTarget {
     },
     DynamicSObjectId,
     DmlOptionField(DmlOptionField),
+    SendEmailResultSuccess,
+    SendEmailResultErrors,
+    SendEmailErrorMessage,
     SObjectRelationship {
         object_id: usize,
         reference_field_id: usize,

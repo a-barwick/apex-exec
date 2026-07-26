@@ -54,6 +54,7 @@ pub enum PlatformConstructor {
     Http,
     HttpRequest,
     HttpResponse,
+    SingleEmailMessage,
     DmlOptions,
     VisualEditorDataRow,
     VisualEditorDynamicPickListRows,
@@ -283,6 +284,18 @@ pub enum PlatformIntrinsic {
     HttpResponseGetStatus,
     HttpSend,
     HttpCalloutMockRespond,
+    SingleEmailSetSubject,
+    SingleEmailGetSubject,
+    SingleEmailSetHtmlBody,
+    SingleEmailGetHtmlBody,
+    SingleEmailSetTargetObjectId,
+    SingleEmailGetTargetObjectId,
+    SingleEmailSetSaveAsActivity,
+    SingleEmailGetSaveAsActivity,
+    SingleEmailSetToAddresses,
+    SingleEmailGetToAddresses,
+    MessagingReserveSingleEmailCapacity,
+    MessagingSendEmail,
     VisualEditorDataRowGetLabel,
     VisualEditorDataRowGetValue,
     VisualEditorRowsAddRow,
@@ -346,6 +359,8 @@ impl PlatformIntrinsic {
                 | Self::EncodingBase64Encode
                 | Self::EncodingBase64Decode
                 | Self::SecurityStripInaccessible
+                | Self::MessagingReserveSingleEmailCapacity
+                | Self::MessagingSendEmail
         )
     }
 }

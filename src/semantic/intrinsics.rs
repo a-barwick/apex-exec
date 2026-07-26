@@ -1059,6 +1059,8 @@ impl Checker {
             ("encodingutil", "base64decode") => P::EncodingBase64Decode,
             ("database", "executebatch") => P::DatabaseExecuteBatch,
             ("eventbus", "publish") => P::EventBusPublish,
+            ("messaging", "reservesingleemailcapacity") => P::MessagingReserveSingleEmailCapacity,
+            ("messaging", "sendemail") => P::MessagingSendEmail,
             ("request" | "system.request", "getcurrent") => P::RequestGetCurrent,
             ("cache.org" | "cache.session", "getpartition") => P::CacheGetPartition,
             ("type" | "system.type", "forname") => P::TypeForName,
@@ -1112,6 +1114,8 @@ impl Checker {
             | P::EncodingBase64Decode
             | P::DatabaseExecuteBatch
             | P::EventBusPublish
+            | P::MessagingReserveSingleEmailCapacity
+            | P::MessagingSendEmail
             | P::RequestGetCurrent
             | P::CacheGetPartition
             | P::TypeForName => {
@@ -1417,6 +1421,21 @@ impl Checker {
                 require_static_arity(owner, method, arguments.len(), &[1], arguments)?;
                 self.require_platform_event_argument(&arguments[0])?;
                 Ok(ExpressionType::Void)
+            }
+            P::MessagingReserveSingleEmailCapacity => {
+                self.static_named_argument(owner, method, arguments, &TypeName::Integer)?;
+                Ok(ExpressionType::Void)
+            }
+            P::MessagingSendEmail => {
+                self.static_named_argument(
+                    owner,
+                    method,
+                    arguments,
+                    &TypeName::List(Box::new(TypeName::SingleEmailMessage)),
+                )?;
+                Ok(ExpressionType::Value(TypeName::List(Box::new(
+                    TypeName::SendEmailResult,
+                ))))
             }
             P::RequestGetCurrent => {
                 require_static_arity(owner, method, arguments.len(), &[0], arguments)?;
@@ -1905,6 +1924,23 @@ impl Checker {
                     arguments,
                 );
             }
+            P::SingleEmailSetSubject
+            | P::SingleEmailGetSubject
+            | P::SingleEmailSetHtmlBody
+            | P::SingleEmailGetHtmlBody
+            | P::SingleEmailSetTargetObjectId
+            | P::SingleEmailGetTargetObjectId
+            | P::SingleEmailSetSaveAsActivity
+            | P::SingleEmailGetSaveAsActivity
+            | P::SingleEmailSetToAddresses
+            | P::SingleEmailGetToAddresses => {
+                return self.single_email_instance_signature_type(
+                    intrinsic,
+                    receiver_type,
+                    method,
+                    arguments,
+                );
+            }
             P::AsyncContextGetJobId
             | P::BatchableContextGetChildJobId
             | P::FinalizerContextGetAsyncApexJobId
@@ -2169,6 +2205,58 @@ impl Checker {
                 ExpressionType::Value(TypeName::HttpResponse)
             }
             _ => unreachable!("only HTTP intrinsics use this helper"),
+        };
+        Ok((IntrinsicId::Platform(intrinsic), result))
+    }
+
+    fn single_email_instance_signature_type(
+        &mut self,
+        intrinsic: PlatformIntrinsic,
+        receiver_type: &TypeName,
+        method: &Identifier,
+        arguments: &[Expression],
+    ) -> Result<(IntrinsicId, ExpressionType), Diagnostic> {
+        use PlatformIntrinsic as P;
+        let owner = receiver_type.apex_name();
+        let result = match intrinsic {
+            P::SingleEmailSetSubject | P::SingleEmailSetHtmlBody => {
+                self.one_argument(&owner, method, arguments, &TypeName::String)?;
+                ExpressionType::Void
+            }
+            P::SingleEmailSetTargetObjectId => {
+                self.one_argument(&owner, method, arguments, &TypeName::Id)?;
+                ExpressionType::Void
+            }
+            P::SingleEmailSetSaveAsActivity => {
+                self.one_argument(&owner, method, arguments, &TypeName::Boolean)?;
+                ExpressionType::Void
+            }
+            P::SingleEmailSetToAddresses => {
+                self.one_argument(
+                    &owner,
+                    method,
+                    arguments,
+                    &TypeName::List(Box::new(TypeName::String)),
+                )?;
+                ExpressionType::Void
+            }
+            P::SingleEmailGetSubject | P::SingleEmailGetHtmlBody => {
+                self.platform_zero_arity(receiver_type, method, arguments)?;
+                ExpressionType::Value(TypeName::String)
+            }
+            P::SingleEmailGetTargetObjectId => {
+                self.platform_zero_arity(receiver_type, method, arguments)?;
+                ExpressionType::Value(TypeName::Id)
+            }
+            P::SingleEmailGetSaveAsActivity => {
+                self.platform_zero_arity(receiver_type, method, arguments)?;
+                ExpressionType::Value(TypeName::Boolean)
+            }
+            P::SingleEmailGetToAddresses => {
+                self.platform_zero_arity(receiver_type, method, arguments)?;
+                ExpressionType::Value(TypeName::List(Box::new(TypeName::String)))
+            }
+            _ => unreachable!("only SingleEmailMessage intrinsics use this helper"),
         };
         Ok((IntrinsicId::Platform(intrinsic), result))
     }
@@ -2571,6 +2659,7 @@ fn platform_instance_intrinsic(
         .or_else(|| scalar_instance_intrinsic(receiver_type, method))
         .or_else(|| regex_instance_intrinsic(receiver_type, method))
         .or_else(|| http_instance_intrinsic(receiver_type, method))
+        .or_else(|| single_email_instance_intrinsic(receiver_type, method))
         .or_else(|| visual_editor_instance_intrinsic(receiver_type, method))
         .or_else(|| async_context_instance_intrinsic(receiver_type, method))
         .or_else(|| org_limit_instance_intrinsic(receiver_type, method))
@@ -2682,6 +2771,34 @@ fn http_instance_intrinsic(receiver_type: &TypeName, method: &str) -> Option<Pla
         (TypeName::HttpResponse, "getstatus") => Some(P::HttpResponseGetStatus),
         (TypeName::Http, "send") => Some(P::HttpSend),
         (TypeName::HttpCalloutMock, "respond") => Some(P::HttpCalloutMockRespond),
+        _ => None,
+    }
+}
+
+fn single_email_instance_intrinsic(
+    receiver_type: &TypeName,
+    method: &str,
+) -> Option<PlatformIntrinsic> {
+    use PlatformIntrinsic as P;
+    match (receiver_type, method) {
+        (TypeName::SingleEmailMessage, "setsubject") => Some(P::SingleEmailSetSubject),
+        (TypeName::SingleEmailMessage, "getsubject") => Some(P::SingleEmailGetSubject),
+        (TypeName::SingleEmailMessage, "sethtmlbody") => Some(P::SingleEmailSetHtmlBody),
+        (TypeName::SingleEmailMessage, "gethtmlbody") => Some(P::SingleEmailGetHtmlBody),
+        (TypeName::SingleEmailMessage, "settargetobjectid") => {
+            Some(P::SingleEmailSetTargetObjectId)
+        }
+        (TypeName::SingleEmailMessage, "gettargetobjectid") => {
+            Some(P::SingleEmailGetTargetObjectId)
+        }
+        (TypeName::SingleEmailMessage, "setsaveasactivity") => {
+            Some(P::SingleEmailSetSaveAsActivity)
+        }
+        (TypeName::SingleEmailMessage, "getsaveasactivity") => {
+            Some(P::SingleEmailGetSaveAsActivity)
+        }
+        (TypeName::SingleEmailMessage, "settoaddresses") => Some(P::SingleEmailSetToAddresses),
+        (TypeName::SingleEmailMessage, "gettoaddresses") => Some(P::SingleEmailGetToAddresses),
         _ => None,
     }
 }

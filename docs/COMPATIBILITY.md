@@ -824,6 +824,21 @@ The frozen post-CN11 replay is
 strict-compatible and selects missing `Messaging.SingleEmailMessage` (1,117
 affected tests) as the Ready CN12 family.
 
+CN12 is in Review. Apex Exec now types the enterprise-used
+`Messaging.SingleEmailMessage` constructor, subject/body/target/activity/address
+setters and getters, `reserveSingleEmailCapacity`, `sendEmail`, and
+`SendEmailResult.success`, `SendEmailResult.errors`, and
+`SendEmailError.message`. Email delivery crosses an explicit host boundary;
+the recording host accounts for exactly one email invocation per send call,
+and unavailable or exhausted capacity fails explicitly.
+
+Focused Salesforce compile/value evidence matches 2/2 dimensions without
+sending an email, while local tests cover successful and failed send results.
+The candidate frozen replay at
+`evidence/milestone28/cn12/candidate-census.json` remains 0/1,159
+strict-compatible but removes the email blocker and advances 1,005 tests to
+missing `Approval.LockResult`.
+
 ## Platform surface
 
 | Feature | Status | Target milestone |
