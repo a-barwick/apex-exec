@@ -756,18 +756,20 @@ post-slice replay is `evidence/milestone28/census-7/report.json`; it remains
 0/1,159 strict-compatible and selects `System.OrgLimit` and
 `System.OrgLimits.getMap` (1,121 affected tests) as the Ready CN7 family.
 
-The CN7 organization-limits slice is implemented on
-`codex/m28-cn7-org-limits` and is in Review. `System.OrgLimits.getMap()`
-returns a typed `Map<String,System.OrgLimit>` from one platform-host snapshot;
-`getName()`, `getValue()`, and `getLimit()` use checker-selected runtime
-targets. The default local host exposes deterministic `SingleEmail` capacity,
-custom hosts can configure their snapshot, unavailable capabilities fail
-explicitly, and empty names, case-insensitive duplicates, negative values, or
-values outside the Apex `Integer` range are rejected. Focused
-local/Salesforce evidence matches 2/2 dimensions in
-`evidence/milestone28/cn7/`. A candidate frozen replay removes the
-organization-limit diagnostic and exposes unknown `User.IsActive` as the next
-first blocker for the same 1,121 tests. CN7 is not integrated yet.
+The CN7 organization-limits slice passed independent review and was integrated
+at `ac756a0`. `System.OrgLimits.getMap()` returns a typed
+`Map<String,System.OrgLimit>` from one platform-host snapshot; `getName()`,
+`getValue()`, and `getLimit()` use checker-selected runtime targets. The
+default local host exposes deterministic `SingleEmail` capacity, custom hosts
+can configure their snapshot, unavailable capabilities fail explicitly, and
+empty names, case-insensitive duplicates, negative values, or values outside
+the Apex `Integer` range are rejected. Focused local/Salesforce evidence
+matches 2/2 dimensions in `evidence/milestone28/cn7/`.
+
+The frozen post-CN7 replay is
+`evidence/milestone28/census-8/report.json`; it remains 0/1,159
+strict-compatible and selects the missing `User.IsActive` Boolean
+standard-schema field (1,121 affected tests) as the Ready CN8 family.
 
 ## Platform surface
 
