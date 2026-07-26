@@ -483,6 +483,7 @@ pub enum CallTarget {
     DatabaseQuery {
         kind: DatabaseQueryKind,
         expected_object_id: Option<usize>,
+        single_record: bool,
         access_level_argument: Option<usize>,
     },
     AggregateResultGet,

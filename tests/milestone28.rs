@@ -614,6 +614,55 @@ fn flow_definition_is_active_is_a_typed_boolean_query_field() {
 }
 
 #[test]
+fn dynamic_query_cast_to_one_sobject_enforces_single_row_cardinality() {
+    let compilation = project::compile(Path::new(
+        "examples/milestone28-cn11-dynamic-query-single-cast-oracle",
+    ))
+    .unwrap();
+    let mut host = RecordingHost::default();
+    assert_eq!(
+        Interpreter::with_host(&mut host)
+            .invoke_static(
+                &compilation.program,
+                "M28CN11DynamicQuerySingleCastOracle",
+                "run",
+            )
+            .unwrap(),
+        [
+            "APEX_EXEC_ORACLE_VALUE|singleRecord|true",
+            "APEX_EXEC_ORACLE_VALUE|directAssignment|true",
+            "APEX_EXEC_ORACLE_VALUE|emptyException|true",
+            "APEX_EXEC_ORACLE_VALUE|multipleException|true",
+        ]
+    );
+    assert_eq!(
+        host.query_events().len(),
+        4,
+        "single-record casts issue exactly one host query per source query"
+    );
+    assert!(host.query_events().iter().all(|event| event.succeeded));
+
+    let invalid_root = test_project(
+        "InvalidArbitraryListCast",
+        "public class InvalidArbitraryListCast {
+            public static void run() {
+                Account account =
+                    (Account) new List<SObject>{ new Account(Name = 'no') };
+            }
+        }",
+        &[],
+    );
+    let error = project::compile(&invalid_root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot cast List<SObject> to Account"),
+        "{error}"
+    );
+    fs::remove_dir_all(invalid_root).unwrap();
+}
+
+#[test]
 fn generated_custom_share_sobjects_are_typed_from_metadata() {
     let project_root = Path::new("examples/milestone28-cn6-generated-share-oracle");
     let compilation = project::compile(project_root).unwrap();

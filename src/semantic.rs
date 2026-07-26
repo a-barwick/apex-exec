@@ -5200,7 +5200,20 @@ impl Checker {
         target: &TypeName,
         expression: &Expression,
     ) -> Result<ExpressionType, Diagnostic> {
-        let actual = self.expression_type(expression)?;
+        let single_dynamic_query = self.is_sobject_type(target)
+            && matches!(
+                expression,
+                Expression::MethodCall {
+                    receiver,
+                    method,
+                    ..
+                } if is_database_receiver(receiver) && method.canonical == "query"
+            );
+        let actual = if single_dynamic_query {
+            self.expression_type_for_expected(expression, target)?
+        } else {
+            self.expression_type(expression)?
+        };
         if self.cast_allowed(&actual, target) {
             Ok(ExpressionType::Value(target.clone()))
         } else {

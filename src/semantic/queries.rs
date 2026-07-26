@@ -1079,6 +1079,8 @@ impl Checker {
         }
         let expected_object_id =
             self.check_database_query_argument(&arguments[0], expected, kind)?;
+        let single_record = kind == DatabaseQueryKind::Query
+            && expected.is_some_and(|expected| self.is_sobject_type(expected));
         let access_level_argument = if arguments.len() == 2 {
             self.require_operand(&arguments[1], &TypeName::AccessLevel, arguments[1].span())?;
             Some(1)
@@ -1090,6 +1092,7 @@ impl Checker {
             CallTarget::DatabaseQuery {
                 kind,
                 expected_object_id,
+                single_record,
                 access_level_argument,
             },
         );
@@ -1108,10 +1111,12 @@ impl Checker {
             self.require_operand(argument, &TypeName::String, argument.span())?;
             if kind == DatabaseQueryKind::Query {
                 return Ok(expected.and_then(|expected| {
-                    let TypeName::List(element) = expected else {
-                        return None;
+                    let element = match expected {
+                        TypeName::List(element) => element.as_ref(),
+                        expected if self.is_sobject_type(expected) => expected,
+                        _ => return None,
                     };
-                    let TypeName::Custom(name) = element.as_ref() else {
+                    let TypeName::Custom(name) = element else {
                         return None;
                     };
                     self.schema.object_index(&name.spelling)
@@ -1145,12 +1150,13 @@ impl Checker {
         match kind {
             DatabaseQueryKind::Query => expected
                 .filter(|expected| {
-                    matches!(
-                        expected,
+                    self.is_sobject_type(expected)
+                        || matches!(
+                            expected,
                         TypeName::List(element)
                             if self.is_sobject_type(element)
                                 || self.is_dynamic_sobject_type(element)
-                    )
+                        )
                 })
                 .cloned()
                 .unwrap_or_else(|| {

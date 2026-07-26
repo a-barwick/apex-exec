@@ -302,7 +302,7 @@ package after review and integration.
 | M28-CENSUS-10 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-10/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN9 integrated at `b014898` | Enterprise evidence only |
 | M28-CN10 | One next-ranked compatibility family | Complete (integrated at `9a96d1d`; independent review approved; checked `FlowDefinitionView.IsActive` Boolean field; Salesforce 2/2; full Rust/Clippy/docs/Lizard/replay gates pass) | CENSUS-10 complete | Standard schema and query typing |
 | M28-CENSUS-11 | Frozen enterprise replay and reprioritization | Complete (`evidence/milestone28/census-11/report.json`; three deterministic runs; 0/1,159 strict compatible; next family selected) | M28-CN10 integrated at `9a96d1d` | Enterprise evidence only |
-| M28-CN11 | One next-ranked compatibility family | Ready (`List<SObject>`-to-`Log__c` cast diagnostic, affecting 1,121 tests) | CENSUS-11 complete | Semantic cast typing |
+| M28-CN11 | One next-ranked compatibility family | Review on `codex/m28-cn11-dynamic-query-cast` (typed single-record `Database.query` casts, Salesforce 2/2, candidate replay advances 1,117 tests to `Messaging.SingleEmailMessage`) | CENSUS-11 complete | Semantic and runtime dynamic-query cardinality |
 | M28-GATE | M28 completion evidence | Blocked | At least 696 strict tests | Full verification and evidence |
 | M29-A | Persistent-IR design and benchmark contract | Blocked | M28-GATE | ADR/specification/benchmarks |
 | M29-B | Dependency-scoped semantic work | Blocked | M29-A approved | Project/compiler/HIR |
