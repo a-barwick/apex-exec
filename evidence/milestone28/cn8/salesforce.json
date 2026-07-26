@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "provider": "salesforce",
+  "target": "apex-exec-m17",
+  "fixtures": [
+    {
+      "name": "user-is-active-fidelity",
+      "compile": {
+        "success": true
+      },
+      "profiles": [
+        {
+          "source": "force-app/main/default/classes/M28CN8UserIsActiveOracle.cls",
+          "apiVersion": "65.0",
+          "behavior": "currentApi60To66",
+          "origin": "sidecar"
+        }
+      ],
+      "values": {
+        "assignedValue": true,
+        "fieldName": "IsActive",
+        "fieldType": "BOOLEAN",
+        "relationshipFilterExecuted": true
+      }
+    }
+  ]
+}

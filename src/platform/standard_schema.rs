@@ -402,6 +402,7 @@ fn user_objects() -> Vec<ObjectSchema> {
                 F::String("TimeZoneSidKey"),
                 F::String("FederationIdentifier"),
                 F::String("SmallPhotoUrl"),
+                F::Boolean("IsActive"),
                 F::Reference {
                     name: "ProfileId",
                     target: "Profile",
@@ -469,7 +470,7 @@ mod tests {
     use super::*;
 
     const STANDARD_OBJECT_COUNT: usize = 29;
-    const STANDARD_FIELD_COUNT: usize = 150;
+    const STANDARD_FIELD_COUNT: usize = 151;
 
     #[test]
     fn user_schema_supports_the_deterministic_run_as_fixture_fields() {
@@ -494,6 +495,10 @@ mod tests {
             &FieldType::Reference {
                 target_object: "Profile".to_owned(),
             }
+        );
+        assert_eq!(
+            user.field("IsActive").unwrap().data_type(),
+            &FieldType::Boolean
         );
         assert!(user.field("UnmodeledField__c").is_err());
     }

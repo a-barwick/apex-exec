@@ -566,6 +566,17 @@ execution, agreement, and strict compatibility. The organization-limit first
 blocker is gone; all 1,121 affected tests now advance to missing
 `User.IsActive` on the standard `User` schema, so M28-CN8 is Ready.
 
+CN8 is implemented on `codex/m28-cn8-user-is-active` and is in Review. The
+curated standard schema now types `User.IsActive` as Boolean, including direct
+record access, describe metadata, and the enterprise
+`ApexEmailNotification.User.IsActive` relationship filter. Its focused
+local/Salesforce evidence matches 2/2 dimensions in
+`evidence/milestone28/cn8/`, and the temporary Apex class was removed after
+capture. The fixed standard-schema construction budget is 151 fields. A fresh
+candidate replay removes the `User.IsActive` blocker; the same 1,121 tests now
+advance to missing `FlowDefinitionView.VersionNumber`. CN8 is not integrated
+yet, so CN9 must not be claimed.
+
 `Flow.Interview` remains the second independent closure at 18 tests.
 The frozen handoff is in
 `docs/MILESTONE_28_CHECKPOINT.md`; the bounded recovery queue and kickoff
